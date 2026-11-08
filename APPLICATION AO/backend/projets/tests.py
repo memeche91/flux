@@ -15,7 +15,7 @@ from comptes.models import Utilisateur
 from referentiel.models import Lot
 
 from .html import nettoyer_html
-from .models import GenrePoste, LotProjet, Poste, Projet
+from .models import GenrePoste, LotProjet, OptionLot, Poste, Projet
 from .structure import structurer
 
 DOSSIER_TEST = tempfile.mkdtemp(prefix="application-ao-projets-")
@@ -259,6 +259,15 @@ class ProjetsTests(TestCase):
 
 
 class StructureTests(TestCase):
+    def test_mention_pse_non_dupliquee(self):
+        projet = Projet.objects.create(nom="Test")
+        lot = LotProjet.objects.create(projet=projet, code="08", intitule="Menuiseries")
+        option = OptionLot.objects.create(lot=lot, libelle="Volets")
+        Poste.objects.create(lot=lot, ordre=10, genre=GenrePoste.OUVRAGE, titre="Volets roulants (PSE n°1)", option=option)
+        Poste.objects.create(lot=lot, ordre=20, genre=GenrePoste.OUVRAGE, titre="Moteurs", option=option)
+        titres = [e.titre_cctp for e in structurer(lot).chapitres[0].elements]
+        self.assertEqual(titres, ["Volets roulants (PSE n°1)", "Moteurs (PSE n°1)"])
+
     def test_postes_avant_le_premier_chapitre(self):
         projet = Projet.objects.create(nom="Test")
         lot = LotProjet.objects.create(projet=projet, code="TCE", intitule="Tous corps d'état")

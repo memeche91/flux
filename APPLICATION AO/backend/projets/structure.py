@@ -11,6 +11,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from decimal import Decimal
 
+from articles.normalisation import normaliser
+
 from .models import GenrePoste, LotProjet, OptionLot, Poste
 
 
@@ -41,8 +43,10 @@ class Element:
 
     @property
     def titre_cctp(self) -> str:
-        mention = f" ({self.option.nom_court})" if self.option else ""
-        return f"{self.poste.titre}{mention}"
+        titre = self.poste.titre
+        if self.option is None or normaliser(self.option.nom_court) in normaliser(titre):
+            return titre  # mention déjà présente dans le titre (souvent le cas d'un CCTP repris)
+        return f"{titre} ({self.option.nom_court})"
 
 
 @dataclass
