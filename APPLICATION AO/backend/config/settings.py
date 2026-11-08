@@ -55,6 +55,7 @@ INSTALLED_APPS = [
     "referentiel",
     "bibliotheque.apps.BibliothequeConfig",
     "articles",
+    "projets",
 ]
 
 MIDDLEWARE = [
@@ -171,4 +172,9 @@ LOGGING = {
     "disable_existing_loggers": False,
     "handlers": {"console": {"class": "logging.StreamHandler"}},
     "root": {"handlers": ["console"], "level": "INFO"},
+    # La mise en page des PDF est très bavarde : seuls les avertissements sont gardés.
+    "loggers": {
+        "weasyprint": {"level": "WARNING"},
+        "fontTools": {"level": "WARNING"},
+    },
 }

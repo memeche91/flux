@@ -157,3 +157,84 @@ export const TYPES_DOCUMENT: DescriptionType[] = [
 ];
 
 export const FORMATS_ACCEPTES = ".pdf,.docx,.doc,.odt,.rtf,.xlsx,.xlsm,.xls,.ods,.csv";
+
+// --- Projets et pièces écrites (étape 1.2) ---
+
+export type GenrePoste = "CHAPITRE" | "ARTICLE" | "OUVRAGE";
+export type GenreOption = "PSE" | "VARIANTE";
+export type Police = "Arial" | "Calibri" | "Times New Roman";
+
+export interface ProjetResume {
+  id: number;
+  nom: string;
+  numero: string;
+  maitre_ouvrage: string;
+  type_marche: "PUBLIC" | "PRIVE";
+  phase: string;
+  modifie_le: string;
+  nb_lots: number;
+}
+
+export interface LotResume {
+  id: number;
+  code: string;
+  intitule: string;
+  nb_articles: number;
+  nb_ouvrages: number;
+  total_base: number;
+}
+
+export interface Projet {
+  id: number;
+  nom: string;
+  numero: string;
+  maitre_ouvrage: string;
+  adresse_maitre_ouvrage: string;
+  adresse_operation: string;
+  maitre_oeuvre: string;
+  type_marche: "PUBLIC" | "PRIVE";
+  procedure: string;
+  phase: string;
+  indice: string;
+  date_document: string | null;
+  taux_tva: number | string;
+  police: Police;
+  taille_police: number;
+  couleur_titres: string;
+  couleur_tableaux: string;
+  lots: LotResume[];
+}
+
+export interface OptionLot {
+  id: number;
+  genre: GenreOption;
+  numero: number;
+  libelle: string;
+  nom_court: string;
+  total: number;
+}
+
+export interface Poste {
+  id: number;
+  genre: GenrePoste;
+  numero: string;
+  titre: string;
+  description: string;
+  unite: string;
+  quantite: number | null;
+  prix_unitaire: number | null;
+  montant: number | null;
+  option_id: number | null;
+  article_source_id: number | null;
+}
+
+export interface LotDetail {
+  id: number;
+  code: string;
+  intitule: string;
+  lot_id: number | null;
+  projet: { id: number; nom: string; taux_tva: number };
+  options: OptionLot[];
+  postes: Poste[];
+  total_base: number;
+}

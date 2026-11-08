@@ -35,6 +35,7 @@ _MOTS_GENERALITES = (
     "etendue des travaux",
     "description generale",
     "hypotheses",
+    "preambule",
 )
 
 

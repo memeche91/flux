@@ -11,7 +11,7 @@ const PARCOURS = [
   {
     numero: "1",
     titre: "Pièces écrites",
-    detail: "Bibliothèque, articles et prix de référence disponibles · rédaction des pièces à venir",
+    detail: "Bibliothèque, articles, prix de référence, rédaction et exports du CCTP et de la DPGF · CCAP, RC, AE à venir",
     actif: true,
   },
   { numero: "2", titre: "DCE", detail: "Dossier .zip classé, annuaire des entreprises", actif: false },

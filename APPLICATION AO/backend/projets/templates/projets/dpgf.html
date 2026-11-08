@@ -1,0 +1,110 @@
+{% load format_fr %}<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<title>DPGF – Lot {{ lot.code }} – {{ lot.intitule }}</title>
+{% include "projets/_styles.html" %}
+<style>
+.entreprise { border-collapse: collapse; width: 100%; }
+.entreprise caption { text-align: left; font-weight: bold; padding: 2mm 0; }
+.entreprise th, .entreprise td { border: 0.5pt solid #9a9a9a; padding: 3mm; text-align: left; }
+.entreprise th { width: 34%; background: {{ couleur_tableaux }}; }
+.note { font-size: 8pt; font-style: italic; color: #444; margin: 0; }
+.garde-compacte { padding-top: 2mm; gap: 5mm; }
+.garde-compacte .garde-bandeau { margin-top: 2mm; padding: 6mm 8mm; }
+.garde-compacte .garde-infos { margin-top: 0; }
+.garde-compacte .garde-infos th, .garde-compacte .garde-infos td { padding: 1.6mm 3mm; }
+.garde-compacte .entreprise th, .garde-compacte .entreprise td { padding: 2.6mm 3mm; }
+table.dpgf { border-collapse: collapse; width: 100%; font-size: {{ taille|add:-1 }}pt; }
+table.dpgf th, table.dpgf td { border: 0.5pt solid #9a9a9a; padding: 1.3mm 1.6mm; vertical-align: top; }
+table.dpgf thead th { background: {{ couleur_tableaux }}; text-align: center; }
+table.dpgf .num { width: 13mm; white-space: nowrap; }
+table.dpgf .u { width: 9mm; text-align: center; }
+table.dpgf .qte { width: 15mm; text-align: right; }
+table.dpgf .prix { width: 22mm; text-align: right; }
+table.dpgf tr { break-inside: avoid; }
+tr.section td { background: {{ couleur_titres }}; color: #fff; font-weight: bold; text-transform: uppercase; }
+tr.chapitre td { background: {{ couleur_tableaux }}; font-weight: bold; }
+tr.sous-total td { font-weight: bold; font-style: italic; text-align: right; }
+tr.total td { font-weight: bold; background: {{ couleur_tableaux }}; text-align: right; }
+h2.recap { break-before: page; }
+table.recap { border-collapse: collapse; width: 100%; }
+table.recap th, table.recap td { border: 0.5pt solid #9a9a9a; padding: 2.4mm; }
+table.recap th { background: {{ couleur_tableaux }}; text-align: left; }
+table.recap td.prix { text-align: right; width: 30mm; }
+.signature { margin-top: 12mm; display: flex; justify-content: space-between; gap: 10mm; }
+.signature div { flex: 1; border: 0.5pt solid #9a9a9a; height: 32mm; padding: 2mm; }
+</style>
+</head>
+<body>
+{% if avec_prix %}
+  {% include "projets/_garde.html" with titre_piece="Estimation du maître d'œuvre (DPGF chiffrée)" %}
+{% else %}
+  <section class="garde garde-compacte">
+    {% if projet.maitre_ouvrage %}<div class="garde-moa">{{ projet.maitre_ouvrage }}</div>{% endif %}
+    <h1 class="garde-operation">{{ projet.nom }}</h1>
+    <div class="garde-bandeau">
+      <div class="garde-piece">{{ garde.titre_piece }}</div>
+      <div class="garde-lot">Lot {{ lot.code }} – {{ lot.intitule }}</div>
+    </div>
+    <table class="garde-infos">
+      {% for libelle, valeur in garde.lignes_operation %}<tr><th>{{ libelle }}</th><td>{{ valeur|linebreaksbr }}</td></tr>{% endfor %}
+      <tr><th>Phase</th><td>{{ projet.phase }} – indice {{ projet.indice }}</td></tr>
+      <tr><th>Date</th><td>{{ garde.date }}</td></tr>
+    </table>
+    <table class="entreprise">
+      <caption>Cadre réservé à l'entreprise</caption>
+      <tr><th>Raison sociale</th><td></td></tr>
+      <tr><th>Adresse</th><td></td></tr>
+      <tr><th>N° SIRET</th><td></td></tr>
+      <tr><th>Téléphone / courriel</th><td></td></tr>
+      <tr><th>Nom et qualité du signataire</th><td></td></tr>
+    </table>
+    <p class="note">Les quantités sont fournies à titre indicatif. L'entreprise les vérifie et complète la décomposition si nécessaire : le prix global et forfaitaire couvre l'ensemble des ouvrages décrits au CCTP.</p>
+  </section>
+{% endif %}
+
+<table class="dpgf">
+  <thead>
+    <tr><th class="num">N°</th><th>Désignation</th><th class="u">U</th><th class="qte">Qté</th><th class="prix">PU HT</th><th class="prix">Montant HT</th></tr>
+  </thead>
+  <tbody>
+  {% for section in structure.sections_dpgf %}
+    {% if section.option is None or section.lignes %}
+      {% if section.option %}<tr class="section"><td colspan="6">{{ section.titre }}</td></tr>{% endif %}
+      {% for chapitre in section.chapitres %}
+        <tr class="chapitre"><td class="num">{{ chapitre.numero }}</td><td colspan="5">{{ chapitre.titre|default:"Ouvrages" }}</td></tr>
+        {% for element in chapitre.elements %}
+          <tr>
+            <td class="num">{{ element.numero }}</td>
+            <td>{{ element.poste.titre }}</td>
+            <td class="u">{{ element.poste.unite }}</td>
+            <td class="qte">{{ element.poste.quantite|quantite }}</td>
+            <td class="prix">{% if avec_prix %}{{ element.poste.prix_unitaire|euros }}{% endif %}</td>
+            <td class="prix">{% if avec_prix %}{{ element.poste.montant|euros }}{% endif %}</td>
+          </tr>
+        {% endfor %}
+        <tr class="sous-total"><td colspan="5">Sous-total {{ chapitre.numero }}</td><td class="prix">{% if avec_prix %}{{ chapitre.total|euros }}{% endif %}</td></tr>
+      {% endfor %}
+      <tr class="total"><td colspan="5">{% if section.option %}TOTAL {{ section.option.nom_court|upper }} HT{% else %}TOTAL SOLUTION DE BASE HT{% endif %}</td><td class="prix">{% if avec_prix %}{{ section.total|euros }}{% endif %}</td></tr>
+    {% endif %}
+  {% endfor %}
+  </tbody>
+</table>
+
+<h2 class="recap">Récapitulatif – Lot {{ lot.code }} – {{ lot.intitule }}</h2>
+<table class="recap">
+  <tr><th>Désignation</th><th>Montant HT</th><th>TVA ({{ taux_tva|quantite }} %)</th><th>Montant TTC</th></tr>
+  {% for ligne in recapitulatif %}
+    <tr><td>{{ ligne.titre }}</td>
+      <td class="prix">{% if avec_prix %}{{ ligne.ht|euros }}{% endif %}</td>
+      <td class="prix">{% if avec_prix %}{{ ligne.tva|euros }}{% endif %}</td>
+      <td class="prix">{% if avec_prix %}{{ ligne.ttc|euros }}{% endif %}</td></tr>
+  {% endfor %}
+</table>
+{% if not avec_prix %}
+<p>Fait à ……………………………………, le ……………………………</p>
+<div class="signature"><div>Cachet de l'entreprise</div><div>Signature du représentant habilité</div></div>
+{% endif %}
+</body>
+</html>

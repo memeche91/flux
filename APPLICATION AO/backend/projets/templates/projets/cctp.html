@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<title>CCTP – Lot {{ lot.code }} – {{ lot.intitule }}</title>
+{% include "projets/_styles.html" %}
+<style>
+.sommaire { break-after: page; }
+.sommaire h2 { border: 0; }
+.sommaire ul { list-style: none; margin: 0; padding: 0; }
+.sommaire li { margin: 0 0 1.2mm; }
+.sommaire li.niv1 { font-weight: bold; margin-top: 3mm; }
+.sommaire li.niv2 { padding-left: 7mm; }
+.sommaire a { color: inherit; text-decoration: none; }
+.sommaire a::after { content: leader(".") target-counter(attr(href), page); }
+</style>
+</head>
+<body>
+{% include "projets/_garde.html" %}
+
+<section class="sommaire">
+  <h2>Sommaire</h2>
+  <ul>
+  {% for chapitre in structure.chapitres %}
+    {% if chapitre.titre %}<li class="niv1"><a href="#chapitre-{{ forloop.counter }}">{{ chapitre.numero }} {{ chapitre.titre }}</a></li>{% endif %}
+    {% for element in chapitre.elements %}<li class="niv2"><a href="#poste-{{ element.poste.pk }}">{{ element.numero }} {{ element.titre_cctp }}</a></li>{% endfor %}
+  {% empty %}
+    <li>Aucun article.</li>
+  {% endfor %}
+  </ul>
+</section>
+
+<main>
+{% for chapitre in structure.chapitres %}
+  {% if chapitre.titre %}<h2 id="chapitre-{{ forloop.counter }}">{{ chapitre.numero }} {{ chapitre.titre }}</h2>{% endif %}
+  {% for element in chapitre.elements %}
+    <h3 id="poste-{{ element.poste.pk }}">{{ element.numero }} {{ element.titre_cctp }}</h3>
+    <div class="description">{{ element.poste.description|safe }}</div>
+  {% endfor %}
+{% endfor %}
+</main>
+</body>
+</html>

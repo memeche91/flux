@@ -3,7 +3,7 @@
 Application web pour gérer les appels d'offres de A à Z : pièces écrites (CCTP, DPGF, CCAP, RC, AE), DCE, analyse des offres (rapport ACT) et GED de chantier.
 L'application est **100 % gratuite et open source**. Elle tourne sur un poste ou un serveur du cabinet, et aucune donnée n'est envoyée sur Internet.
 
-> **Version actuelle : étape 1.1.** Bibliothèque documentaire (import illimité de vos CCAP, AE, RC, CCTP et DPGF par lot), **découpage automatique en articles**, **prix de référence** issus de vos DPGF, **conversion des anciens formats** et **OCR des PDF scannés**.
+> **Version actuelle : étape 1.2.** Bibliothèque documentaire, articles et prix de référence (étapes 1.0 et 1.1), et maintenant **rédaction du CCTP et de la DPGF de chaque lot** : éditeur visuel, PSE et variantes, reprise d'un ancien CCTP ou d'une ancienne DPGF, exports **Word, PDF et Excel** avec page de garde, sommaire et récapitulatif.
 
 ---
 
@@ -91,6 +91,28 @@ La sauvegarde et l'archivage complet (export du chantier sur le PC ou le serveur
 - Recherche sans accents ni majuscules, filtres par lot, catégorie et **norme / DTU cité**, bouton **Copier le texte**.
 - **Normes et DTU cités** : la liste des références (DTU, NF EN, Eurocodes, RE2020…) relevées dans *vos* documents, avec leur fréquence. Les textes des normes ne sont pas récupérés : ils sont payants (AFNOR / CSTB).
 
+### Projets : rédaction du CCTP et de la DPGF
+
+- Un **projet** (opération) regroupe ses **lots**. Les informations du projet (maître d'ouvrage, adresse, procédure, phase, indice, date) remplissent les **pages de garde**.
+- Chaque lot a une seule structure qui produit **le CCTP et la DPGF avec la même numérotation** (8.1, 8.1.1…) :
+  - **Chapitre** ;
+  - **Article** : texte seul, présent dans le CCTP uniquement (généralités, prescriptions) ;
+  - **Ouvrage** : texte dans le CCTP, plus unité, quantité et prix estimé dans la DPGF.
+- **PSE et variantes exigées** : les ouvrages rattachés sont signalés dans le CCTP (« PSE n°1 ») et chiffrés à part dans la DPGF et le récapitulatif.
+- **Éditeur visuel** (aperçu « page blanche ») : police, taille, gras, italique, souligné, barré, couleur, surlignage, titres, listes, alignement, tableaux (ajout et suppression de lignes et de colonnes, fusion, ligne d'en-tête, **couleur de fond des cellules**).
+- **Ma bibliothèque** dans l'éditeur : insérer un article, ou **reprendre d'un coup un ancien CCTP ou une ancienne DPGF** du même lot (pour un document tous corps d'état, seul le lot concerné est repris).
+- **Prix proposé** pour un ouvrage : la médiane de vos anciennes DPGF, en un clic.
+- **Mise en page** par projet : police (Arial, Calibri, Times New Roman), taille, couleur des titres, fond des en-têtes de tableaux.
+- Raccourci **Ctrl+S** pour enregistrer.
+
+**Exports**
+
+| Pièce | Formats | Contenu |
+|---|---|---|
+| CCTP | Word, PDF | Page de garde, sommaire (le PDF a les numéros de page ; Word le met à jour à l'ouverture), titres numérotés, pied de page « Page X / Y » |
+| DPGF vierge | Excel, PDF | Page de garde avec **cadre réservé à l'entreprise**, quantités, prix à compléter, sous-totaux et totaux en formules, récapitulatif HT / TVA / TTC, emplacement pour cachet et signature |
+| DPGF chiffrée | Excel, PDF | La même DPGF avec vos prix unitaires : estimation du maître d'œuvre |
+
 ### Prix de référence
 
 - Chaque DPGF est lue ligne par ligne : chapitre, désignation, unité, quantité, prix unitaire et montant. Les colonnes sont reconnues automatiquement, et les totaux et la TVA sont ignorés.
@@ -111,10 +133,11 @@ APPLICATION AO/
 │   ├── comptes/           Utilisateurs et rôles (Administrateur, MOE, Entreprise)
 │   ├── referentiel/       Nomenclature des lots (modifiable dans Paramétrage)
 │   ├── bibliotheque/      Documents de référence, import, lecture (conversion, OCR)
-│   └── articles/          Découpage en articles, lignes de prix, normes citées
+│   ├── articles/          Découpage en articles, lignes de prix, normes citées
+│   └── projets/           Projets, lots, PSE, CCTP et DPGF, exports Word / PDF / Excel
 └── frontend/              React 19 · TypeScript · Vite · Tailwind CSS
     └── src/
-        ├── pages/         Connexion, Tableau de bord, Documents, Articles, Prix
+        ├── pages/         Connexion, Tableau de bord, Projets, éditeur de lot, Documents, Articles, Prix
         ├── components/    En-tête, liste des lots, zone d'import, tableau
         └── api/           Accès à l'API (session + protection CSRF)
 ```
@@ -152,7 +175,7 @@ npm install && npm run dev
 
 - [x] **1.0** Socle, thème « Chantier Nuit », bibliothèque documentaire
 - [x] **1.1** Découpage en articles par lot, prix de référence, OCR, conversion des anciens formats
-- [ ] **1.2** Rédaction CCTP / DPGF (PSE, variantes), éditeur visuel, exports Word / PDF / Excel
+- [x] **1.2** Rédaction CCTP / DPGF (PSE, variantes), éditeur visuel, exports Word / PDF / Excel
 - [ ] **1.3** CCAP, RC, AE à partir de modèles
 - [ ] **1.4** Assistant IA local (chat et voix, administrateur uniquement)
 - [ ] **2** DCE : dossier .zip classé, annuaire des entreprises

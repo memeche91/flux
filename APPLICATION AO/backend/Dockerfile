@@ -7,13 +7,16 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-# LibreOffice : conversion des anciens formats (.doc, .xls, .odt…) et, plus tard, exports PDF.
+# LibreOffice : conversion des anciens formats (.doc, .xls, .odt…).
 # Tesseract : reconnaissance de texte (OCR) des PDF scannés, en français.
+# Pango : mise en page des exports PDF (WeasyPrint).
+# Polices compatibles Arial, Times New Roman (Liberation) et Calibri (Carlito).
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         libreoffice-writer-nogui libreoffice-calc-nogui \
         tesseract-ocr tesseract-ocr-fra \
-        fonts-dejavu-core fonts-liberation \
+        libpango-1.0-0 libpangoft2-1.0-0 libharfbuzz-subset0 \
+        fonts-dejavu-core fonts-liberation fonts-crosextra-carlito \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .

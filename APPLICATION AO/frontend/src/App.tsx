@@ -6,7 +6,10 @@ import RouteProtegee from "./components/RouteProtegee";
 import Articles from "./pages/Articles";
 import Bibliotheque from "./pages/Bibliotheque";
 import Connexion from "./pages/Connexion";
+import LotEditeur from "./pages/LotEditeur";
 import Prix from "./pages/Prix";
+import ProjetDetail from "./pages/ProjetDetail";
+import Projets from "./pages/Projets";
 import TableauDeBord from "./pages/TableauDeBord";
 
 export default function App() {
@@ -26,6 +29,9 @@ export default function App() {
             <Route path="bibliotheque" element={<Bibliotheque />} />
             <Route path="articles" element={<Articles />} />
             <Route path="prix" element={<Prix />} />
+            <Route path="projets" element={<Projets />} />
+            <Route path="projets/:projetId" element={<ProjetDetail />} />
+            <Route path="projets/:projetId/lots/:lotId" element={<LotEditeur />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Route>
         </Routes>

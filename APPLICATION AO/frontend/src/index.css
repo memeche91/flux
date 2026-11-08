@@ -46,3 +46,69 @@
     cursor: pointer;
   }
 }
+
+/* Éditeur visuel : la zone d'édition imite la page imprimée (fond blanc). */
+.editeur-contenu {
+  outline: none;
+  min-height: 12rem;
+  line-height: 1.4;
+}
+.editeur-contenu p {
+  margin: 0 0 0.45em;
+}
+.editeur-contenu h3 {
+  font-size: 1.15em;
+  font-weight: 700;
+  margin: 0.8em 0 0.3em;
+}
+.editeur-contenu h4 {
+  font-size: 1.05em;
+  font-weight: 700;
+  margin: 0.7em 0 0.25em;
+}
+.editeur-contenu ul {
+  list-style: disc;
+  padding-left: 1.4em;
+  margin: 0 0 0.45em;
+}
+.editeur-contenu ol {
+  list-style: decimal;
+  padding-left: 1.6em;
+  margin: 0 0 0.45em;
+}
+.editeur-contenu li p {
+  margin: 0;
+}
+.editeur-contenu table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 0.4em 0 0.8em;
+  table-layout: fixed;
+}
+.editeur-contenu th,
+.editeur-contenu td {
+  border: 1px solid #8c8c8c;
+  padding: 0.3em 0.5em;
+  vertical-align: top;
+  position: relative;
+}
+.editeur-contenu th {
+  background: #d9e2f3;
+  font-weight: 700;
+  text-align: left;
+}
+.editeur-contenu .selectedCell::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: rgba(245, 183, 0, 0.25);
+  pointer-events: none;
+}
+.editeur-contenu mark {
+  color: inherit;
+  padding: 0 0.05em;
+}
+.editeur-page ::selection {
+  background: #b3d4fc;
+  color: inherit;
+}

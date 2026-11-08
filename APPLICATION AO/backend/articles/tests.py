@@ -214,7 +214,7 @@ class IndexationApiTests(TestCase):
 
         articles = {a.numero: a for a in Article.objects.filter(document=document)}
         self.assertEqual(set(articles), {"", "3.1", "3.2", "8.1", "8.2.1"})  # « » = préambule
-        self.assertEqual(articles[""].titre, "Préambule")
+        self.assertEqual((articles[""].titre, articles[""].categorie), ("Préambule", "GENERALITES"))
         self.assertEqual(articles["3.2"].lot.code, "03")
         self.assertEqual(articles["8.2.1"].lot.code, "08")
         self.assertEqual(articles["8.2.1"].chemin, "Lot 08 MENUISERIES EXTÉRIEURES › 8.2 Châssis aluminium")

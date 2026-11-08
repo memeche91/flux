@@ -6,6 +6,7 @@ import Logo from "./Logo";
 
 const LIENS = [
   { vers: "/", libelle: "Tableau de bord", fin: true },
+  { vers: "/projets", libelle: "Projets", fin: false },
   { vers: "/bibliotheque", libelle: "Documents", fin: false },
   { vers: "/articles", libelle: "Articles", fin: false },
   { vers: "/prix", libelle: "Prix de référence", fin: false },

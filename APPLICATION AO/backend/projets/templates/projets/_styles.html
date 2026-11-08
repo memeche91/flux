@@ -1,0 +1,36 @@
+{% load format_fr %}<style>
+@page {
+  size: A4;
+  margin: 20mm 17mm 22mm 17mm;
+  @bottom-left { content: "{{ projet.nom|chaine_css }} – {{ garde.sigle }} lot {{ lot.code|chaine_css }} – indice {{ projet.indice|chaine_css }}"; font-family: {{ police|safe }}; font-size: 7.5pt; color: #555; }
+  @bottom-right { content: "Page " counter(page) " / " counter(pages); font-family: {{ police|safe }}; font-size: 7.5pt; color: #555; }
+}
+@page garde { @bottom-left { content: none; } @bottom-right { content: none; } }
+
+html { font-family: {{ police|safe }}; font-size: {{ taille }}pt; color: #1a1a1a; line-height: 1.35; }
+body { margin: 0; }
+
+/* Page de garde */
+.garde { page: garde; break-after: page; display: flex; flex-direction: column; gap: 7mm; padding-top: 18mm; }
+.garde-moa { text-align: center; font-size: 12pt; letter-spacing: 0.06em; text-transform: uppercase; color: #333; }
+.garde-operation { text-align: center; font-size: 21pt; margin: 0; color: #111; }
+.garde-adresse { text-align: center; margin: 0; color: #444; }
+.garde-bandeau { background: {{ couleur_titres }}; color: #fff; text-align: center; padding: 9mm 8mm; margin-top: 10mm; }
+.garde-piece { font-size: 16pt; font-weight: bold; text-transform: uppercase; letter-spacing: 0.04em; }
+.garde-lot { font-size: 13.5pt; margin-top: 3mm; }
+.garde-infos { border-collapse: collapse; width: 100%; margin-top: 8mm; }
+.garde-infos th, .garde-infos td { border: 0.5pt solid #9a9a9a; padding: 2.2mm 3mm; text-align: left; vertical-align: top; }
+.garde-infos th { background: {{ couleur_tableaux }}; width: 34%; }
+
+/* Contenu */
+h2 { color: {{ couleur_titres }}; font-size: {{ taille|add:4 }}pt; margin: 9mm 0 3mm; break-after: avoid; border-bottom: 1pt solid {{ couleur_titres }}; padding-bottom: 1.5mm; }
+h3 { color: {{ couleur_titres }}; font-size: {{ taille|add:1 }}pt; margin: 5mm 0 1.5mm; break-after: avoid; }
+.description p { margin: 0 0 2mm; text-align: justify; }
+.description h3, .description h4 { color: #1a1a1a; margin: 3mm 0 1mm; font-size: {{ taille|add:1 }}pt; }
+.description ul, .description ol { margin: 0 0 2mm; padding-left: 6mm; }
+.description table { border-collapse: collapse; width: 100%; margin: 2mm 0 3mm; break-inside: auto; }
+.description th, .description td { border: 0.5pt solid #8c8c8c; padding: 1.5mm 2mm; vertical-align: top; text-align: left; }
+.description th { background: {{ couleur_tableaux }}; }
+.description td p, .description th p { margin: 0; text-align: left; }
+.description mark { background: #fff59d; }
+</style>
