@@ -4,7 +4,8 @@ from pathlib import Path
 
 from django.conf import settings
 from django.db import IntegrityError, transaction
-from django.db.models import Count, Q
+from django.db.models import Count, IntegerField, OuterRef, Q, Subquery, Value
+from django.db.models.functions import Coalesce
 from django.http import FileResponse
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
@@ -15,8 +16,10 @@ from ninja.files import UploadedFile
 from referentiel.api import LotOut
 from referentiel.models import Lot
 
-from .extraction import EXTENSIONS_ACCEPTEES
-from .models import TYPES_PAR_LOT, DocumentReference, TypeDocument, TypeMarche
+from articles.models import Article, LignePrix
+
+from .lecture import EXTENSIONS_ACCEPTEES
+from .models import TYPES_PAR_LOT, DocumentReference, StatutAnalyse, TypeDocument, TypeMarche
 from .tasks import analyser_document
 
 router = Router(tags=["Bibliothèque documentaire"])
@@ -38,6 +41,8 @@ class DocumentOut(Schema):
     message_analyse: str
     ajoute_le: datetime
     ajoute_par: str | None
+    nb_articles: int
+    nb_lignes_prix: int
 
     @staticmethod
     def resolve_type_document_libelle(obj):
@@ -70,12 +75,27 @@ class StatistiquesOut(Schema):
     total: int
     par_type: dict[str, int]
     par_lot: dict[str, dict[str, int]]
+    articles: int
+    lignes_prix: int
+    lignes_chiffrees: int
+
+
+def _compte(modele):
+    sous_requete = (
+        modele.objects.filter(document=OuterRef("pk"))
+        .order_by()
+        .values("document")
+        .annotate(n=Count("pk"))
+        .values("n")[:1]
+    )
+    return Coalesce(Subquery(sous_requete, output_field=IntegerField()), Value(0))
 
 
 def _champs_liste():
     return (
         DocumentReference.objects.select_related("lot", "ajoute_par")
         .defer("texte_extrait")
+        .annotate(nb_articles=_compte(Article), nb_lignes_prix=_compte(LignePrix))
     )
 
 
@@ -175,6 +195,17 @@ def telecharger_document(request, document_id: int):
     )
 
 
+@router.post("/documents/{document_id}/analyser", response=DocumentOut)
+def relancer_analyse(request, document_id: int):
+    """Relance la lecture et le découpage du document (après une correction, par exemple)."""
+    document = get_object_or_404(DocumentReference, pk=document_id)
+    document.statut_analyse = StatutAnalyse.EN_ATTENTE
+    document.message_analyse = ""
+    document.save(update_fields=["statut_analyse", "message_analyse"])
+    transaction.on_commit(lambda: analyser_document.delay(document.pk))
+    return _champs_liste().get(pk=document.pk)
+
+
 @router.delete("/documents/{document_id}", response={204: None})
 def supprimer_document(request, document_id: int):
     document = get_object_or_404(DocumentReference, pk=document_id)
@@ -197,4 +228,11 @@ def statistiques(request):
     for ligne in lignes:
         par_lot[ligne["type_document"]][str(ligne["lot_id"])] = ligne["n"]
 
-    return {"total": sum(par_type.values()), "par_type": par_type, "par_lot": par_lot}
+    return {
+        "total": sum(par_type.values()),
+        "par_type": par_type,
+        "par_lot": par_lot,
+        "articles": Article.objects.count(),
+        "lignes_prix": LignePrix.objects.count(),
+        "lignes_chiffrees": LignePrix.objects.filter(prix_unitaire__gt=0).count(),
+    }

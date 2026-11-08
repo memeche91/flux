@@ -194,7 +194,7 @@ export default function ZoneImport({ type, lots, lotSelectionne, surDocumentAjou
       >
         <FileUp aria-hidden="true" className="size-8 text-accent" />
         <span className="font-semibold">Glissez vos fichiers ici ou cliquez pour parcourir</span>
-        <span className="text-xs text-attenue">PDF, Word, Excel, OpenDocument, CSV · plusieurs fichiers à la fois</span>
+        <span className="text-xs text-attenue">PDF (même scannés), Word, Excel, OpenDocument, CSV · plusieurs fichiers à la fois</span>
         <input
           id={`${identifiant}-fichiers`}
           type="file"

@@ -22,3 +22,19 @@ export function formaterNombre(nombre: number): string {
 export function pluriel(nombre: number, singulier: string, plurielForme = `${singulier}s`): string {
   return `${formaterNombre(nombre)} ${nombre > 1 ? plurielForme : singulier}`;
 }
+
+const FORMAT_EUROS = new Intl.NumberFormat("fr-FR", { style: "currency", currency: "EUR" });
+
+export function formaterEuros(montant: number | null | undefined): string {
+  return montant == null ? "—" : FORMAT_EUROS.format(montant);
+}
+
+export function formaterQuantite(quantite: number | null | undefined): string {
+  return quantite == null ? "—" : quantite.toLocaleString("fr-FR", { maximumFractionDigits: 3 });
+}
+
+/** Description courte de l'origine d'un document : « Collège Pasteur · 2024 ». */
+export function origineDocument(document: { operation: string; annee: number | null; nom_original: string }): string {
+  const elements = [document.operation, document.annee ? String(document.annee) : ""].filter(Boolean);
+  return elements.length ? elements.join(" · ") : document.nom_original;
+}

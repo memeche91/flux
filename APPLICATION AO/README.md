@@ -3,7 +3,7 @@
 Application web pour gérer les appels d'offres de A à Z : pièces écrites (CCTP, DPGF, CCAP, RC, AE), DCE, analyse des offres (rapport ACT) et GED de chantier.
 L'application est **100 % gratuite et open source**. Elle tourne sur un poste ou un serveur du cabinet, et aucune donnée n'est envoyée sur Internet.
 
-> **Version actuelle : étape 1.0.** Socle (comptes, thème « Chantier Nuit ») et **bibliothèque documentaire** : import illimité de vos CCAP, actes d'engagement, RC, CCTP par lot et DPGF par lot.
+> **Version actuelle : étape 1.1.** Bibliothèque documentaire (import illimité de vos CCAP, AE, RC, CCTP et DPGF par lot), **découpage automatique en articles**, **prix de référence** issus de vos DPGF, **conversion des anciens formats** et **OCR des PDF scannés**.
 
 ---
 
@@ -55,6 +55,8 @@ L'installateur :
 - **Fichiers importés** : dossier `donnees\fichiers`, classés par type, puis par lot (par exemple `bibliotheque\CCTP\08\...`).
 - **Base de données** : volume Docker `application-ao_base_donnees`.
 
+> ⚠️ Ne supprimez jamais le fichier `.env` : il contient le mot de passe de la base de données. Sans lui, l'application ne peut plus ouvrir vos données.
+
 La sauvegarde et l'archivage complet (export du chantier sur le PC ou le serveur, puis purge) arrivent avec l'étape 4 (GED).
 
 ### Accès depuis un autre poste du cabinet
@@ -69,15 +71,30 @@ La sauvegarde et l'archivage complet (export du chantier sur le PC ou le serveur
 
 ---
 
-## Bibliothèque documentaire (étape 1.0)
+## Fonctionnalités
+
+### Documents (bibliothèque documentaire)
 
 - Cinq onglets : **CCAP**, **Acte d'engagement**, **Règlement de consultation**, **CCTP** et **DPGF**.
-- Les CCTP et DPGF sont **classés par lot**. Un document « tous corps d'état » va dans le lot **TCE**.
+- Les CCTP et DPGF sont **classés par lot**. Un document « tous corps d'état » va dans le lot **TCE** : les lots sont alors retrouvés dans ses titres (« LOT 08 – … »).
 - **Aucune limite de nombre** : glisser-déposer de plusieurs fichiers à la fois, avec la progression de chaque envoi.
 - Pour chaque document : opération d'origine, année, marché public ou privé.
 - Les **doublons** (même fichier déjà importé) sont détectés et refusés.
-- **Analyse automatique** : le texte des `.docx`, `.xlsx`, `.pdf` et `.csv` est extrait, avec les titres Word conservés. C'est ce texte qui servira à l'étape 1.1 à découper vos documents en articles et à apprendre votre style.
-- Les `.doc`, `.xls`, `.odt` et `.rtf` sont conservés. Leur conversion automatique arrive à l'étape suivante.
+- **Tous les formats sont lus** : Word, Excel, PDF, CSV, OpenDocument. Les anciens `.doc`, `.xls`, `.odt`, `.rtf` et `.ods` sont convertis par LibreOffice, et les **PDF scannés** passent par la reconnaissance de texte (Tesseract, en français).
+- Bouton **Relancer l'analyse** sur chaque document.
+
+### Articles
+
+- Chaque CCTP est **découpé en articles** : numéro, titre, rubrique parente, lot, contenu (tableaux compris).
+- Les titres sont reconnus grâce aux styles Word (Titre 1, 2, 3…), à la numérotation automatique ou au texte (« 3.2.4 Châssis… », « ARTICLE 4 – … »). Les sommaires, en-têtes et pieds de page sont ignorés.
+- Classement en **Généralités** ou **Ouvrages**. Les CCAP, RC et AE sont découpés en **clauses**.
+- Recherche sans accents ni majuscules, filtres par lot, catégorie et **norme / DTU cité**, bouton **Copier le texte**.
+- **Normes et DTU cités** : la liste des références (DTU, NF EN, Eurocodes, RE2020…) relevées dans *vos* documents, avec leur fréquence. Les textes des normes ne sont pas récupérés : ils sont payants (AFNOR / CSTB).
+
+### Prix de référence
+
+- Chaque DPGF est lue ligne par ligne : chapitre, désignation, unité, quantité, prix unitaire et montant. Les colonnes sont reconnues automatiquement, et les totaux et la TVA sont ignorés.
+- Recherche d'un ouvrage : **médiane, minimum et maximum par unité**, ainsi que la liste des prix relevés avec leur opération et leur année.
 
 ---
 
@@ -93,10 +110,11 @@ APPLICATION AO/
 │   ├── config/            Paramètres, API, tâches de fond
 │   ├── comptes/           Utilisateurs et rôles (Administrateur, MOE, Entreprise)
 │   ├── referentiel/       Nomenclature des lots (modifiable dans Paramétrage)
-│   └── bibliotheque/      Documents de référence, import, extraction de texte
+│   ├── bibliotheque/      Documents de référence, import, lecture (conversion, OCR)
+│   └── articles/          Découpage en articles, lignes de prix, normes citées
 └── frontend/              React 19 · TypeScript · Vite · Tailwind CSS
     └── src/
-        ├── pages/         Connexion, Tableau de bord, Bibliothèque
+        ├── pages/         Connexion, Tableau de bord, Documents, Articles, Prix
         ├── components/    En-tête, liste des lots, zone d'import, tableau
         └── api/           Accès à l'API (session + protection CSRF)
 ```
@@ -106,7 +124,7 @@ APPLICATION AO/
 | `base` | PostgreSQL 16 + pgvector (recherche sémantique pour l'IA, plus tard) |
 | `redis` | File d'attente des tâches (Valkey, fork open source de Redis) |
 | `backend` | API Django (gunicorn) |
-| `worker` | Tâches de fond : analyse des documents, puis exports, IA et e-mails |
+| `worker` | Tâches de fond : lecture, conversion, OCR et découpage des documents (puis exports, IA, e-mails) |
 | `web` | Caddy : sert l'interface et relaie l'API |
 
 ## Développement (facultatif)
@@ -119,8 +137,11 @@ DJANGO_DEBUG=1 python manage.py migrate
 DJANGO_DEBUG=1 python manage.py createsuperuser
 DJANGO_DEBUG=1 python manage.py runserver
 
-# Tests
+# Tests (LibreOffice et Tesseract nécessaires pour les tests de conversion et d'OCR)
 DJANGO_DEBUG=1 python manage.py test
+
+# Relancer l'analyse de tous les documents (après une mise à jour)
+docker compose exec backend python manage.py reanalyser_documents
 
 # Interface (relais automatique vers le port 8000)
 cd frontend
@@ -130,7 +151,7 @@ npm install && npm run dev
 ## Feuille de route
 
 - [x] **1.0** Socle, thème « Chantier Nuit », bibliothèque documentaire
-- [ ] **1.1** Découpage en articles par lot, prix de référence, OCR, conversion des anciens formats
+- [x] **1.1** Découpage en articles par lot, prix de référence, OCR, conversion des anciens formats
 - [ ] **1.2** Rédaction CCTP / DPGF (PSE, variantes), éditeur visuel, exports Word / PDF / Excel
 - [ ] **1.3** CCAP, RC, AE à partir de modèles
 - [ ] **1.4** Assistant IA local (chat et voix, administrateur uniquement)

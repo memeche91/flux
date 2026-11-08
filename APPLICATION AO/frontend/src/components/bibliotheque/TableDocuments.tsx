@@ -1,9 +1,12 @@
-import { Download, Search, Trash2 } from "lucide-react";
+import { Download, RotateCcw, Search, Trash2 } from "lucide-react";
 import { useState } from "react";
+import { Link } from "react-router";
 
 import { api } from "../../api/client";
 import type { DocumentReference, StatutAnalyse } from "../../api/types";
 import { formaterDate, formaterTaille, pluriel } from "../../lib/format";
+
+const TYPES_A_CLAUSES = new Set(["CCAP", "AE", "RC"]);
 
 interface Proprietes {
   titre: string;
@@ -31,6 +34,16 @@ export default function TableDocuments({
 }: Proprietes) {
   const [erreur, setErreur] = useState<string | null>(null);
   const [suppressionEnCours, setSuppressionEnCours] = useState<number | null>(null);
+
+  async function relancer(document: DocumentReference) {
+    setErreur(null);
+    try {
+      await api(`/bibliotheque/documents/${document.id}/analyser`, { method: "POST" });
+      surSuppression();
+    } catch (probleme) {
+      setErreur(probleme instanceof Error ? probleme.message : "Impossible de relancer l'analyse.");
+    }
+  }
 
   async function supprimer(document: DocumentReference) {
     if (!window.confirm(`Supprimer définitivement « ${document.nom_original} » de la bibliothèque ?`)) return;
@@ -85,13 +98,12 @@ export default function TableDocuments({
         </p>
       ) : (
         <div className="relative overflow-x-auto">
-          <table className="w-full min-w-[720px] border-collapse">
+          <table className="w-full min-w-[640px] border-collapse">
             <thead>
               <tr className="text-left text-xs uppercase tracking-[0.06em] text-attenue">
                 <th scope="col" className="px-5 py-2.5 font-semibold">Document</th>
                 {afficherLot && <th scope="col" className="px-3 py-2.5 font-semibold">Lot</th>}
-                <th scope="col" className="px-3 py-2.5 text-right font-semibold">Taille</th>
-                <th scope="col" className="px-3 py-2.5 font-semibold">Ajouté le</th>
+                <th scope="col" className="px-3 py-2.5 font-semibold">Contenu extrait</th>
                 <th scope="col" className="px-3 py-2.5 font-semibold">Analyse</th>
                 <th scope="col" className="px-5 py-2.5 text-right font-semibold">
                   <span className="sr-only">Actions</span>
@@ -105,46 +117,60 @@ export default function TableDocuments({
                   document.annee ? String(document.annee) : "",
                   document.type_marche_libelle,
                 ].filter(Boolean);
+                const fichier = `${formaterTaille(document.taille)} · ajouté le ${formaterDate(document.ajoute_le)}`;
                 return (
                   <tr key={document.id} className="border-t border-bordure align-top">
-                    <td className="max-w-[360px] px-5 py-3">
+                    <td className="max-w-[420px] px-5 py-3">
                       <div className="flex flex-col">
                         <span className="truncate font-medium" title={document.nom_original}>
                           {document.nom_original}
                         </span>
                         {details.length > 0 && <span className="text-xs text-attenue">{details.join(" · ")}</span>}
+                        <span className="text-xs text-attenue">{fichier}</span>
                       </div>
                     </td>
                     {afficherLot && (
-                      <td className="px-3 py-3 whitespace-nowrap">
+                      <td className="px-3 py-3">
                         {document.lot ? (
-                          <span title={document.lot.intitule}>
-                            <span className="font-titre font-semibold text-accent">{document.lot.code}</span>{" "}
-                            <span className="text-attenue">{document.lot.intitule}</span>
+                          <span title={document.lot.intitule} className="font-titre font-semibold text-accent">
+                            {document.lot.code}
+                            <span className="sr-only"> – {document.lot.intitule}</span>
                           </span>
                         ) : (
                           "—"
                         )}
                       </td>
                     )}
-                    <td className="px-3 py-3 text-right whitespace-nowrap text-attenue tabular-nums">
-                      {formaterTaille(document.taille)}
+                    <td className="px-3 py-3 whitespace-nowrap">
+                      <LienContenu document={document} />
                     </td>
-                    <td className="px-3 py-3 whitespace-nowrap text-attenue">{formaterDate(document.ajoute_le)}</td>
-                    <td className="max-w-[260px] px-3 py-3">
+                    <td className="max-w-[240px] px-3 py-3">
                       <div className="flex flex-col items-start gap-1">
                         <span
+                          title={document.message_analyse || undefined}
                           className={`rounded-full px-2.5 py-0.5 text-xs font-semibold whitespace-nowrap ${STYLES_STATUT[document.statut_analyse]}`}
                         >
                           {document.statut_analyse_libelle}
                         </span>
-                        {document.statut_analyse !== "EN_ATTENTE" && document.message_analyse && (
+                        {/* Le détail n'est affiché que s'il y a un problème ; sinon la colonne « Contenu extrait » suffit. */}
+                        {(document.statut_analyse === "ERREUR" || document.statut_analyse === "NON_PRIS_EN_CHARGE") &&
+                          document.message_analyse && (
                           <span className="text-xs text-attenue">{document.message_analyse}</span>
                         )}
                       </div>
                     </td>
                     <td className="px-5 py-2">
                       <div className="flex justify-end gap-1">
+                        <button
+                          type="button"
+                          onClick={() => void relancer(document)}
+                          disabled={document.statut_analyse === "EN_ATTENTE"}
+                          aria-label={`Relancer l'analyse de ${document.nom_original}`}
+                          title="Relancer l'analyse"
+                          className="grid size-11 place-items-center rounded-lg text-attenue hover:bg-surface-2 hover:text-texte disabled:opacity-40"
+                        >
+                          <RotateCcw aria-hidden="true" className="size-4.5" />
+                        </button>
                         <a
                           href={`/api/bibliotheque/documents/${document.id}/telecharger`}
                           aria-label={`Télécharger ${document.nom_original}`}
@@ -173,5 +199,26 @@ export default function TableDocuments({
         </div>
       )}
     </section>
+  );
+}
+
+function LienContenu({ document }: { document: DocumentReference }) {
+  if (document.statut_analyse !== "ANALYSE") return <span className="text-attenue">—</span>;
+  if (document.type_document === "DPGF") {
+    return document.nb_lignes_prix > 0 ? (
+      <Link to={`/prix?document=${document.id}&toutes=1`} className="text-accent">
+        {pluriel(document.nb_lignes_prix, "ligne de prix", "lignes de prix")}
+      </Link>
+    ) : (
+      <span className="text-attenue">Aucune ligne</span>
+    );
+  }
+  const mot = TYPES_A_CLAUSES.has(document.type_document) ? "clause" : "article";
+  return document.nb_articles > 0 ? (
+    <Link to={`/articles?type=${document.type_document}&document=${document.id}`} className="text-accent">
+      {pluriel(document.nb_articles, mot)}
+    </Link>
+  ) : (
+    <span className="text-attenue">Aucun {mot}</span>
   );
 }

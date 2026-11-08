@@ -11,7 +11,7 @@ const PARCOURS = [
   {
     numero: "1",
     titre: "Pièces écrites",
-    detail: "Bibliothèque documentaire disponible · rédaction CCTP, DPGF, CCAP, RC, AE à venir",
+    detail: "Bibliothèque, articles et prix de référence disponibles · rédaction des pièces à venir",
     actif: true,
   },
   { numero: "2", titre: "DCE", detail: "Dossier .zip classé, annuaire des entreprises", actif: false },
@@ -69,6 +69,30 @@ export default function TableauDeBord() {
         </div>
       </section>
 
+      <section aria-labelledby="titre-extraits" className="flex flex-col gap-3">
+        <h2 id="titre-extraits" className="font-titre text-lg font-semibold">
+          Extrait de vos documents
+        </h2>
+        <div className="flex flex-wrap gap-3">
+          {[
+            { vers: "/articles?type=CCTP", libelle: "Articles et clauses", valeur: stats?.articles, detail: "Découpés par lot, prêts à réutiliser" },
+            { vers: "/prix", libelle: "Prix de référence", valeur: stats?.lignes_chiffrees, detail: stats ? `Sur ${formaterNombre(stats.lignes_prix)} lignes de DPGF` : "Lignes chiffrées des DPGF" },
+          ].map((tuile) => (
+            <Link
+              key={tuile.vers}
+              to={tuile.vers}
+              className="group flex min-w-0 flex-[1_1_260px] flex-col gap-1.5 rounded-xl border border-bordure bg-surface px-4.5 py-4 text-texte no-underline transition-colors hover:border-bordure-forte hover:bg-surface-2"
+            >
+              <span className="text-xs text-attenue">{tuile.libelle}</span>
+              <span className="font-titre text-3xl font-semibold tabular-nums">
+                {tuile.valeur === undefined ? "—" : formaterNombre(tuile.valeur)}
+              </span>
+              <span className="text-xs text-attenue group-hover:text-texte">{tuile.detail}</span>
+            </Link>
+          ))}
+        </div>
+      </section>
+
       <div className="flex flex-wrap items-start gap-5">
         <section
           aria-labelledby="titre-parcours"
@@ -121,8 +145,8 @@ export default function TableauDeBord() {
             </li>
           </ol>
           <p className="text-xs text-attenue">
-            Formats lus automatiquement : .docx, .xlsx, .pdf et .csv. Les .doc, .xls, .odt et .rtf sont conservés et
-            seront convertis à l'étape suivante.
+            Tous les formats sont lus : Word, Excel, PDF (même scannés, grâce à la reconnaissance de texte), CSV et
+            OpenDocument. Les anciens .doc et .xls sont convertis automatiquement.
           </p>
         </section>
       </div>

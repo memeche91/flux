@@ -54,6 +54,7 @@ INSTALLED_APPS = [
     "comptes",
     "referentiel",
     "bibliotheque.apps.BibliothequeConfig",
+    "articles",
 ]
 
 MIDDLEWARE = [
@@ -139,6 +140,13 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 # Taille maximale d'un fichier importé, en mégaoctets.
 TAILLE_MAX_FICHIER_MO = int(env("TAILLE_MAX_FICHIER_MO", "200"))
 
+# Lecture des documents : conversion des anciens formats (LibreOffice) et OCR (Tesseract).
+LIBREOFFICE_BIN = env("LIBREOFFICE_BIN", "soffice")
+TESSERACT_BIN = env("TESSERACT_BIN", "tesseract")
+OCR_LANGUE = env("OCR_LANGUE", "fra")
+OCR_PAGES_MAX = int(env("OCR_PAGES_MAX", "300"))
+CONVERSION_DELAI_MAX = int(env("CONVERSION_DELAI_MAX", "180"))
+
 # Sécurité des cookies : HTTPS activable quand la GED sera exposée sur Internet.
 SESSION_COOKIE_HTTPONLY = True
 SESSION_COOKIE_SECURE = env_bool("COOKIES_HTTPS", False)
@@ -156,6 +164,7 @@ CELERY_RESULT_SERIALIZER = "json"
 CELERY_ACCEPT_CONTENT = ["json"]
 CELERY_TASK_IGNORE_RESULT = True
 CELERY_TIMEZONE = TIME_ZONE
+CELERY_TASK_TIME_LIMIT = 60 * 60  # OCR d'un gros document scanné
 
 LOGGING = {
     "version": 1,

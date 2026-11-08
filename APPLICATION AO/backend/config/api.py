@@ -2,6 +2,7 @@
 from django.contrib.admin.views.decorators import staff_member_required
 from ninja import NinjaAPI
 
+from articles.api import router as articles_router
 from bibliotheque.api import router as bibliotheque_router
 from comptes.api import router as comptes_router
 from comptes.securite import session_bureau_etudes
@@ -18,3 +19,4 @@ api = NinjaAPI(
 api.add_router("/auth", comptes_router)
 api.add_router("/referentiel", referentiel_router)
 api.add_router("/bibliotheque", bibliotheque_router)
+api.add_router("", articles_router)

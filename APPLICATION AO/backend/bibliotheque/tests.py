@@ -101,7 +101,8 @@ class BibliothequeApiTests(TestCase):
         reponse = self.televerser(SimpleUploadedFile("plan.dwg", b"x"), type_document="AE")
         self.assertEqual(reponse.status_code, 400)
 
-    def test_format_conserve_sans_analyse(self):
+    @override_settings(LIBREOFFICE_BIN="libreoffice-absent")
+    def test_format_conserve_si_conversion_impossible(self):
         reponse = self.televerser(SimpleUploadedFile("ancien.doc", b"binaire"), type_document="AE")
         self.assertEqual(reponse.status_code, 201)
         self.assertEqual(DocumentReference.objects.get().statut_analyse, StatutAnalyse.NON_PRIS_EN_CHARGE)

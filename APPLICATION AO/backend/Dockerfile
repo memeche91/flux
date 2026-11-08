@@ -7,6 +7,15 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
+# LibreOffice : conversion des anciens formats (.doc, .xls, .odt…) et, plus tard, exports PDF.
+# Tesseract : reconnaissance de texte (OCR) des PDF scannés, en français.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        libreoffice-writer-nogui libreoffice-calc-nogui \
+        tesseract-ocr tesseract-ocr-fra \
+        fonts-dejavu-core fonts-liberation \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY requirements.txt .
 RUN pip install -r requirements.txt
 
