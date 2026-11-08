@@ -1,0 +1,66 @@
+# Application AO — lancement : docker compose up -d --build
+# (le script installer.ps1 fait tout automatiquement sous Windows)
+name: application-ao
+
+x-backend: &backend
+  build: ./backend
+  restart: unless-stopped
+  env_file: .env
+  environment:
+    POSTGRES_HOST: base
+    REDIS_URL: redis://redis:6379/0
+    MEDIA_ROOT: /donnees/fichiers
+  volumes:
+    # Les fichiers importés restent visibles dans le dossier « donnees\fichiers » du PC.
+    - ./donnees/fichiers:/donnees/fichiers
+
+services:
+  base:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-application_ao}
+      POSTGRES_USER: ${POSTGRES_USER:-application_ao}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Lancez installer.ps1 ou renseignez POSTGRES_PASSWORD dans .env}
+    volumes:
+      - base_donnees:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  redis:
+    image: valkey/valkey:8-alpine
+    restart: unless-stopped
+
+  backend:
+    <<: *backend
+    environment:
+      POSTGRES_HOST: base
+      REDIS_URL: redis://redis:6379/0
+      MEDIA_ROOT: /donnees/fichiers
+      INITIALISER: "1"
+    depends_on:
+      base:
+        condition: service_healthy
+      redis:
+        condition: service_started
+
+  worker:
+    <<: *backend
+    command: ["celery", "-A", "config", "worker", "--loglevel=info", "--concurrency=2"]
+    depends_on:
+      backend:
+        condition: service_started
+
+  web:
+    build: ./frontend
+    restart: unless-stopped
+    ports:
+      - "${APP_PORT:-8080}:80"
+    depends_on:
+      - backend
+
+volumes:
+  base_donnees:

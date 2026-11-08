@@ -1,0 +1,48 @@
+@import "tailwindcss";
+
+/* Thème « Chantier Nuit » : graphite + jaune chantier. */
+@theme {
+  --color-fond: #121417;
+  --color-entete: #171a1e;
+  --color-surface: #1b1f24;
+  --color-surface-2: #232830;
+  --color-bordure: #2e343d;
+  --color-bordure-forte: #3a414b;
+  --color-texte: #eceef1;
+  --color-attenue: #9aa3af;
+  --color-accent: #f5b700;
+  --color-accent-clair: #ffc933;
+  --color-sur-accent: #121417;
+  --color-succes: #4ade80;
+  --color-info: #60a5fa;
+  --color-danger: #f87171;
+
+  --font-sans: "Inter Variable", "Segoe UI", system-ui, sans-serif;
+  --font-titre: "Space Grotesk", "Inter Variable", "Segoe UI", sans-serif;
+}
+
+@layer base {
+  html {
+    color-scheme: dark;
+  }
+
+  body {
+    @apply bg-fond text-texte font-sans text-sm antialiased;
+    line-height: 1.45;
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 2px;
+  }
+
+  ::selection {
+    background: var(--color-accent);
+    color: var(--color-sur-accent);
+  }
+
+  button:not(:disabled),
+  [role="button"]:not(:disabled) {
+    cursor: pointer;
+  }
+}

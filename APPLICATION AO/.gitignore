@@ -1,0 +1,17 @@
+# Configuration locale (contient des secrets)
+.env
+
+# Données de l'application (fichiers importés)
+donnees/*
+!donnees/.gitkeep
+
+# Python
+__pycache__/
+*.pyc
+backend/dev.sqlite3
+backend/media/
+backend/staticfiles/
+
+# Interface
+frontend/node_modules/
+frontend/dist/

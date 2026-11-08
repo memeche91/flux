@@ -1,0 +1,5 @@
+__pycache__
+*.pyc
+dev.sqlite3
+media
+staticfiles
