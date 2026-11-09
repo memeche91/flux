@@ -17,6 +17,7 @@ from django.db.models import Q
 from django.utils import timezone
 
 from articles.models import Article, LignePrix
+from articles.normalisation import normaliser
 from projets.modeles import lister_modeles
 
 from . import ollama
@@ -59,30 +60,29 @@ def _passages_articles() -> dict[str, dict]:
 
 
 def _passages_prix() -> dict[str, dict]:
+    """Un passage par ouvrage et par unité, quel que soit le chapitre où il a été relevé."""
     groupes: dict[tuple[str, str], dict] = {}
     lignes = (
         LignePrix.objects.filter(prix_unitaire__gt=0)
-        .select_related("lot")
-        .order_by("designation_normalisee", "unite_normalisee", "id")
+        .order_by("-document__annee", "id")
         .values("designation", "designation_normalisee", "unite", "unite_normalisee", "chapitre", "lot__code")
     )
     for ligne in lignes.iterator(chunk_size=2000):
-        cle = (ligne["designation_normalisee"], ligne["unite_normalisee"])
-        groupe = groupes.setdefault(cle, {**ligne, "nombre": 0})
-        groupe["nombre"] += 1
-    attendus = {}
-    for (designation_normalisee, unite), groupe in groupes.items():
-        if not designation_normalisee:
+        designation = normaliser(ligne["designation"])
+        if not designation:
             continue
+        groupe = groupes.setdefault((designation, ligne["unite_normalisee"]), {**ligne, "normalisees": set()})
+        groupe["normalisees"].add(ligne["designation_normalisee"])
+    attendus = {}
+    for (designation, unite), groupe in groupes.items():
         lot = f"lot {groupe['lot__code']}" if groupe["lot__code"] else ""
         texte = " – ".join(x for x in [groupe["designation"], f"unité {groupe['unite'] or unite}", groupe["chapitre"], lot] if x)
-        cle = f"prix:{_empreinte(designation_normalisee + '|' + unite)}"
-        attendus[cle] = {
+        attendus[f"prix:{_empreinte(designation + '|' + unite)}"] = {
             "source": SourcePassage.PRIX,
             "article_id": None,
             "titre": groupe["designation"][:500],
             "texte": tronquer(f"Prix unitaire : {texte}", 600),
-            "meta": {"designation_normalisee": designation_normalisee, "unite": unite, "lot": groupe["lot__code"] or ""},
+            "meta": {"designations": sorted(groupe["normalisees"]), "unite": unite, "lot": groupe["lot__code"] or ""},
         }
     return attendus
 
@@ -151,7 +151,9 @@ def synchroniser() -> list[int]:
     if a_modifier:
         Passage.objects.bulk_update(a_modifier, ["titre", "texte", "meta", "empreinte", "vecteur", "modele", "maj_le", "source", "article"], batch_size=500)
     a_calculer = Passage.objects.filter(Q(vecteur__isnull=True) | ~Q(modele=settings.IA_MODELE_EMBEDDING))
-    return list(a_calculer.order_by("source", "pk").values_list("pk", flat=True))
+    # Les documents et les prix du cabinet d'abord, les modèles de pièces ensuite.
+    priorite = {SourcePassage.PRIX: 0, SourcePassage.ARTICLE: 1, SourcePassage.MODELE: 2}
+    return [pk for pk, _ in sorted(a_calculer.values_list("pk", "source"), key=lambda e: (priorite.get(e[1], 3), e[0]))]
 
 
 def vers_octets(vecteur) -> bytes:

@@ -31,7 +31,7 @@ Règles impératives :
 6. Mise en forme : paragraphes courts, listes à puces si utile, **gras** pour les montants et les points clés. Pas de tableau, pas de titre de niveau 1."""
 
 AUCUN_EXTRAIT = "Aucun extrait pertinent n'a été trouvé dans les documents du cabinet pour cette question."
-HISTORIQUE_MAX = 6
+HISTORIQUE_MAX = 4
 
 
 def _euros(valeur: Decimal) -> str:
@@ -60,7 +60,7 @@ def description_projet(projet: Projet) -> str:
     pieces = ", ".join(sorted({p.get_type_piece_display() for p in projet.pieces.all()}))
     if pieces:
         lignes.append(f"- Pièces administratives rédigées : {pieces}.")
-    return tronquer("\n".join(lignes), 2500)
+    return tronquer("\n".join(lignes), 1800)
 
 
 def preparer(conversation: Conversation, question: str) -> tuple[list[dict], list[dict]]:
@@ -75,7 +75,7 @@ def preparer(conversation: Conversation, question: str) -> tuple[list[dict], lis
     messages = [{"role": "system", "content": SYSTEME.format(date=timezone.localdate().strftime("%d/%m/%Y"))}]
     precedents = list(conversation.messages.exclude(texte="").order_by("-cree_le", "-id")[1 : HISTORIQUE_MAX + 1])[::-1]
     for message in precedents:
-        messages.append({"role": message.role, "content": tronquer(message.texte, 1500)})
+        messages.append({"role": message.role, "content": tronquer(message.texte, 900)})
     messages.append({"role": "user", "content": "\n\n".join(blocs)})
     return messages, [source_pour_interface(e) for e in extraits]
 

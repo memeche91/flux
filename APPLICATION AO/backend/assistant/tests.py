@@ -73,6 +73,12 @@ class Donnees(TestCase):
 @mock.patch("assistant.ollama.vectoriser", side_effect=faux_vecteurs)
 class IndexationTests(Donnees):
     def test_synchronisation_et_recherche(self, _vectoriser):
+        # Même ouvrage relevé sous un chapitre dans une autre DPGF : un seul groupe de prix.
+        LignePrix.objects.create(
+            document=document("DPGF", "DPGF Lot 08 bis.xlsx", annee=2023), ordre=1, designation="Porte-fenêtre aluminium 2 vantaux",
+            unite="u", unite_normalisee="u", prix_unitaire=Decimal("2500"),
+            designation_normalisee="8 2 menuiseries porte fenetre aluminium 2 vantaux",
+        )
         indexer_assistant.apply()
         etat = EtatIndexation.courant()
         self.assertFalse(etat.en_cours)
@@ -86,8 +92,8 @@ class IndexationTests(Donnees):
         extraits = rechercher("Quel prix pour une porte-fenêtre aluminium 2 vantaux ?")
         prix = [e for e in extraits if e.passage.source == SourcePassage.PRIX]
         self.assertEqual(len(prix), 1)
-        self.assertEqual(prix[0].statistiques["mediane"], 2450.0)
-        self.assertEqual(prix[0].statistiques["nombre"], 3)
+        self.assertEqual(prix[0].statistiques["mediane"], 2475.0)
+        self.assertEqual(prix[0].statistiques["nombre"], 4)
         self.assertEqual([e.numero for e in extraits], list(range(1, len(extraits) + 1)))
 
         premier = rechercher("fenêtres aluminium oscillo-battantes vitrage")[0]

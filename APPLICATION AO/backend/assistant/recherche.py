@@ -64,7 +64,7 @@ INDEX = _Index()
 def statistiques_prix(meta: dict) -> tuple[dict | None, list[dict]]:
     lignes = list(
         LignePrix.objects.filter(
-            designation_normalisee=meta.get("designation_normalisee", ""),
+            designation_normalisee__in=meta.get("designations", []),
             unite_normalisee=meta.get("unite", ""),
             prix_unitaire__gt=0,
         )
@@ -87,7 +87,7 @@ def statistiques_prix(meta: dict) -> tuple[dict | None, list[dict]]:
     }, details
 
 
-def rechercher(question: str, *, nombre: int = 7) -> list[Extrait]:
+def rechercher(question: str, *, nombre: int = 6) -> list[Extrait]:
     identifiants, matrice = INDEX.charger()
     if not len(identifiants):
         return []
@@ -161,9 +161,9 @@ def formater_extrait(extrait: Extrait) -> str:
             f"{s['nombre']} prix. Détail : {sources}."
         )
     if passage.source == SourcePassage.MODELE:
-        return f"[{extrait.numero}] Modèle « {meta.get('modele')} » – {tronquer(passage.texte, 1100)}"
+        return f"[{extrait.numero}] Modèle « {meta.get('modele')} » – {tronquer(passage.texte, 800)}"
     lot = f" · lot {meta['lot']}" if meta.get("lot") else ""
-    return f"[{extrait.numero}] Document du cabinet « {_provenance(meta)} »{lot} – {tronquer(passage.texte, 1100)}"
+    return f"[{extrait.numero}] Document du cabinet « {_provenance(meta)} »{lot} – {tronquer(passage.texte, 800)}"
 
 
 def source_pour_interface(extrait: Extrait) -> dict:

@@ -21,7 +21,9 @@ export default function TexteReponse({ texte, surRenvoi }: { texte: string; surR
     liste = null;
   };
 
-  for (const brute of texte.split("\n")) {
+  // Montants et unités insécables : « 2 450,00 € HT » ne se coupe pas en fin de ligne.
+  const propre = texte.replace(/(\d) (?=\d{3}\b)/g, "$1\u202f").replace(/ (€|%|HT\b|TTC\b)/g, "\u00a0$1");
+  for (const brute of propre.split("\n")) {
     const ligne = brute.trimEnd();
     const puce = /^\s*[-*•]\s+(.*)$/.exec(ligne);
     const numero = /^\s*\d+[.)]\s+(.*)$/.exec(ligne);
@@ -57,10 +59,11 @@ export default function TexteReponse({ texte, surRenvoi }: { texte: string; surR
 
 function enLigne(texte: string, surRenvoi?: (numero: number) => void): ReactNode[] {
   // **gras**, *italique*, [1] ou [1, 2] ou [1]-[3]
-  const morceaux = texte.split(/(\*\*[^*]+\*\*|\*[^*\s][^*]*\*|\[\d+(?:\s*[,;–-]\s*\d+)*\])/g);
+  // L'italique exige un astérisque hors d'un mot : « A*3 E*7B » (classement AEV) reste intact.
+  const morceaux = texte.split(/(\*\*[^*]+\*\*|(?<![\w*])\*(?![\s*])[^*\n]+?(?<!\s)\*(?![\w*])|\[\d+(?:\s*[,;–-]\s*\d+)*\])/g);
   return morceaux.map((morceau, indice) => {
     if (/^\*\*[^*]+\*\*$/.test(morceau)) return <strong key={indice} className="font-semibold text-white">{morceau.slice(2, -2)}</strong>;
-    if (/^\*[^*].*\*$/.test(morceau)) return <em key={indice}>{morceau.slice(1, -1)}</em>;
+    if (/^\*[^*\s][^*]*\*$/.test(morceau)) return <em key={indice}>{morceau.slice(1, -1)}</em>;
     const renvoi = /^\[(.+)\]$/.exec(morceau);
     if (renvoi && /^[\d\s,;–-]+$/.test(renvoi[1])) {
       const numeros = renvoi[1].split(/[,;–-]/).map((n) => Number(n.trim())).filter(Boolean);
