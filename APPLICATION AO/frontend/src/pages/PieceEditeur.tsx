@@ -490,7 +490,7 @@ function EnregistrerModele({
         <label htmlFor="nom-modele" className="sr-only">
           Nom du modèle
         </label>
-        <input id="nom-modele" value={nom} onChange={(e) => setNom(e.target.value)} className={`${CLASSE_CHAMP} min-w-0 flex-1`} />
+        <input id="nom-modele" value={nom} onChange={(e) => setNom(e.target.value)} className={`${CLASSE_CHAMP} min-w-0 basis-full`} />
         <button type="submit" disabled={envoi || !nom.trim()} className="min-h-11 rounded-lg border border-bordure-forte px-3 text-sm font-semibold hover:bg-surface-2 disabled:opacity-50">
           {envoi ? "Enregistrement…" : "Enregistrer comme modèle"}
         </button>
