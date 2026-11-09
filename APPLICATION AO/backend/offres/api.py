@@ -26,7 +26,7 @@ from projets.models import LotProjet, OptionLot, Projet
 
 from .comparatif import comparatif, comparatif_xlsx
 from .models import AnalyseLot, JustificationPrix, MethodePrix, Offre, StatutLecture
-from .notation import analyse_du_lot, classer, estimation, proposition
+from .notation import analyse_du_lot, classer, estimation, invalider_validation as _invalider, proposition
 from .rapport import document_rapport
 from .tasks import analyser_offre
 
@@ -124,15 +124,6 @@ def _lot_projet(lot_id: int) -> LotProjet:
     return get_object_or_404(LotProjet.objects.select_related("projet"), pk=lot_id)
 
 
-def _invalider(lot: LotProjet) -> None:
-    """Le classement ou le choix a changé : la proposition validée est à valider de nouveau."""
-    if AnalyseLot.objects.filter(lot=lot, validee_le__isnull=False).update(validee_le=None):
-        ConsultationEntreprise.objects.filter(
-            lot=lot, statut__in=[StatutConsultation.RETENUE, StatutConsultation.NON_RETENUE],
-            entreprise_id__in=Offre.objects.filter(lot=lot).values("entreprise_id"),
-        ).update(statut=StatutConsultation.REPONDU)
-
-
 @router.get("/projets/{projet_id}/offres")
 def etat(request, projet_id: int):
     projet = get_object_or_404(Projet, pk=projet_id)
@@ -165,7 +156,9 @@ def ajouter(
         raise HttpError(409, f"Une offre de {entreprise.raison_sociale} est déjà enregistrée pour ce lot : remplacez son fichier ou supprimez-la.")
     offre = Offre(projet=lot.projet, lot=lot, entreprise=entreprise, variante=variante, libelle_variante=libelle_variante.strip()[:255])
     if recue_le:
-        offre.recue_le = recue_le
+        offre.recue_le = _date_de_reception(recue_le)
+    elif (limite := _date_limite(lot.projet)) and timezone.localdate() > limite:
+        offre.recue_le = limite  # offre saisie après l'ouverture des plis : reçue au plus tard à la date limite
     if fichier is not None:
         extension = Path(fichier.name or "").suffix.lower()
         if extension not in EXTENSIONS_OFFRES:
@@ -204,58 +197,90 @@ def _euros(valeur: Decimal | None) -> str:
     return "—" if valeur is None else f"{valeur:,.2f}".replace(",", " ").replace(".", ",") + " €"
 
 
+MOTIF_REJET = "Offre anormalement basse : justifications de prix insuffisantes"
+
+
+def _date_de_reception(valeur: datetime.date) -> datetime.date:
+    if not datetime.date(2000, 1, 1) <= valeur <= timezone.localdate() + datetime.timedelta(days=366):
+        raise HttpError(400, "Date de réception invalide.")
+    return valeur
+
+
 @router.patch("/offres/{offre_id}")
 def modifier(request, offre_id: int, donnees: ModificationOffre):
-    offre = get_object_or_404(Offre.objects.select_related("entreprise", "lot__projet"), pk=offre_id)
     champs = donnees.model_dump(exclude_unset=True)
-    classement_modifie = False
-    if "montant_base" in champs and champs["montant_base"] != offre.montant_base:
-        lu = offre.montant_base_declare if offre.montant_base_declare is not None else offre.montant_base_calcule
-        offre.montant_base = champs["montant_base"]
-        # Montant saisi ou corrigé par l'économiste : il prime sur la lecture (même en cours).
-        offre.statut_lecture = StatutLecture.MANUELLE
-        offre.message_lecture = f"Montant saisi à la main (montant lu dans le document : {_euros(lu)})." if offre.fichier and lu is not None else (
-            "Montant saisi à la main." if offre.fichier else ""
-        )
-        classement_modifie = True
-    if champs.get("montants_options") is not None:
-        valides = {str(o) for o in offre.lot.options.values_list("pk", flat=True)}
-        if set(champs["montants_options"]) - valides:
-            raise HttpError(400, "PSE inconnue pour ce lot.")
-        offre.montants_options = {**offre.montants_options, **{k: (None if v is None else str(v)) for k, v in champs["montants_options"].items()}}
-        classement_modifie = True
-    for champ in ("variante", "recue_le", "ecartee"):
-        if champs.get(champ) is not None and getattr(offre, champ) != champs[champ]:
-            setattr(offre, champ, champs[champ])
-            classement_modifie = classement_modifie or champ != "recue_le"
-    for champ in ("libelle_variante", "delai_propose", "commentaire", "motif_ecart", "motif_justification"):
-        if champ in champs and champs[champ] is not None:
-            setattr(offre, champ, champs[champ].strip())
-    if "justification_prix" in champs and champs["justification_prix"] is not None and champs["justification_prix"] != offre.justification_prix:
-        offre.justification_prix = champs["justification_prix"]
-        classement_modifie = True
-        if offre.justification_prix == JustificationPrix.REJETEE:
-            # Justifications insuffisantes : l'offre anormalement basse est rejetée (art. R2152-3 du CCP).
-            offre.ecartee = True
-            offre.motif_ecart = offre.motif_ecart or "Offre anormalement basse : justifications de prix insuffisantes"
-    if champs.get("notes") is not None:
-        notes = dict(offre.notes)
-        bareme = analyse_du_lot(offre.lot).bareme
-        for critere, saisie in champs["notes"].items():
-            note = saisie.get("note")
-            if note not in (None, ""):
-                try:
-                    note = float(str(note).replace(",", "."))
-                except ValueError:
-                    raise HttpError(400, f"Note invalide pour « {critere} ».") from None
-                if not 0 <= note <= bareme:
-                    raise HttpError(400, f"La note « {critere} » doit être comprise entre 0 et {bareme}.")
-            notes[critere[:255]] = {"note": None if note in (None, "") else note, "commentaire": str(saisie.get("commentaire") or "")[:4000]}
-        if notes != offre.notes:
-            classement_modifie = True
-        offre.notes = notes
     with transaction.atomic():
-        offre.save()
+        # Verrou : une lecture qui se termine pendant l'enregistrement n'est ni écrasée ni perdue.
+        offre = get_object_or_404(Offre.objects.select_for_update(of=("self",)).select_related("entreprise", "lot__projet"), pk=offre_id)
+        modifies: set[str] = set()
+        classement_modifie = False
+
+        def changer(champ: str, valeur) -> None:
+            if getattr(offre, champ) != valeur:
+                setattr(offre, champ, valeur)
+                modifies.add(champ)
+
+        if "montant_base" in champs and champs["montant_base"] != offre.montant_base:
+            lu = offre.montant_base_declare if offre.montant_base_declare is not None else offre.montant_base_calcule
+            changer("montant_base", champs["montant_base"])
+            # Montant saisi ou corrigé par l'économiste : il prime sur la lecture (même en cours).
+            changer("statut_lecture", StatutLecture.MANUELLE)
+            changer("message_lecture", f"Montant saisi à la main (montant lu dans le document : {_euros(lu)})." if offre.fichier and lu is not None else (
+                "Montant saisi à la main." if offre.fichier else ""
+            ))
+            classement_modifie = True
+        if champs.get("montants_options") is not None:
+            valides = {str(o) for o in offre.lot.options.values_list("pk", flat=True)}
+            if set(champs["montants_options"]) - valides:
+                raise HttpError(400, "PSE inconnue pour ce lot.")
+            options = {**offre.montants_options, **{k: (None if v is None else str(v)) for k, v in champs["montants_options"].items()}}
+            classement_modifie = classement_modifie or options != offre.montants_options
+            changer("montants_options", options)
+        if champs.get("recue_le") is not None:
+            changer("recue_le", _date_de_reception(champs["recue_le"]))
+            classement_modifie = classement_modifie or "recue_le" in modifies  # hors délai : non classée
+        for champ in ("variante", "ecartee"):
+            if champs.get(champ) is not None and getattr(offre, champ) != champs[champ]:
+                changer(champ, champs[champ])
+                classement_modifie = True
+        for champ in ("libelle_variante", "delai_propose", "commentaire", "motif_ecart", "motif_justification"):
+            if champ in champs and champs[champ] is not None:
+                changer(champ, champs[champ].strip())
+        if champs.get("justification_prix") is not None and champs["justification_prix"] != offre.justification_prix:
+            changer("justification_prix", champs["justification_prix"])
+            classement_modifie = True
+            if offre.justification_prix == JustificationPrix.REJETEE:
+                # Justifications insuffisantes : l'offre anormalement basse est rejetée (art. R2152-3 du CCP).
+                changer("ecartee", True)
+                changer("motif_ecart", offre.motif_ecart or MOTIF_REJET)
+            elif offre.ecartee and offre.motif_ecart == MOTIF_REJET:
+                changer("ecartee", False)  # rejet annulé : l'offre est réintégrée
+                changer("motif_ecart", "")
+        elif champs.get("ecartee") is False and offre.justification_prix == JustificationPrix.REJETEE:
+            # Offre réintégrée à la main : le rejet de ses justifications ne vaut plus.
+            changer("justification_prix", JustificationPrix.DEMANDEE)
+            if offre.motif_ecart == MOTIF_REJET:
+                changer("motif_ecart", "")
+        if champs.get("notes") is not None:
+            notes = dict(offre.notes)
+            bareme = analyse_du_lot(offre.lot).bareme
+            for critere, saisie in champs["notes"].items():
+                note = saisie.get("note")
+                if note not in (None, ""):
+                    try:
+                        note = float(str(note).replace(",", "."))
+                    except ValueError:
+                        raise HttpError(400, f"Note invalide pour « {critere} ».") from None
+                    if not 0 <= note <= bareme:
+                        raise HttpError(400, f"La note « {critere} » doit être comprise entre 0 et {bareme}.")
+                notes[critere[:255]] = {"note": None if note in (None, "") else note, "commentaire": str(saisie.get("commentaire") or "")[:4000]}
+            # Seule une note qui change modifie le classement (pas une appréciation).
+            avant = {k: (v or {}).get("note") for k, v in offre.notes.items()}
+            apres = {k: (v or {}).get("note") for k, v in notes.items()}
+            classement_modifie = classement_modifie or any(avant.get(k) != apres.get(k) for k in avant.keys() | apres.keys())
+            changer("notes", notes)
+        if modifies:
+            offre.save(update_fields=[*modifies, "modifie_le"])
         if offre.ecartee:
             AnalyseLot.objects.filter(lot=offre.lot, attributaire=offre).update(attributaire=None)
         if classement_modifie:
@@ -357,6 +382,8 @@ def valider(request, lot_id: int):
         raise HttpError(400, "L'offre choisie n'est plus classée (écartée, incomplète…) : choisissez l'offre à proposer.")
     if proposee is None:
         raise HttpError(400, "Aucune offre classée pour ce lot.")
+    if any(l.offre.statut_lecture == StatutLecture.EN_COURS for l in lignes):
+        raise HttpError(400, "Une offre est en cours de lecture : attendez la fin de la lecture pour valider.")
     if proposee.anormalement_basse and proposee.offre.justification_prix != JustificationPrix.ACCEPTEE:
         reference = " (articles R2152-3 à R2152-5 du code de la commande publique)" if lot.projet.type_marche == "PUBLIC" else ""
         raise HttpError(

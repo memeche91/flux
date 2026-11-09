@@ -94,7 +94,7 @@ def analyse_lot(lot: LotProjet, numero: int) -> tuple[ChapitreDoc, dict]:
         elif l.motif_non_classee.startswith("variante non autorisée"):
             observations.append("Variante non autorisée par le règlement de la consultation : non examinée")
         if limite and o.recue_le > limite:
-            observations.append("Reçue après la date limite de remise des offres")
+            observations.append("Reçue après la date limite de remise des offres : non examinée")
         if l.variante_sans_base:
             observations.append("Variante remise sans offre de base")
         if o.delai_propose:
@@ -167,7 +167,7 @@ def analyse_lot(lot: LotProjet, numero: int) -> tuple[ChapitreDoc, dict]:
         chapitre.elements.append(ElementDoc(f"lot-{lot.pk}-classement", f"{numero}.4 Classement des offres", texte))
 
     # Proposition : seule une offre classée peut être proposée.
-    attributaire, _ = proposition(analyse, lignes)
+    attributaire, perime = proposition(analyse, lignes)
     if attributaire is not None:
         taux = lot.projet.taux_tva
         texte = _p(
@@ -175,8 +175,15 @@ def analyse_lot(lot: LotProjet, numero: int) -> tuple[ChapitreDoc, dict]:
             f"{_euros(attributaire.prix)} HT, soit {_euros(_ttc(attributaire.prix, taux))} TTC (TVA {_nombre(taux)} %)"
             + (f", {', '.join(o.nom_court for o in retenues)} comprise(s)." if retenues else ".")
         )
+        if perime:
+            choisie = next((l for l in lignes if l.offre.pk == analyse.attributaire_id), None)
+            if choisie is not None:
+                texte = (
+                    f"<p><strong>{escape(f'L’offre choisie ({choisie.offre.nom}) n’est plus classée ({choisie.motif_non_classee or 'notation incomplète'}) : proposition à revoir.')}</strong></p>"
+                    + texte
+                )
         if attributaire.rang and attributaire.rang > 1:
-            texte += _p(f"Cette offre est classée {attributaire.rang}e : le choix est motivé dans les observations ci-dessous.")
+            texte += _p(f"Cette offre est classée {attributaire.rang}e" + (" : le choix est motivé dans les observations ci-dessous." if analyse.observations.strip() else "."))
         if attributaire.anormalement_basse:
             if attributaire.offre.justification_prix == JustificationPrix.ACCEPTEE:
                 texte += _p(
@@ -186,7 +193,7 @@ def analyse_lot(lot: LotProjet, numero: int) -> tuple[ChapitreDoc, dict]:
                 )
             else:
                 texte += f"<p><strong>{escape('Réserve : le prix de cette offre paraît anormalement bas ; elle ne pourra être retenue qu’après examen des justifications demandées à l’entreprise.')}</strong></p>"
-        if analyse.observations:
+        if analyse.observations and not perime:  # observations écrites pour l'offre choisie
             texte += "".join(_p(p) for p in analyse.observations.split("\n") if p.strip())
         chapitre.elements.append(ElementDoc(f"lot-{lot.pk}-proposition", f"{numero}.5 Proposition d'attribution", texte))
         resume.update(attributaire=attributaire.offre.nom, montant=attributaire.prix, estimation=montant_estimation)
@@ -225,7 +232,7 @@ def document_rapport(projet: Projet, lots: list[LotProjet] | None = None) -> Doc
             if r["montant"] is not None:
                 total += r["montant"]
                 if r["estimation"]:
-                    ecart = _pourcentage(((r["montant"] - r["estimation"]) / r["estimation"] * 100).quantize(Decimal("0.1")))
+                    ecart = _pourcentage(((r["montant"] - r["estimation"]) / r["estimation"] * 100).quantize(Decimal("0.1"), rounding=ROUND_HALF_UP))
                     total_estimation += r["estimation"]
                 else:
                     estimation_partielle = True

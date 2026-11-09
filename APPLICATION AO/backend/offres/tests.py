@@ -328,6 +328,63 @@ class OffresTests(TestCase):
         self.assertIn("Total des lots attribués : 61 400,00 € HT, soit 73 680,00 € TTC, pour une estimation de 12 800,00 € HT (estimation non établie pour certains lots).", texte)
         self.assertIn("Estimation du maître d'œuvre : non établie", texte)
 
+    def test_regles_du_second_controle(self):
+        from projets.champs import consultation_du_projet
+
+        consultation = consultation_du_projet(self.projet)
+        consultation.date_limite_offres = datetime.datetime(2026, 10, 15, 12, tzinfo=datetime.timezone.utc)
+        consultation.save()
+        durand = self.deposer(self.durand, montant_base="12000")  # saisie après l'ouverture des plis
+        self.assertEqual((durand["recue_le"], durand["hors_delai"]), ("2026-10-15", False))
+        martin = self.deposer(self.martin, montant_base="11400")
+        self.json("patch", f"/api/offres/{martin['id']}", {"recue_le": "0025-10-14"}, attendu=400)
+        notes = lambda vt: {"Valeur technique": {"note": vt}, "Performance en matière de protection de l'environnement": {"note": 5}}  # noqa: E731
+        self.json("patch", f"/api/offres/{durand['id']}", {"notes": notes(9)})
+        self.json("patch", f"/api/offres/{martin['id']}", {"notes": notes(6)})
+        etat = self.json("post", f"/api/lots-projet/{self.lot.pk}/analyse/valider")
+        self.assertEqual(etat["analyse"]["proposee_id"], durand["id"])
+        # Une appréciation ajoutée après la validation ne l'annule pas.
+        etat = self.json("patch", f"/api/offres/{durand['id']}", {"notes": {"Valeur technique": {"note": 9, "commentaire": "Très bon mémoire"}}})
+        self.assertIsNotNone(etat["analyse"]["validee_le"])
+        # Pondérations modifiées dans la consultation : validation annulée.
+        consultation.criteres = [{"libelle": "Prix", "ponderation": 90}, {"libelle": "Valeur technique", "ponderation": 10}]
+        consultation.save()
+        etat = self.etat()
+        self.assertIsNone(etat["analyse"]["validee_le"])
+        self.assertEqual(ConsultationEntreprise.objects.get(entreprise=self.durand).statut, StatutConsultation.REPONDU)
+        # Offre reçue après la date limite : non classée.
+        etat = self.json("patch", f"/api/offres/{martin['id']}", {"recue_le": "2026-10-16"})
+        self.assertEqual(self.par_entreprise(etat)["Alu Martin"]["motif_non_classee"], "reçue après la date limite de remise des offres")
+        self.json("patch", f"/api/offres/{martin['id']}", {"recue_le": "2026-10-14"})
+        # Choix devenu caduc : le rapport le dit et ne reprend pas ses observations.
+        self.json("patch", f"/api/lots-projet/{self.lot.pk}/analyse", {"attributaire_id": martin["id"]} if self.par_entreprise(self.etat())["Alu Martin"]["rang"] != 1 else {"attributaire_id": durand["id"]})
+        choisie = self.etat()["analyse"]["attributaire_id"]
+        nom = "Alu Martin" if choisie == martin["id"] else "Menuiseries Durand"
+        texte = self.texte_rapport()
+        self.assertIn("classée 2e.", texte)  # sans observations : pas de renvoi vers elles
+        self.json("patch", f"/api/lots-projet/{self.lot.pk}/analyse", {"observations": "Choix motivé par le délai."})
+        self.json("patch", f"/api/offres/{choisie}", {"ecartee": True})
+        self.json("patch", f"/api/offres/{choisie}", {"ecartee": False})
+        self.json("patch", f"/api/lots-projet/{self.lot.pk}/analyse", {"attributaire_id": choisie})
+        Offre.objects.filter(pk=choisie).update(ecartee=True)  # écartée hors de cette page
+        texte = self.texte_rapport()
+        self.assertIn(f"L’offre choisie ({nom}) n’est plus classée", texte)
+        self.assertNotIn("Choix motivé par le délai.", texte)
+        # Lecture en cours : pas de validation.
+        Offre.objects.filter(pk=choisie).update(ecartee=False, statut_lecture=StatutLecture.EN_COURS)
+        self.json("post", f"/api/lots-projet/{self.lot.pk}/analyse/valider", attendu=400)
+
+    def test_justifications_rejetees_puis_acceptees_ou_reintegree(self):
+        self.deposer(self.durand, montant_base="12000")
+        petit = self.deposer(self.petit, montant_base="7000")
+        offres = self.par_entreprise(self.json("patch", f"/api/offres/{petit['id']}", {"justification_prix": "REJETEE"}))
+        self.assertTrue(offres["Petit Fermetures"]["ecartee"])
+        offres = self.par_entreprise(self.json("patch", f"/api/offres/{petit['id']}", {"justification_prix": "ACCEPTEE"}))
+        self.assertEqual((offres["Petit Fermetures"]["ecartee"], offres["Petit Fermetures"]["motif_ecart"]), (False, ""))
+        self.json("patch", f"/api/offres/{petit['id']}", {"justification_prix": "REJETEE"})
+        offres = self.par_entreprise(self.json("patch", f"/api/offres/{petit['id']}", {"ecartee": False}))
+        self.assertEqual((offres["Petit Fermetures"]["justification_prix"], offres["Petit Fermetures"]["motif_ecart"]), ("DEMANDEE", ""))
+
     def texte_rapport(self):
         from docx import Document
 
@@ -394,9 +451,8 @@ class OffresTests(TestCase):
 ENTETE = ["N°", "Désignation", "U", "Qté", "PU HT", "Montant HT"]
 
 
-@override_settings(MEDIA_ROOT=DOSSIER_TEST)
-class LectureOffresTests(TestCase):
-    """Scénarios de lecture relevés en revue : forfaits, remises, totaux TTC, autres lots, numéros décalés…"""
+class LotDeLecture:
+    """Lot 08 à trois ouvrages (dont une PSE) et outils pour lire une offre Excel."""
 
     def setUp(self):
         self.projet = Projet.objects.create(nom="Collège", type_marche="PUBLIC")
@@ -428,6 +484,11 @@ class LectureOffresTests(TestCase):
             (None, "PSE N°1 – VOLETS ROULANTS"), ("8.1", "Menuiseries"), ("8.1.3", VOLETS, "u", 14, 400, 5600),
             *supplements, (None, "TOTAL PSE N°1 – VOLETS ROULANTS HT", None, None, None, pse),
         ]
+
+
+@override_settings(MEDIA_ROOT=DOSSIER_TEST)
+class LectureOffresTests(LotDeLecture, TestCase):
+    """Scénarios de lecture relevés en revue : forfaits, remises, totaux TTC, autres lots, numéros décalés…"""
 
     def test_dpgf_conforme(self):
         from .lecture import bilan
@@ -579,3 +640,85 @@ class LectureOffresTests(TestCase):
         Offre.objects.filter(pk=offre.pk).delete()
         appliquer_lecture(chargee)
         self.assertFalse(Offre.objects.filter(pk=offre.pk).exists())
+
+
+@override_settings(MEDIA_ROOT=DOSSIER_TEST)
+class LectureOffresControleTests(LotDeLecture, TestCase):
+    """Second contrôle : TVA « T.V.A. », titres avec sous-total, pages de lignes ajoutées, sous-lots…"""
+
+    def test_tva_acompte_et_montant_global_ne_sont_pas_des_prix(self):
+        from .lecture import bilan
+
+        lignes = [
+            (None, FENETRE, "u", 10, 750, 7500), (None, PORTE, "u", 4, 1100, 4400), (None, VOLETS, "u", 14, 420, 5880),
+            (None, "Total H.T.", None, None, None, 17780), (None, "T.V.A. 20 %", None, None, None, 3556),
+            (None, "Total T.T.C.", None, None, None, 21336), (None, "Acompte 30 % à la commande", None, None, None, 6400.80),
+        ]
+        statut, message, retenu = bilan(self.lire(("Devis", lignes)))
+        self.assertEqual((statut, retenu), ("LUE", Decimal("11900.00")), message)
+
+    def test_titre_de_chapitre_avec_son_sous_total(self):
+        from .lecture import bilan
+
+        lignes = [
+            ("1", "MENUISERIES EXTÉRIEURES", None, None, None, 11400), ("1.1", FENETRE, "u", 10, 700, 7000), ("1.2", PORTE, "u", 4, 1100, 4400),
+            ("2", "VOLETS", None, None, None, 5600), ("2.1", VOLETS, "u", 14, 400, 5600),
+        ]
+        statut, message, retenu = bilan(self.lire(("Devis", lignes)))
+        self.assertEqual((statut, retenu), ("LUE", Decimal("11400.00")), message)
+        lignes = [(None, *l[1:]) for l in lignes]  # sans numéros
+        self.assertEqual(bilan(self.lire(("Devis", lignes)))[2], Decimal("11400.00"))
+
+    def test_deux_forfaits_identiques_et_page_de_lignes_ajoutees(self):
+        from .lecture import bilan
+
+        lignes = [
+            ("1.1", FENETRE, "u", 10, 700, 7000), ("1.2", PORTE, "u", 4, 1100, 4400), ("1.3", VOLETS, "u", 14, 400, 5600),
+        ]
+        page2 = [("2.1", "Installation de chantier", None, None, None, 800), ("2.2", "Repli de chantier et nettoyage", None, None, None, 800),
+                 (None, "Total HT", None, None, None, 18600)]
+        lecture = self.lire(("Page 1", lignes), ("Page 2", page2))
+        statut, message, retenu = bilan(lecture)
+        self.assertEqual((statut, retenu, lecture.total_general_declare), ("LUE", Decimal("13000.00"), Decimal("18600.00")), message)
+        # Forfaits sans total pour les confirmer : à vérifier.
+        statut, message, _ = bilan(self.lire(("Devis", lignes + page2[:2])))
+        self.assertEqual(statut, "A_VERIFIER")
+        self.assertIn("sans quantité ni prix unitaire", message)
+
+    def test_dimensions_ecrites_autrement_et_pluriels(self):
+        from .lecture import bilan
+
+        self.fenetre.titre = "Fenêtre aluminium 120 x 135 – Uw ≤ 1,4 W/m².K"
+        self.fenetre.save()
+        lecture = self.lire(("DPGF", self.dpgf(fenetre=("8.1.1", "Fenêtre alu 1,20 x 1,35 m", "u", 10, 700, 7000))))
+        self.assertEqual(bilan(lecture)[0], "LUE", bilan(lecture)[1])
+        lecture = self.lire(("Devis", [(None, "Fenêtres alu", "u", 10, 700, 7000), (None, "Portes-fenêtres alu", "u", 4, 1100, 4400)]))
+        self.assertEqual({l.poste_id for l in lecture.lignes}, {self.fenetre.pk, self.porte.pk})
+
+    def test_sous_lot(self):
+        from .lecture import bilan
+
+        self.lot.code = "08B"
+        self.lot.save()
+        lignes = [(None, "LOT 08 B – MENUISERIES BOIS"), *self.dpgf()]
+        statut, message, retenu = bilan(self.lire(("DPGF", [(n, d, *r) for n, d, *r in lignes])))
+        self.assertEqual((statut, retenu), ("LUE", Decimal("11400.00")), message)  # titre « LOT 08 B » : lignes gardées
+        self.assertIn("3 ligne(s) de prix lue(s)", message)
+
+    def test_montant_de_pse_saisi_pendant_la_lecture(self):
+        from .tasks import appliquer_lecture
+
+        entreprise = Entreprise.objects.create(raison_sociale="Durand")
+        classeur = Workbook()
+        classeur.active.append(ENTETE)
+        for ligne in self.dpgf():
+            classeur.active.append(list(ligne))
+        flux = io.BytesIO()
+        classeur.save(flux)
+        offre = Offre(projet=self.projet, lot=self.lot, entreprise=entreprise, statut_lecture=StatutLecture.EN_COURS, montants_options={str(self.pse.pk): "5000"})
+        offre.fichier.save("dpgf.xlsx", SimpleUploadedFile("dpgf.xlsx", flux.getvalue()))
+        chargee = Offre.objects.get(pk=offre.pk)
+        Offre.objects.filter(pk=offre.pk).update(montants_options={str(self.pse.pk): "-1500.00"})
+        appliquer_lecture(chargee)
+        offre.refresh_from_db()
+        self.assertEqual((offre.statut_lecture, offre.montants_options[str(self.pse.pk)]), ("LUE", "-1500.00"))

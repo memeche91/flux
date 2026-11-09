@@ -15,8 +15,8 @@ from dataclasses import dataclass, field
 from decimal import Decimal
 from pathlib import Path
 
-from articles.normalisation import arrondir, detecter_lot, lire_nombre, normaliser, normaliser_unite, texte_cellule
-from articles.prix import extraire_lignes_prix, roles_des_tableaux
+from articles.normalisation import arrondir, detecter_lot, lire_nombre, normaliser, normaliser_unite, sans_accents, texte_cellule
+from articles.prix import extraire_lignes_prix, roles_des_tableaux, sigles
 from bibliotheque.lecture import lire_document
 from projets.models import GenrePoste, LotProjet
 from projets.structure import structurer
@@ -55,6 +55,7 @@ class Lecture:
     lignes_hors_dpgf: int = 0
     numeros_discordants: list[str] = field(default_factory=list)
     erreurs_multiplication: list[str] = field(default_factory=list)
+    lignes_montant_seul: int = 0  # forfaits, remises : sans quantité ni prix unitaire
 
 
 def _cle_numero(numero: str) -> str:
@@ -78,13 +79,29 @@ def _dimensions_compatibles(designation: str, titre_ouvrage: str) -> bool:
     return not ouvrage or not ligne or ouvrage <= ligne
 
 
+def _nombres_canoniques(texte: str) -> set[str]:
+    """1,20 / 120 / 1200 → « 12 » : mêmes dimensions écrites en mètres, centimètres ou millimètres."""
+    resultat = set()
+    for nombre in re.findall(r"\d+(?:[.,]\d+)?", sans_accents(str(texte or ""))):
+        chiffres = re.sub(r"[.,]", "", nombre).strip("0")
+        resultat.add(chiffres or "0")
+    return resultat
+
+
+def _nombres_concordants(designation: str, titre_ouvrage: str) -> bool:
+    """Contrôle souple pour un numéro qui correspond : l'un des jeux de nombres contient l'autre."""
+    ouvrage, ligne = _nombres_canoniques(titre_ouvrage), _nombres_canoniques(designation)
+    return not ouvrage or not ligne or ouvrage <= ligne or ligne <= ouvrage
+
+
 def _similarite(designation: str, titre: str) -> float:
     """Ressemblance de deux désignations : texte proche, ou désignation abrégée (« Fenêtres alu »)."""
     a, b = normaliser(designation), normaliser(titre)
     if not a or not b:
         return 0.0
     score = difflib.SequenceMatcher(None, a, b).ratio()
-    courts, longs = sorted((a.split(), b.split()), key=len)
+    radical = lambda m: m[:-1] if len(m) > 3 and m[-1] in "sx" else m  # noqa: E731 - « fenêtres » ~ « fenêtre »
+    courts, longs = sorted(([radical(m) for m in a.split()], [radical(m) for m in b.split()]), key=len)
     significatifs = [m for m in courts if len(m) >= 2 and not m.isdigit()]
     if len(significatifs) >= 2:
         trouves = sum(1 for m in significatifs if any(l == m or (len(m) >= 3 and l.startswith(m)) for l in longs))
@@ -94,7 +111,7 @@ def _similarite(designation: str, titre: str) -> float:
 
 def _libelle_total(ligne) -> str:
     for cellule in ligne:
-        texte = normaliser(texte_cellule(cellule))
+        texte = sigles(normaliser(texte_cellule(cellule)))
         if re.match(r"(total|montant total|net)\b", texte):
             return texte
     return ""
@@ -109,7 +126,7 @@ def _totaux_declares(tableaux, lot: LotProjet, exclus: set[int], lecture: Lectur
         if indice in exclus or "montant" not in roles:
             continue
         code_tableau = detecter_lot(tableau.titre)
-        if code_tableau and _code(code_tableau) != _code(lot.code):
+        if _autre_lot(code_tableau, lot):
             continue
         for ligne in tableau.lignes:
             libelle = _libelle_total(ligne)
@@ -138,6 +155,33 @@ def _totaux_declares(tableaux, lot: LotProjet, exclus: set[int], lecture: Lectur
         lecture.total_general_declare = generaux[-1]
 
 
+def _autre_lot(code: str | None, lot: LotProjet) -> bool:
+    """Code de lot lu dans le document (« LOT 09 ») différent de celui du lot ; « 08B » n'est jamais filtré."""
+    code_du_lot = detecter_lot(f"lot {lot.code}")
+    return bool(code and code_du_lot and _code(code) != _code(code_du_lot))
+
+
+def _sous_total_en_tete(extraites, indice: int) -> bool:
+    """Titre de chapitre qui porte en tête le total des lignes qui le suivent (« 1 MENUISERIES 11 400 »)."""
+    ligne = extraites[indice]
+    numero = _cle_numero(ligne.numero) if ligne.numero else ""
+    somme, nombre = Decimal("0"), 0
+    for suivante in extraites[indice + 1:]:
+        if suivante.tableau != ligne.tableau or suivante.chapitre != ligne.chapitre:
+            break
+        if not suivante.unite and suivante.quantite is None and suivante.prix_unitaire is None:
+            break  # ligne suivante à montant seul : autre titre ou forfait
+        if numero and nombre == 0 and _cle_numero(suivante.numero).startswith(f"{numero}."):
+            return True  # « 1 » puis « 1.1 », « 1.2 » : titre numéroté
+        montant = suivante.montant
+        if montant is None and suivante.quantite is not None and suivante.prix_unitaire is not None:
+            montant = suivante.quantite * suivante.prix_unitaire
+        if montant is not None:
+            somme += montant
+            nombre += 1
+    return nombre > 0 and abs(somme - ligne.montant) <= TOLERANCE
+
+
 def lire_offre(chemin: Path, lot: LotProjet) -> Lecture:
     with tempfile.TemporaryDirectory(prefix="offre-") as dossier:
         contenu = lire_document(chemin, Path(dossier), tableaux_pdf=True)
@@ -150,9 +194,9 @@ def lire_offre(chemin: Path, lot: LotProjet) -> Lecture:
     prefixe = _cle_numero(ouvrages[0].numero).split(".")[0] if ouvrages else ""
 
     lecture = Lecture()
-    cumuls: dict[tuple[int, str], Decimal] = {}
-    for extraite in extraites:
-        if extraite.code_lot and _code(extraite.code_lot) != _code(lot.code):
+    cumuls: dict[tuple[int, str], tuple[Decimal, int]] = {}
+    for indice, extraite in enumerate(extraites):
+        if _autre_lot(extraite.code_lot, lot):
             continue  # feuille ou partie d'un autre lot
         montant = extraite.montant
         seul = not extraite.unite and extraite.quantite is None and extraite.prix_unitaire is None
@@ -161,12 +205,17 @@ def lire_offre(chemin: Path, lot: LotProjet) -> Lecture:
             # Ligne qui ne porte qu'un montant : forfait ou remise, sauf titre de chapitre ou sous-total.
             if _cle_numero(extraite.numero) in numeros_chapitres or detecter_lot(extraite.designation):
                 continue
-            if cumuls.get(cle) and abs(cumuls[cle] - montant) <= TOLERANCE:
+            cumul, nombre = cumuls.get(cle, (Decimal("0"), 0))
+            if nombre >= 2 and abs(cumul - montant) <= TOLERANCE:
+                continue  # sous-total sans libellé des lignes qui précèdent
+            if _sous_total_en_tete(extraites, indice):
                 continue
+            lecture.lignes_montant_seul += 1
         if montant is None and extraite.quantite is not None and extraite.prix_unitaire is not None:
             montant = arrondir(extraite.quantite * extraite.prix_unitaire, 2)
         if montant is not None:
-            cumuls[cle] = cumuls.get(cle, Decimal("0")) + montant
+            cumul, nombre = cumuls.get(cle, (Decimal("0"), 0))
+            cumuls[cle] = (cumul + montant, nombre + 1)
         lecture.lignes.append(LigneLue(
             ordre=len(lecture.lignes) + 1, numero=extraite.numero, designation=extraite.designation, unite=extraite.unite,
             quantite=extraite.quantite, prix_unitaire=extraite.prix_unitaire, montant=montant, tableau=extraite.tableau,
@@ -175,11 +224,13 @@ def lire_offre(chemin: Path, lot: LotProjet) -> Lecture:
     _rapprocher(lecture, ouvrages, par_numero)
 
     # Tableaux d'un autre lot (classeur multi-lots) : aucune ligne rapprochée, numéros d'un autre lot.
+    # (seulement si le document suit la numérotation du DCE : un devis numéroté 1.1, 2.1… garde toutes ses pages)
+    prefixes_rapproches = {_cle_numero(l.numero).split(".")[0] for l in lecture.lignes if l.poste_id and l.correspondance == "NUMERO"}
     exclus = set()
     for indice in {l.tableau for l in lecture.lignes}:
         lignes = [l for l in lecture.lignes if l.tableau == indice]
         etrangeres = [l for l in lignes if "." in _cle_numero(l.numero) and _cle_numero(l.numero).split(".")[0] != prefixe]
-        if prefixe and etrangeres and not any(l.poste_id for l in lignes) and any(l.poste_id for l in lecture.lignes):
+        if prefixe in prefixes_rapproches and etrangeres and not any(l.poste_id for l in lignes):
             exclus.add(indice)
     lecture.lignes = [l for l in lecture.lignes if l.tableau not in exclus]
     for ordre, ligne in enumerate(lecture.lignes, start=1):
@@ -219,7 +270,7 @@ def _rapprocher(lecture: Lecture, ouvrages, par_numero) -> None:
         if element is None or element.poste.pk in pris:
             continue
         if not ligne.designation or (
-            _similarite(ligne.designation, element.poste.titre) >= SEUIL_NUMERO and _dimensions_compatibles(ligne.designation, element.poste.titre)
+            _similarite(ligne.designation, element.poste.titre) >= SEUIL_NUMERO and _nombres_concordants(ligne.designation, element.poste.titre)
         ):
             pris.add(element.poste.pk)
             ligne.poste_id, ligne.option_id, ligne.correspondance = element.poste.pk, element.poste.option_id, "NUMERO"
@@ -327,6 +378,9 @@ def bilan(lecture: Lecture) -> tuple[str, str, Decimal | None]:
     if lecture.ouvrages_sans_prix:
         a_verifier = True
         remarques.append(f"{lecture.ouvrages_sans_prix} ouvrage(s) de la DPGF non chiffré(s) ou non retrouvé(s)")
+    if lecture.lignes_montant_seul and lecture.base_declare is None and lecture.total_general_declare is None:
+        a_verifier = True
+        remarques.append(f"{lecture.lignes_montant_seul} ligne(s) sans quantité ni prix unitaire comptée(s) (forfait, remise ?) sans total déclaré pour le confirmer")
     if lecture.lignes_hors_dpgf:
         remarques.append(f"{lecture.lignes_hors_dpgf} ligne(s) ajoutée(s) par l'entreprise")
     chiffrees = sum(1 for l in lecture.lignes if l.montant is not None)

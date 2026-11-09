@@ -6,6 +6,7 @@ Les lignes sans quantité ni prix sont des titres de chapitre ; les totaux sont 
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from decimal import Decimal
 
@@ -24,6 +25,11 @@ _DEBUTS_TOTAL = (
     "recapitulatif",
     "net a payer",
     "totaux",
+    "montant tva",
+    "montant net",
+    "montant global",
+    "prix global",
+    "acompte",
 )
 
 
@@ -74,9 +80,26 @@ def detecter_entetes(ligne) -> dict[str, int] | None:
 _DEBUTS_TOTAL_MOTS = tuple(f"{debut} " for debut in _DEBUTS_TOTAL)
 
 
+def sigles(texte_normalise: str) -> str:
+    """« total h t » → « total ht » (sigles écrits avec des points : H.T., T.V.A., T.T.C.)."""
+    texte = re.sub(r"\bh t\b", "ht", texte_normalise)
+    texte = re.sub(r"\bt v a\b", "tva", texte)
+    return re.sub(r"\bt t c\b", "ttc", texte)
+
+
 def _est_total(designation_normalisee: str) -> bool:
     # Mots entiers : « Reportage photographique » ou « Totalité des… » ne sont pas des totaux.
+    designation_normalisee = sigles(designation_normalisee)
     return f"{designation_normalisee} ".startswith(_DEBUTS_TOTAL_MOTS) or designation_normalisee in {"ht", "ttc"}
+
+
+def est_total_general(designation_normalisee: str) -> bool:
+    """« Total HT », « T.V.A. 20 % », « Total TTC », « Montant global »… : fin du détail des prix
+    (et non « Total solution de base » ou « Total PSE n°1 », qui ferment une section)."""
+    texte = sigles(designation_normalisee)
+    if texte.startswith(("total solution de base", "total pse", "total variante", "sous total")) or not _est_total(texte):
+        return False
+    return bool({"ht", "ttc", "tva", "general", "global", "net", "acompte"} & set(texte.split())) or texte in {"total", "montant total"}
 
 
 def roles_des_tableaux(tableaux):
@@ -113,6 +136,7 @@ def extraire_lignes_prix(tableaux, *, montants_seuls: bool = False) -> list[Lign
         code_lot = detecter_lot(tableau.titre)
         chapitre = ""
         lignes_du_tableau = 0
+        apres_total_general = False  # TVA, acompte… sous le « Total HT » ne sont pas des prix
 
         def cellule(ligne, role):
             indice = roles.get(role)
@@ -125,6 +149,7 @@ def extraire_lignes_prix(tableaux, *, montants_seuls: bool = False) -> list[Lign
                 continue
             designation_normalisee = normaliser(designation)
             if _est_total(designation_normalisee):
+                apres_total_general = apres_total_general or (montants_seuls and est_total_general(designation_normalisee))
                 continue
 
             unite = texte_cellule(cellule(ligne, "unite"))
@@ -133,7 +158,11 @@ def extraire_lignes_prix(tableaux, *, montants_seuls: bool = False) -> list[Lign
             prix_unitaire = lire_nombre(cellule(ligne, "prix_unitaire"))
             montant = lire_nombre(cellule(ligne, "montant"))
 
-            if not unite and quantite is None and prix_unitaire is None and not (montants_seuls and montant is not None):
+            seul = not unite and quantite is None and prix_unitaire is None
+            if seul and montant is not None and apres_total_general:
+                continue
+            if seul and not (montants_seuls and montant is not None):
+                apres_total_general = False  # nouveau titre : nouvelle partie du document
                 lot_detecte = detecter_lot(designation) or detecter_lot(numero)
                 if lot_detecte:
                     code_lot = lot_detecte

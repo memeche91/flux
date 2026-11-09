@@ -8,8 +8,11 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from decimal import ROUND_HALF_UP, Decimal
 
+from django.utils import timezone
+
 from articles.normalisation import normaliser
 from projets.champs import consultation_du_projet
+from dce.models import ConsultationEntreprise, StatutConsultation
 from projets.models import LotProjet
 from projets.structure import structurer
 
@@ -84,7 +87,9 @@ def classer(lot: LotProjet) -> tuple[AnalyseLot, list[dict], list[LigneClassemen
     montant_estimation = reference["base"] + sum((reference["options"].get(o, Decimal("0")) for o in retenues), Decimal("0"))
     bareme = Decimal(analyse.bareme or 10)
 
-    variantes_autorisees = consultation_du_projet(lot.projet).variantes_autorisees
+    consultation = consultation_du_projet(lot.projet)
+    variantes_autorisees = consultation.variantes_autorisees
+    limite = timezone.localtime(consultation.date_limite_offres).date() if consultation.date_limite_offres else None
 
     lignes = []
     offres = list(Offre.objects.filter(lot=lot).select_related("entreprise"))
@@ -95,6 +100,8 @@ def classer(lot: LotProjet) -> tuple[AnalyseLot, list[dict], list[LigneClassemen
         # Offres non comparables : ni notées ni classées.
         if offre.ecartee:
             ligne.motif_non_classee = f"écartée{f' : {offre.motif_ecart}' if offre.motif_ecart else ''}"
+        elif limite and offre.recue_le > limite:
+            ligne.motif_non_classee = "reçue après la date limite de remise des offres"
         elif offre.variante and not variantes_autorisees:
             ligne.motif_non_classee = "variante non autorisée par le règlement de la consultation"
         elif offre.montant_base is None:
@@ -150,3 +157,12 @@ def proposition(analyse: AnalyseLot, lignes: list[LigneClassement]) -> tuple[Lig
     classees = sorted((l for l in lignes if l.rang), key=lambda l: l.rang)
     choisie = next((l for l in classees if l.offre.pk == analyse.attributaire_id), None)
     return choisie or (classees[0] if classees else None), bool(analyse.attributaire_id and choisie is None)
+
+
+def invalider_validation(lot: LotProjet) -> None:
+    """Le classement ou le choix a changé : la proposition validée est à valider de nouveau."""
+    if AnalyseLot.objects.filter(lot=lot, validee_le__isnull=False).update(validee_le=None):
+        ConsultationEntreprise.objects.filter(
+            lot=lot, statut__in=[StatutConsultation.RETENUE, StatutConsultation.NON_RETENUE],
+            entreprise_id__in=Offre.objects.filter(lot=lot).values("entreprise_id"),
+        ).update(statut=StatutConsultation.REPONDU)

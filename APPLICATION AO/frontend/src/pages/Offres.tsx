@@ -260,7 +260,7 @@ function OffresRecues({ lot, surLot, recharger }: { lot: LotAnalyse; surLot: (lo
   const [montant, setMontant] = useState("");
   const [variante, setVariante] = useState(false);
   const [libelleVariante, setLibelleVariante] = useState("");
-  const [recueLe, setRecueLe] = useState(aujourdhui);
+  const [recueLe, setRecueLe] = useState(() => (lot.date_limite && lot.date_limite < aujourdhui() ? lot.date_limite : aujourdhui()));
   const [progression, setProgression] = useState<number | null>(null);
   const [erreur, setErreur] = useState<string | null>(null);
   const [survol, setSurvol] = useState(false);
@@ -335,7 +335,19 @@ function OffresRecues({ lot, surLot, recharger }: { lot: LotAnalyse; surLot: (lo
             </select>
           </Champ>
           <Champ id="offre-recue-le" libelle="Reçue le">
-            <input id="offre-recue-le" type="date" value={recueLe} onChange={(e) => setRecueLe(e.target.value)} className={CLASSE_CHAMP} />
+            <input
+              id="offre-recue-le"
+              type="date"
+              value={recueLe}
+              aria-describedby={lot.date_limite ? "offre-recue-le-aide" : undefined}
+              onChange={(e) => setRecueLe(e.target.value)}
+              className={CLASSE_CHAMP}
+            />
+            {lot.date_limite && (
+              <span id="offre-recue-le-aide" className="text-xs text-attenue">
+                Date limite : {formaterDate(lot.date_limite)}
+              </span>
+            )}
           </Champ>
           <Champ id="offre-montant" libelle="Montant HT (sans document)">
             <input
@@ -506,6 +518,8 @@ function CarteOffre({ offre, lot, surLot, recharger }: { offre: OffreAnalyse; lo
   const [motif, setMotif] = useState(offre.motif_ecart);
   const [delai, setDelai] = useState(offre.delai_propose);
   const [appreciation, setAppreciation] = useState(offre.motif_justification);
+  const [recue, setRecue] = useState(offre.recue_le);
+  useEffect(() => setRecue(offre.recue_le), [offre.recue_le]);
   useEffect(() => setMotif(offre.motif_ecart), [offre.motif_ecart]);
   useEffect(() => setDelai(offre.delai_propose), [offre.delai_propose]);
   useEffect(() => setAppreciation(offre.motif_justification), [offre.motif_justification]);
@@ -640,6 +654,7 @@ function CarteOffre({ offre, lot, surLot, recharger }: { offre: OffreAnalyse; lo
             id={`offre-${offre.id}-option-${option.id}`}
             libelle={`${option.nom} HT`}
             negatif
+            indication={option.genre === "VARIANTE" ? "Plus-value ou moins-value (−) par rapport à la base" : undefined}
             valeur={offre.montants_options[String(option.id)] ?? null}
             surEnregistrer={(v) => modifier({ montants_options: { [option.id]: v } })}
           />
@@ -648,9 +663,13 @@ function CarteOffre({ offre, lot, surLot, recharger }: { offre: OffreAnalyse; lo
           <input
             id={`offre-${offre.id}-recue`}
             type="date"
-            value={offre.recue_le}
+            value={recue}
             aria-invalid={offre.hors_delai}
-            onChange={(e) => e.target.value && void modifier({ recue_le: e.target.value })}
+            onChange={(e) => setRecue(e.target.value)}
+            onBlur={() => recue && recue !== offre.recue_le && void modifier({ recue_le: recue })}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") e.currentTarget.blur();
+            }}
             className={`${CLASSE_CHAMP} ${offre.hors_delai ? "border-danger" : ""}`}
           />
         </Champ>
@@ -837,7 +856,11 @@ function Comparatif({ lot, surLot }: { lot: LotAnalyse; surLot: (lot: LotAnalyse
               <tr className="bg-accent/8 font-semibold">
                 <th scope="row" colSpan={4} className="px-2.5 py-2 text-left">
                   Prix comparé HT
-                  {lot.analyse.options_retenues.length ? " (base + PSE retenues)" : ""}
+                  {lot.analyse.options_retenues.length
+                    ? lot.options.some((o) => o.genre === "VARIANTE")
+                      ? " (base + options retenues)"
+                      : " (base + PSE retenues)"
+                    : ""}
                 </th>
                 <td className="px-2.5 py-2 text-right tabular-nums">{formaterEuros(estimationComparee)}</td>
                 {offres.map((o) => (
@@ -1464,7 +1487,7 @@ function Attribution({
             <Champ id={`attributaire-${lot.id}`} libelle="Offre proposée" large>
               <select
                 id={`attributaire-${lot.id}`}
-                value={choixValide ? String(analyse.attributaire_id) : ""}
+                value={choixValide ? String(analyse.attributaire_id) : choixPerime ? "perime" : ""}
                 onChange={(e) =>
                   void parametrer({
                     attributaire_id: e.target.value ? Number(e.target.value) : null,
@@ -1472,6 +1495,11 @@ function Attribution({
                 }
                 className={CLASSE_CHAMP}
               >
+                {choixPerime && (
+                  <option value="perime" disabled>
+                    {choixPerime.nom} (n'est plus classée)
+                  </option>
+                )}
                 <option value="">Offre la mieux classée ({premiere.nom})</option>
                 {classees.map((o) => (
                   <option key={o.id} value={o.id}>

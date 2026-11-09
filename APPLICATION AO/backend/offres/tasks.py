@@ -9,6 +9,7 @@ from bibliotheque.lecture import ErreurLecture, FormatNonAnalyse
 
 from .lecture import bilan, lire_offre
 from .models import LigneOffre, Offre, StatutLecture
+from .notation import invalider_validation
 
 logger = logging.getLogger(__name__)
 CHAMPS_LECTURE = ["montant_base_calcule", "montant_base_declare", "modifie_le"]
@@ -61,9 +62,13 @@ def appliquer_lecture(offre: Offre) -> None:
                 courante.montant_base = retenu
                 options = {str(k): str(v) for k, v in lecture.options_calcules.items()}
                 options.update({str(k): str(v) for k, v in lecture.options_declares.items()})  # le total déclaré prime
+                # Montants de PSE saisis à la main pendant la lecture : conservés.
+                options.update({k: v for k, v in courante.montants_options.items() if offre.montants_options.get(k) != v})
                 courante.montants_options = options
                 champs += CHAMPS_RESULTAT
             courante.save(update_fields=champs)
+            if "montant_base" in champs:
+                invalider_validation(courante.lot)
     except Exception as erreur:  # noqa: BLE001
         logger.exception("Enregistrement de la lecture de l'offre %s impossible", offre.pk)
         _echec(offre.pk, f"Lecture impossible ({erreur.__class__.__name__}) : saisissez le montant de l'offre.")
