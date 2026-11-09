@@ -42,6 +42,34 @@ def ccap_docx() -> bytes:
     return flux.getvalue()
 
 
+def ccap_docx_styles() -> bytes:
+    """Ancien CCAP rédigé avec les styles Titre de Word et trois niveaux de titres."""
+    from docx import Document
+
+    document = Document()
+    for texte, niveau in [
+        ("ARTICLE 1 – OBJET DU MARCHÉ", 1),
+        ("Le marché porte sur des travaux de réhabilitation.", None),
+        ("1.1 Contenu du marché", 2),
+        ("Le marché comprend les travaux tous corps d'état.", None),
+        ("ARTICLE 2 – PRIX", 1),
+        ("Les prix sont établis hors taxes et en euros.", None),
+        ("2.1 Forme des prix", 2),
+        ("Les prix sont fermes et actualisables.", None),
+        ("2.1.1 Actualisation des prix", 3),
+        ("Les prix sont actualisés par application de l'index BT01.", None),
+        ("2.2 Règlement des comptes", 2),
+        ("Les acomptes sont versés mensuellement à l'entreprise.", None),
+    ]:
+        if niveau:
+            document.add_heading(texte, level=niveau)
+        else:
+            document.add_paragraph(texte)
+    flux = io.BytesIO()
+    document.save(flux)
+    return flux.getvalue()
+
+
 @override_settings(MEDIA_ROOT=DOSSIER_TEST)
 class PiecesTests(TestCase):
     @classmethod
@@ -173,6 +201,68 @@ class PiecesTests(TestCase):
         reponse = self.client.get(f"/api/pieces/{acte['id']}/export/pdf")
         with pdfplumber.open(io.BytesIO(reponse.content)) as pdf:
             self.assertIn("Lot 08 – Menuiseries extérieures", pdf.pages[0].extract_text())
+
+
+    def test_reprise_d_un_document_a_styles_et_trois_niveaux(self):
+        with self.captureOnCommitCallbacks(execute=True):
+            document = self.client.post(
+                "/api/bibliotheque/documents", {"fichier": SimpleUploadedFile("CCAP styles.docx", ccap_docx_styles()), "type_document": "CCAP"}
+            ).json()
+        piece = self.json("post", f"/api/projets/{self.projet.pk}/pieces", {"type_piece": "CCAP", "document_id": document["id"]}, attendu=201)
+        self.assertEqual(
+            [(c["numero"], c["titre"]) for c in piece["clauses"]],
+            [
+                ("Article 1", "OBJET DU MARCHÉ"),
+                ("1.1", "Contenu du marché"),
+                ("Article 2", "PRIX"),
+                ("2.1", "Forme des prix"),
+                ("2.2", "Actualisation des prix"),
+                ("2.3", "Règlement des comptes"),
+            ],
+        )
+
+    def test_nouvel_article_apres_un_article_garde_ses_sous_articles(self):
+        piece = self.json("post", f"/api/projets/{self.projet.pk}/pieces", {"type_piece": "CCAP", "modele_id": f"cabinet-{self.modele.pk}"}, attendu=201)
+        objet = piece["clauses"][0]["id"]  # « Article 1 – Objet du marché », suivi de 1.1 et 1.2
+        detail = self.json("post", f"/api/pieces/{piece['id']}/clauses", {"genre": "CHAPITRE", "titre": "Nouvel article", "apres_id": objet}, attendu=201)
+        self.assertEqual(
+            [(c["numero"], c["titre"]) for c in detail["clauses"]][:4],
+            [("Article 1", "Objet du marché"), ("1.1", "Objet"), ("1.2", "Allotissement"), ("Article 2", "Nouvel article")],
+        )
+        # Un sous-article, lui, se place juste après la sélection.
+        detail = self.json("post", f"/api/pieces/{piece['id']}/clauses", {"titre": "Sous-article", "apres_id": objet}, attendu=201)
+        self.assertEqual(detail["clauses"][1]["titre"], "Sous-article")
+
+    def test_champs_bloc_dans_une_phrase_et_entites(self):
+        self.projet.nom = "Construction d'un gymnase & école"
+        self.projet.adresse_operation = "12 rue de l'Église\n74000 Annecy"
+        self.projet.save()
+        champs = champs_du_projet(self.projet)
+        self.assertEqual(champs["nom_operation"].apercu, "Construction d'un gymnase & école")
+        self.assertEqual(champs["adresse_operation"].apercu, "12 rue de l'Église 74000 Annecy")
+        self.assertEqual(remplacer_dans_titre("Objet : {{nom_operation}}", champs), "Objet : Construction d'un gymnase & école")
+        self.assertEqual(remplacer_dans_titre("{{Nom_Operation}} {{inconnu}}", champs), "Construction d'un gymnase & école [champ inconnu « inconnu »]")
+        html = remplacer_champs("<p>Les critères sont : <strong>{{criteres_jugement}}</strong> ci-dessus.</p>", champs)
+        self.assertTrue(html.startswith("<p>Les critères sont : </p><table>"), html)
+        self.assertIn("<p> ci-dessus.</p>", html)
+        self.assertNotIn("data-", html)
+        self.assertIn("champ inconnu « Date-Limite »", remplacer_champs("<p>{{Date-Limite}}</p>", champs))
+
+    def test_caracteres_de_controle_et_identifiants_de_modele(self):
+        from docx import Document
+
+        piece = self.json("post", f"/api/projets/{self.projet.pk}/pieces", {"type_piece": "CCAP"}, attendu=201)
+        detail = self.json("post", f"/api/pieces/{piece['id']}/clauses", {"titre": "Titre\x0bavec tabulation", "contenu": "<p>Texte\x01 collé</p>"}, attendu=201)
+        self.assertEqual(detail["clauses"][-1]["titre"], "Titre avec tabulation")
+        self.assertEqual(detail["clauses"][-1]["contenu"], "<p>Texte collé</p>")
+        self.json("post", f"/api/pieces/{piece['id']}/clauses", {"titre": "   "}, attendu=400)
+        self.projet.maitre_ouvrage = "Ville\x0cde Saint-Aubin\x01"
+        self.projet.save()
+        reponse = self.client.get(f"/api/pieces/{piece['id']}/export/docx")
+        self.assertEqual(reponse.status_code, 200)
+        self.assertIn("Ville de Saint-Aubin".upper(), "\n".join(p.text for p in Document(io.BytesIO(reponse.content)).paragraphs))
+        self.json("delete", "/api/modeles/cabinet-%C2%B2", attendu=400)
+        self.json("delete", "/api/modeles/cabinet-999999", attendu=404)
 
 
 class ModelesDeBaseTests(TestCase):

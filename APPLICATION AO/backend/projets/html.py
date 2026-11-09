@@ -25,11 +25,26 @@ PROPRIETES_CSS = {
 }
 
 
+# Caractères interdits en XML 1.0 : ils rendraient l'export Word impossible. Les sauts
+# de ligne et de page de Word (\x0b, \x0c) deviennent des espaces, le reste disparaît.
+_SAUTS = re.compile("[\x0b\x0c]")
+_CONTROLE = re.compile("[\x00-\x08\x0e-\x1f\ufffe\uffff]")
+
+
+def sans_controle(texte: str) -> str:
+    return _CONTROLE.sub("", _SAUTS.sub(" ", texte or ""))
+
+
+def texte_propre(texte: str) -> str:
+    """Texte saisi sur une ligne (titre, nom) : sans caractères de contrôle ni espaces superflus."""
+    return " ".join(sans_controle(texte).split())
+
+
 def nettoyer_html(html: str) -> str:
     if not html:
         return ""
     return nh3.clean(
-        html,
+        sans_controle(html),
         tags=BALISES,
         attributes=ATTRIBUTS,
         filter_style_properties=PROPRIETES_CSS,
@@ -39,7 +54,7 @@ def nettoyer_html(html: str) -> str:
 
 def texte_vers_html(texte: str) -> str:
     """Convertit le texte brut d'un article de la bibliothèque en paragraphes HTML."""
-    paragraphes = [p.strip() for p in re.split(r"\n+", texte or "") if p.strip()]
+    paragraphes = [p.strip() for p in re.split(r"\n+", sans_controle(texte)) if p.strip()]
     lignes = []
     for paragraphe in paragraphes:
         if " | " in paragraphe:  # ligne de tableau extraite d'un document Word

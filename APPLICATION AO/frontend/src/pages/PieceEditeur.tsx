@@ -7,6 +7,7 @@ import type { ChampPiece, Clause, DocumentReference, GenreClause, PieceDetail, P
 import { CLASSE_CHAMP, Champ } from "../components/Filtres";
 import EditeurRiche from "../components/lot/EditeurRiche";
 import PanneauBibliotheque from "../components/lot/PanneauBibliotheque";
+import { useAvertirSortie } from "../lib/useAvertirSortie";
 import { useRequete } from "../lib/useRequete";
 
 interface Brouillon {
@@ -50,12 +51,7 @@ export default function PieceEditeur() {
       .catch((probleme: unknown) => setErreur(probleme instanceof Error ? probleme.message : "Pièce introuvable."));
   }, [pieceId, appliquerSelection]);
 
-  useEffect(() => {
-    if (!modifie) return;
-    const avertir = (evenement: BeforeUnloadEvent) => evenement.preventDefault();
-    window.addEventListener("beforeunload", avertir);
-    return () => window.removeEventListener("beforeunload", avertir);
-  }, [modifie]);
+  useAvertirSortie(modifie);
 
   async function enregistrer(): Promise<PieceDetail | null> {
     if (!brouillon || selection == null || !piece) return piece;
@@ -134,7 +130,7 @@ export default function PieceEditeur() {
   }
   if (!piece) return <p className="text-attenue">Chargement de la pièce…</p>;
   const clauseSelectionnee = piece.clauses.find((c) => c.id === selection);
-  const champsInserables = (champs.donnees ?? []).map((c) => ({ cle: c.cle, libelle: c.libelle }));
+  const champsInserables = (champs.donnees ?? []).map((c) => ({ cle: c.cle, libelle: c.libelle, bloc: c.bloc }));
   const sousTitre = piece.lot ? `Lot ${piece.lot.code} – ${piece.lot.intitule}` : "Commun à tous les lots";
 
   return (
@@ -259,7 +255,7 @@ export default function PieceEditeur() {
 
         <div className="flex min-w-0 flex-[1_1_290px] flex-col gap-4">
           <ExportsPiece pieceId={piece.id} modifie={modifie} />
-          <EnregistrerModele pieceId={piece.id} nomParDefaut={`${piece.type_piece} – ${piece.projet.nom}`} />
+          <EnregistrerModele pieceId={piece.id} nomParDefaut={`${piece.type_piece} – ${piece.projet.nom}`} modifie={modifie} enregistrer={enregistrer} />
           <PanneauBibliotheque
             lotReferenceId={null}
             typeDocument={piece.type_piece}
@@ -447,9 +443,36 @@ function ExportsPiece({ pieceId, modifie }: { pieceId: number; modifie: boolean 
   );
 }
 
-function EnregistrerModele({ pieceId, nomParDefaut }: { pieceId: number; nomParDefaut: string }) {
+function EnregistrerModele({
+  pieceId,
+  nomParDefaut,
+  modifie,
+  enregistrer,
+}: {
+  pieceId: number;
+  nomParDefaut: string;
+  modifie: boolean;
+  enregistrer: () => Promise<PieceDetail | null>;
+}) {
   const [nom, setNom] = useState(nomParDefaut);
+  const [envoi, setEnvoi] = useState(false);
   const [message, setMessage] = useState<{ ok: boolean; texte: string } | null>(null);
+
+  async function enregistrerModele() {
+    setMessage(null);
+    setEnvoi(true);
+    try {
+      // Le modèle reprend la pièce telle qu'enregistrée : la clause en cours d'abord.
+      if (modifie && !(await enregistrer())) return;
+      await api(`/pieces/${pieceId}/enregistrer-modele`, { method: "POST", body: JSON.stringify({ nom: nom.trim() }) });
+      setMessage({ ok: true, texte: "Modèle enregistré." });
+    } catch (probleme) {
+      setMessage({ ok: false, texte: probleme instanceof Error ? probleme.message : "Enregistrement impossible." });
+    } finally {
+      setEnvoi(false);
+    }
+  }
+
   return (
     <section aria-labelledby="titre-modele" className="flex flex-col gap-2 rounded-xl border border-bordure bg-surface p-3">
       <h2 id="titre-modele" className="flex items-center gap-2 px-1 font-titre text-base font-semibold">
@@ -461,18 +484,15 @@ function EnregistrerModele({ pieceId, nomParDefaut }: { pieceId: number; nomParD
         className="flex flex-wrap gap-1.5"
         onSubmit={(e) => {
           e.preventDefault();
-          setMessage(null);
-          api(`/pieces/${pieceId}/enregistrer-modele`, { method: "POST", body: JSON.stringify({ nom: nom.trim() }) })
-            .then(() => setMessage({ ok: true, texte: "Modèle enregistré." }))
-            .catch((probleme: unknown) => setMessage({ ok: false, texte: probleme instanceof Error ? probleme.message : "Enregistrement impossible." }));
+          void enregistrerModele();
         }}
       >
         <label htmlFor="nom-modele" className="sr-only">
           Nom du modèle
         </label>
         <input id="nom-modele" value={nom} onChange={(e) => setNom(e.target.value)} className={`${CLASSE_CHAMP} min-w-0 flex-1`} />
-        <button type="submit" disabled={!nom.trim()} className="min-h-11 rounded-lg border border-bordure-forte px-3 text-sm font-semibold hover:bg-surface-2 disabled:opacity-50">
-          Enregistrer comme modèle
+        <button type="submit" disabled={envoi || !nom.trim()} className="min-h-11 rounded-lg border border-bordure-forte px-3 text-sm font-semibold hover:bg-surface-2 disabled:opacity-50">
+          {envoi ? "Enregistrement…" : "Enregistrer comme modèle"}
         </button>
       </form>
       {message && (

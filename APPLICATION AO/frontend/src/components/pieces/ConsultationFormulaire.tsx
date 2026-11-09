@@ -38,7 +38,8 @@ export default function ConsultationFormulaire({ projetId, surEnregistre }: { pr
         method: "PUT",
         body: JSON.stringify({
           ...valeurs,
-          date_limite_offres: dateLimite ? `${dateLimite}:00` : null,
+          // Heure saisie dans le fuseau du poste : envoyée avec son fuseau pour ne pas glisser.
+          date_limite_offres: dateLimite ? new Date(dateLimite).toISOString() : null,
           taux_retenue_garantie: String(valeurs.taux_retenue_garantie).replace(",", "."),
           taux_avance: String(valeurs.taux_avance).replace(",", "."),
           criteres: valeurs.criteres.map((c) => ({ libelle: c.libelle.trim(), ponderation: Number(c.ponderation) || 0 })),

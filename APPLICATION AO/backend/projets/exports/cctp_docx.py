@@ -16,6 +16,7 @@ from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from docx.shared import Cm, Pt, RGBColor
 
+from ..html import sans_controle as _t
 from ..structure import StructureLot
 from .document import DocumentExport, document_cctp
 from .html_docx import ConvertisseurHtmlDocx, ombrer
@@ -101,15 +102,15 @@ def exporter_docx(doc: DocumentExport) -> bytes:
     for _ in range(3):
         document.add_paragraph()
     if projet.maitre_ouvrage:
-        p = document.add_paragraph(projet.maitre_ouvrage.upper())
+        p = document.add_paragraph(_t(projet.maitre_ouvrage.upper()))
         p.alignment = WD_ALIGN_PARAGRAPH.CENTER
         p.runs[0].font.size = Pt(12)
-    p = document.add_paragraph(projet.nom)
+    p = document.add_paragraph(_t(projet.nom))
     p.alignment = WD_ALIGN_PARAGRAPH.CENTER
     p.runs[0].font.size = Pt(20)
     p.runs[0].bold = True
     if projet.adresse_operation:
-        p = document.add_paragraph(projet.adresse_operation)
+        p = document.add_paragraph(_t(projet.adresse_operation))
         p.alignment = WD_ALIGN_PARAGRAPH.CENTER
     document.add_paragraph()
 
@@ -117,7 +118,7 @@ def exporter_docx(doc: DocumentExport) -> bytes:
     bandeau.alignment = WD_TABLE_ALIGNMENT.CENTER
     cellule = bandeau.cell(0, 0)
     ombrer(cellule._tc.get_or_add_tcPr(), couleur)
-    for texte, taille in ((doc.titre_piece.upper(), 16), (doc.sous_titre.upper(), 14)):
+    for texte, taille in ((_t(doc.titre_piece.upper()), 16), (_t(doc.sous_titre.upper()), 14)):
         if not texte:
             continue
         p = cellule.paragraphs[0] if not cellule.paragraphs[0].text else cellule.add_paragraph()
@@ -135,8 +136,8 @@ def exporter_docx(doc: DocumentExport) -> bytes:
     for libelle, valeur in [*doc.lignes_operation, ("Phase", f"{projet.phase} – indice {projet.indice}"), ("Date", doc.date)]:
         cellules = tableau.add_row().cells
         ombrer(cellules[0]._tc.get_or_add_tcPr(), couleur_tableaux)
-        cellules[0].paragraphs[0].add_run(libelle).bold = True
-        cellules[1].paragraphs[0].add_run(valeur)
+        cellules[0].paragraphs[0].add_run(_t(libelle)).bold = True
+        cellules[1].paragraphs[0].add_run(_t(valeur))
         cellules[0].width, cellules[1].width = Cm(5), Cm(12)
 
     # --- Sommaire (nouvelle section : pied de page numéroté) ---
@@ -149,7 +150,7 @@ def exporter_docx(doc: DocumentExport) -> bytes:
     for position in (Cm(8.255), Cm(16.51)):  # taquets du modèle Word par défaut
         taquets.add_tab_stop(position, WD_TAB_ALIGNMENT.CLEAR)
     taquets.add_tab_stop(largeur_texte, WD_TAB_ALIGNMENT.RIGHT)
-    pied.text = f"{doc.pied}\tPage "
+    pied.text = f"{_t(doc.pied)}\tPage "
     pied.style.font.size = Pt(8)
     _champ(pied, "PAGE", "1")
     pied.add_run(" / ")
@@ -163,18 +164,18 @@ def exporter_docx(doc: DocumentExport) -> bytes:
                 entrees.append(chapitre.intitule)
             entrees.extend(f"    {e.intitule}" for e in chapitre.elements)
         sommaire = document.add_paragraph()
-        _champ(sommaire, 'TOC \\o "1-2" \\h \\z \\u', "\n".join(entrees) or "Mettez à jour le sommaire (F9).")
+        _champ(sommaire, 'TOC \\o "1-2" \\h \\z \\u', _t("\n".join(entrees)) or "Mettez à jour le sommaire (F9).")
         sommaire.add_run().add_break(WD_BREAK.PAGE)
 
     # --- Contenu ---
     convertisseur = ConvertisseurHtmlDocx(document, couleur_entetes=couleur_tableaux)
     for chapitre in doc.chapitres:
         if chapitre.intitule:
-            document.add_heading(chapitre.intitule, level=1)
+            document.add_heading(_t(chapitre.intitule), level=1)
         if chapitre.html:
             convertisseur.ajouter(chapitre.html)
         for element in chapitre.elements:
-            document.add_heading(element.intitule, level=2)
+            document.add_heading(_t(element.intitule), level=2)
             if element.html:
                 convertisseur.ajouter(element.html)
 

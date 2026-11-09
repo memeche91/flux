@@ -23,17 +23,30 @@ export default function PiecesAdministratives({ projetId, typeMarche, lots }: Pr
   const [version, setVersion] = useState(0);
 
   useEffect(() => {
-    api<PieceResume[]>(`/projets/${projetId}/pieces`).then(setPieces);
+    api<PieceResume[]>(`/projets/${projetId}/pieces`)
+      .then(setPieces)
+      .catch((probleme: unknown) => setErreur(probleme instanceof Error ? probleme.message : "Pièces administratives indisponibles."));
   }, [projetId, version, lots.length]);
 
-  if (!pieces) return null;
+  if (!pieces) {
+    return erreur ? (
+      <p role="alert" className="rounded-lg border border-danger/40 bg-danger/10 px-3 py-2 text-danger">
+        {erreur}
+      </p>
+    ) : null;
+  }
   const trouver = (type: TypePiece, lotId: number | null) => pieces.find((p) => p.type_piece === type && (p.lot?.id ?? null) === lotId);
   const actesManquants = lots.filter((l) => !trouver("AE", l.id)).length;
 
   async function supprimer(piece: PieceResume) {
     const nom = piece.lot ? `${NOMS_PIECES[piece.type_piece]} du lot ${piece.lot.code}` : NOMS_PIECES[piece.type_piece];
     if (!window.confirm(`Supprimer ${nom} et tout son contenu ?`)) return;
-    await api(`/pieces/${piece.id}`, { method: "DELETE" });
+    setErreur(null);
+    try {
+      await api(`/pieces/${piece.id}`, { method: "DELETE" });
+    } catch (probleme) {
+      setErreur(probleme instanceof Error ? probleme.message : "Suppression impossible.");
+    }
     setVersion((v) => v + 1);
   }
 
@@ -165,14 +178,22 @@ function CreationPiece({
   const [envoi, setEnvoi] = useState(false);
 
   useEffect(() => {
-    api<Modele[]>(`/modeles?type_piece=${type}`).then((liste) => {
-      // Le modèle de base correspondant au type de marché du projet est proposé en premier.
-      const tries = [...liste].sort((a, b) => Number(b.marche === typeMarche) - Number(a.marche === typeMarche) || a.origine.localeCompare(b.origine));
-      setModeles(tries);
-      setSource(tries[0] ? `modele:${tries[0].id}` : "vide");
-    });
+    api<Modele[]>(`/modeles?type_piece=${type}`)
+      .then((liste) => {
+        // Le modèle de base correspondant au type de marché du projet est proposé en premier.
+        const tries = [...liste].sort((a, b) => Number(b.marche === typeMarche) - Number(a.marche === typeMarche) || a.origine.localeCompare(b.origine));
+        setModeles(tries);
+        setSource(tries[0] ? `modele:${tries[0].id}` : "vide");
+      })
+      .catch(() => {
+        // Sans la liste des modèles, on peut toujours partir d'une page blanche ou d'un ancien document.
+        setModeles([]);
+        setSource("vide");
+      });
     if (cible.type !== "AE_TOUS") {
-      api<DocumentReference[]>(`/bibliotheque/documents?type_document=${type}`).then((liste) => setDocuments(liste.filter((d) => d.statut_analyse === "ANALYSE")));
+      api<DocumentReference[]>(`/bibliotheque/documents?type_document=${type}`)
+        .then((liste) => setDocuments(liste.filter((d) => d.statut_analyse === "ANALYSE")))
+        .catch(() => setDocuments([]));
     }
   }, [type, typeMarche, cible.type]);
 

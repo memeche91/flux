@@ -64,6 +64,8 @@ const TAILLES = ["8pt", "9pt", "10pt", "11pt", "12pt", "14pt", "16pt"];
 export interface ChampInserable {
   cle: string;
   libelle: string;
+  /** Liste ou tableau : inséré dans un paragraphe à part. */
+  bloc?: boolean;
 }
 
 interface Proprietes {
@@ -176,23 +178,7 @@ function BarreOutils({ editeur, champs }: { editeur: Editor; champs?: ChampInser
         <Bouton libelle="Insérer un tableau" actif={false} surClic={() => chaine().insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run()}>
           <IconeTableau className="size-4" />
         </Bouton>
-        {champs && champs.length > 0 && (
-          <select
-            aria-label="Insérer un champ automatique"
-            value=""
-            onChange={(e) => {
-              if (e.target.value) chaine().insertContent(`{{${e.target.value}}}`).run();
-            }}
-            className="h-10 max-w-48 rounded-md border border-accent/50 bg-fond px-2 text-xs text-accent"
-          >
-            <option value="">Insérer un champ…</option>
-            {champs.map((c) => (
-              <option key={c.cle} value={c.cle}>
-                {c.libelle}
-              </option>
-            ))}
-          </select>
-        )}
+        {champs && champs.length > 0 && <ChoixChamp editeur={editeur} champs={champs} />}
         <Bouton libelle="Annuler" actif={false} desactive={!etat.peutAnnuler} surClic={() => chaine().undo().run()}><Undo2 className="size-4" /></Bouton>
         <Bouton libelle="Rétablir" actif={false} desactive={!etat.peutRetablir} surClic={() => chaine().redo().run()}><Redo2 className="size-4" /></Bouton>
       </div>
@@ -289,6 +275,46 @@ function Couleur({
         className="grid h-10 w-6 place-items-center text-xs text-attenue hover:text-texte"
       >
         ×
+      </button>
+    </span>
+  );
+}
+
+/** Choix d'un champ automatique puis insertion au curseur (utilisable au clavier). */
+function ChoixChamp({ editeur, champs }: { editeur: Editor; champs: ChampInserable[] }) {
+  const [choisi, setChoisi] = useState("");
+  function inserer() {
+    const champ = champs.find((c) => c.cle === choisi);
+    if (!champ) return;
+    const jeton = `{{${champ.cle}}}`;
+    const chaine = editeur.chain().focus();
+    // Une liste ou un tableau ne peut pas vivre au milieu d'une phrase : paragraphe à part.
+    (champ.bloc ? chaine.insertContent({ type: "paragraph", content: [{ type: "text", text: jeton }] }) : chaine.insertContent(jeton)).run();
+    setChoisi("");
+  }
+  return (
+    <span className="flex items-center gap-1">
+      <select
+        aria-label="Champ automatique à insérer"
+        value={choisi}
+        onChange={(e) => setChoisi(e.target.value)}
+        className="h-10 max-w-48 rounded-md border border-accent/50 bg-fond px-2 text-xs text-accent"
+      >
+        <option value="">Champ automatique…</option>
+        {champs.map((c) => (
+          <option key={c.cle} value={c.cle}>
+            {c.libelle}
+          </option>
+        ))}
+      </select>
+      <button
+        type="button"
+        onMouseDown={garderLeFocus}
+        onClick={inserer}
+        disabled={!choisi}
+        className="h-10 rounded-md border border-accent/50 px-2.5 text-xs font-semibold text-accent hover:bg-accent/10 disabled:opacity-40"
+      >
+        Insérer
       </button>
     </span>
   );

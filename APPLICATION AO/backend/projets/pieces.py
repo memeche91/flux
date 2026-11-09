@@ -12,7 +12,7 @@ from bibliotheque.models import DocumentReference
 from . import ordre
 from .champs import champs_du_projet, remplacer_champs, remplacer_dans_titre
 from .exports.document import ChapitreDoc, DocumentExport, ElementDoc
-from .html import nettoyer_html, texte_vers_html
+from .html import nettoyer_html, texte_propre, texte_vers_html
 from .models import Clause, GenreClause, LotProjet, ModelePiece, PieceEcrite, Projet, TypePiece
 
 TITRES = {
@@ -51,41 +51,56 @@ def _clauses_depuis_modele(piece: PieceEcrite, modele: dict) -> list[Clause]:
         Clause(
             piece=piece,
             genre=GenreClause.CHAPITRE if c.get("genre") == "CHAPITRE" else GenreClause.ARTICLE,
-            titre=(c.get("titre") or "Sans titre")[:500],
+            titre=texte_propre(c.get("titre") or "")[:500] or "Sans titre",
             contenu=nettoyer_html(c.get("contenu") or ""),
         )
         for c in modele["clauses"]
     ]
 
 
-_NUMERO_ARTICLE = re.compile(r"^(?:article\s+)?\d{1,3}(?:\.\d{1,3})*\s*[-–:.]?\s*", re.IGNORECASE)
+_NUMERO_ARTICLE = re.compile(r"^(?:(?:article|chapitre)\s+)?\d{1,3}(?:\.\d{1,3})*\s*[-–:.]?\s*", re.IGNORECASE)
+_RUBRIQUE_LOT = re.compile(r"^lot\s", re.IGNORECASE)
 
 
 def _sans_numero(intitule: str) -> str:
+    """« ARTICLE 2 – PRIX » → « PRIX » : l'application renumérote elle-même les clauses."""
     return _NUMERO_ARTICLE.sub("", intitule).strip() or intitule.strip()
 
 
+def _titre_clause(article: Article) -> str:
+    return texte_propre(_sans_numero(article.titre))[:500] or "Sans titre"
+
+
 def _clauses_depuis_document(piece: PieceEcrite, document: DocumentReference) -> list[Clause]:
-    """Reprend les clauses d'un ancien document ; un article sans texte propre (seulement des
-    sous-articles) est reconstitué à partir de la rubrique de ses sous-articles."""
+    """Reprend les clauses d'un ancien document.
+
+    Les titres de premier niveau deviennent des articles, tous les niveaux inférieurs
+    des sous-articles (la pièce n'a que deux niveaux). Un article sans texte propre
+    (seulement des sous-articles) est reconstitué à partir de la rubrique de ses sous-articles.
+    """
     clauses: list[Clause] = []
     chapitre_courant = None
     for article in Article.objects.filter(document=document).order_by("ordre"):
+        titre = _titre_clause(article)
         if article.niveau <= 1:
-            chapitre_courant = normaliser(article.titre)
+            chapitre_courant = normaliser(titre)
             genre = GenreClause.CHAPITRE
         else:
-            parent = article.chemin.split(" › ")[-1] if article.chemin else ""
-            titre_parent = _sans_numero(parent) if parent else ""
-            if titre_parent and normaliser(titre_parent) != chapitre_courant:
-                clauses.append(Clause(piece=piece, genre=GenreClause.CHAPITRE, titre=titre_parent[:500]))
-                chapitre_courant = normaliser(titre_parent)
+            rubriques = [
+                texte_propre(_sans_numero(r))
+                for r in (article.chemin.split(" › ") if article.chemin else [])
+                if r.strip() and not _RUBRIQUE_LOT.match(r.strip())
+            ]
+            rubriques = [r for r in rubriques if r]
+            if rubriques and chapitre_courant not in {normaliser(r) for r in rubriques}:
+                clauses.append(Clause(piece=piece, genre=GenreClause.CHAPITRE, titre=rubriques[0][:500]))
+                chapitre_courant = normaliser(rubriques[0])
             genre = GenreClause.ARTICLE
         clauses.append(
             Clause(
                 piece=piece,
                 genre=genre,
-                titre=article.titre[:500],
+                titre=titre,
                 contenu=texte_vers_html(article.contenu),
                 article_source=article,
             )
@@ -137,7 +152,7 @@ def inserer_article(piece: PieceEcrite, article: Article, apres_id: int | None =
     clause = Clause(
         piece=piece,
         genre=GenreClause.CHAPITRE if article.niveau <= 1 else GenreClause.ARTICLE,
-        titre=article.titre[:500],
+        titre=_titre_clause(article),
         contenu=texte_vers_html(article.contenu),
         article_source=article,
     )

@@ -8,6 +8,7 @@ import { Exports, OptionsLot } from "../components/lot/OptionsEtExports";
 import PanneauBibliotheque from "../components/lot/PanneauBibliotheque";
 import PlanLot from "../components/lot/PlanLot";
 import { formaterEuros } from "../lib/format";
+import { useAvertirSortie } from "../lib/useAvertirSortie";
 import { useRequete } from "../lib/useRequete";
 
 const TITRES_PAR_DEFAUT: Record<GenrePoste, string> = {
@@ -62,12 +63,7 @@ export default function LotEditeur() {
   }, [lotId, appliquerSelection]);
 
   // Alerte si l'on quitte la page avec des modifications non enregistrées.
-  useEffect(() => {
-    if (!modifie) return;
-    const avertir = (evenement: BeforeUnloadEvent) => evenement.preventDefault();
-    window.addEventListener("beforeunload", avertir);
-    return () => window.removeEventListener("beforeunload", avertir);
-  }, [modifie]);
+  useAvertirSortie(modifie);
 
   async function enregistrer(): Promise<LotDetail | null> {
     if (!brouillon || selection == null || !lot) return lot;

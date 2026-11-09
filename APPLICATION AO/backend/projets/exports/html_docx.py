@@ -14,6 +14,8 @@ from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from docx.shared import Cm, Pt, RGBColor
 
+from ..html import sans_controle
+
 BALISES_VIDES = {"br", "col", "img", "hr"}
 ALIGNEMENTS = {
     "left": WD_ALIGN_PARAGRAPH.LEFT,
@@ -111,7 +113,7 @@ class ConvertisseurHtmlDocx:
 
     def ajouter(self, html: str, conteneur=None):
         conteneur = conteneur if conteneur is not None else self.document
-        self._blocs(analyser(html).enfants, conteneur, profondeur_liste=0)
+        self._blocs(analyser(sans_controle(html)).enfants, conteneur, profondeur_liste=0)
 
     # --- Blocs ---------------------------------------------------------------
 

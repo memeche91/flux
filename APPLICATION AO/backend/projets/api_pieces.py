@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import datetime
+import re
 from decimal import Decimal
 from typing import Literal
 
@@ -22,7 +23,7 @@ from .champs import champs_du_projet, consultation_du_projet
 from .exports.cctp_docx import exporter_docx
 from .exports.document import nom_de_fichier
 from .exports.pdf import exporter_pdf
-from .html import nettoyer_html
+from .html import nettoyer_html, texte_propre
 from .models import Clause, FormePrix, GenreClause, LotProjet, ModelePiece, PieceEcrite, Projet, TypePiece, Visite
 
 router = Router(tags=["Pièces administratives"])
@@ -214,6 +215,13 @@ def _toucher(piece: PieceEcrite) -> None:
     PieceEcrite.objects.filter(pk=piece.pk).update(modifie_le=timezone.now())
 
 
+def _titre(valeur: str) -> str:
+    titre = texte_propre(valeur)
+    if not titre:
+        raise HttpError(400, "Le titre ne peut pas être vide.")
+    return titre
+
+
 def _modele(identifiant: str | None) -> dict | None:
     if not identifiant:
         return None
@@ -258,7 +266,7 @@ def lister_modeles(request, type_piece: TypePiece | None = None):
 
 @router.post("/pieces/{piece_id}/enregistrer-modele", response={201: ModeleOut})
 def enregistrer_modele(request, piece_id: int, donnees: NouveauModele):
-    modele = pieces.enregistrer_comme_modele(_piece(piece_id), donnees.nom.strip(), request.auth)
+    modele = pieces.enregistrer_comme_modele(_piece(piece_id), _titre(donnees.nom), request.auth)
     return 201, {
         "id": f"cabinet-{modele.pk}",
         "nom": modele.nom,
@@ -271,9 +279,10 @@ def enregistrer_modele(request, piece_id: int, donnees: NouveauModele):
 
 @router.delete("/modeles/{modele_id}", response={204: None})
 def supprimer_modele(request, modele_id: str):
-    if not modele_id.startswith("cabinet-") or not modele_id[8:].isdigit():
+    correspondance = re.fullmatch(r"cabinet-([0-9]{1,18})", modele_id)
+    if correspondance is None:
         raise HttpError(400, "Seuls les modèles du cabinet peuvent être supprimés.")
-    get_object_or_404(ModelePiece, pk=int(modele_id[8:])).delete()
+    get_object_or_404(ModelePiece, pk=int(correspondance.group(1))).delete()
     return 204, None
 
 
@@ -320,7 +329,7 @@ def detail_piece(request, piece_id: int):
 @router.patch("/pieces/{piece_id}", response=PieceDetail)
 def modifier_piece(request, piece_id: int, donnees: PieceModification):
     piece = _piece(piece_id)
-    piece.titre = donnees.titre.strip()
+    piece.titre = _titre(donnees.titre)
     piece.save(update_fields=["titre", "modifie_le"])
     return _detail(piece)
 
@@ -346,7 +355,7 @@ def champs_piece(request, piece_id: int):
 @router.post("/pieces/{piece_id}/clauses", response={201: PieceDetail})
 def ajouter_clause(request, piece_id: int, donnees: ClauseIn):
     piece = _piece(piece_id)
-    clause = Clause(piece=piece, genre=donnees.genre, titre=donnees.titre.strip(), contenu=nettoyer_html(donnees.contenu))
+    clause = Clause(piece=piece, genre=donnees.genre, titre=_titre(donnees.titre), contenu=nettoyer_html(donnees.contenu))
     ordre.inserer(pieces.clauses_ordonnees(piece), [clause], donnees.apres_id)
     _toucher(piece)
     return 201, _detail(piece)
@@ -359,7 +368,7 @@ def modifier_clause(request, clause_id: int, donnees: ClauseModification):
     if champs.get("genre"):
         clause.genre = champs["genre"]
     if champs.get("titre"):
-        clause.titre = champs["titre"].strip()
+        clause.titre = _titre(champs["titre"])
     if "contenu" in champs:
         clause.contenu = nettoyer_html(champs["contenu"] or "")
     clause.save()

@@ -25,6 +25,11 @@ def inserer(existants: list, nouveaux: list, apres_id: int | None = None) -> Non
     position = len(existants)
     if apres_id is not None:
         position = next((i + 1 for i, objet in enumerate(existants) if objet.pk == apres_id), len(existants))
+        # Un nouveau chapitre se place après le contenu du chapitre sélectionné :
+        # sinon il « adopterait » les éléments qui suivent la sélection.
+        if any(objet.genre == CHAPITRE for objet in nouveaux):
+            while position < len(existants) and existants[position].genre != CHAPITRE:
+                position += 1
     for objet in nouveaux:
         objet.ordre = 0
     type(nouveaux[0]).objects.bulk_create(nouveaux)

@@ -7,13 +7,15 @@ apparaît surlignée « [à compléter : …] » pour ne pas passer inaperçue.
 from __future__ import annotations
 
 import re
+import unicodedata
 from dataclasses import dataclass
 from decimal import Decimal
-from html import escape
+from html import escape, unescape
 
 from django.utils import timezone
 from django.utils.formats import date_format
 
+from .html import nettoyer_html
 from .models import Consultation, FormePrix, LotProjet, Projet, Visite
 
 
@@ -28,12 +30,22 @@ class Champ:
     @property
     def apercu(self) -> str:
         """Valeur en texte brut, pour l'affichage dans l'éditeur."""
-        texte = re.sub(r"</(li|tr|p)>", " · ", self.valeur)
+        texte = re.sub(r"<br\s*/?>", " ", self.valeur)
+        texte = re.sub(r"</(li|tr|p)>", " · ", texte)
         texte = re.sub(r"<[^>]+>", "", texte)
-        return " ".join(texte.replace("&nbsp;", " ").split()).strip(" ·")
+        return " ".join(unescape(texte).split()).strip(" ·")
 
 
-CHAMP = re.compile(r"\{\{\s*([a-z_]+)\s*\}\}")
+# Tout ce qui est entre accolades doubles est un champ, même mal orthographié :
+# un champ inconnu est signalé à l'export plutôt que laissé tel quel.
+CHAMP = re.compile(r"\{\{\s*([^{}<>]+?)\s*\}\}")
+_BALISES_EN_LIGNE = r"(?:strong|b|em|i|u|s|span|mark|sub|sup)"
+
+
+def cle_du_champ(texte: str) -> str:
+    """« Date-limite Offres » → « date_limite_offres »."""
+    sans_accents = unicodedata.normalize("NFKD", texte.strip().lower()).encode("ascii", "ignore").decode()
+    return re.sub(r"[\s-]+", "_", sans_accents)
 
 
 def _pourcentage(valeur: Decimal | int | float | None) -> str:
@@ -152,38 +164,65 @@ def _a_completer(libelle: str) -> str:
 
 
 def remplacer_champs(html: str, champs: dict[str, Champ]) -> str:
-    """Remplace les champs d'un texte HTML ; un champ « bloc » seul dans un paragraphe remplace ce paragraphe."""
+    """Remplace les champs d'un texte HTML.
+
+    Un champ « bloc » (liste, tableau) remplace le paragraphe qui le contient ; s'il est
+    au milieu d'une phrase, le paragraphe est coupé en deux autour de lui.
+    """
     if not html or "{{" not in html:
         return html
 
-    def bloc(correspondance: re.Match) -> str:
-        champ = champs.get(correspondance.group(1))
+    def bloc_seul(correspondance: re.Match) -> str:
+        champ = champs.get(cle_du_champ(correspondance.group(1)))
         if champ is None or not champ.bloc:
             return correspondance.group(0)
         return champ.valeur if champ.renseigne else f"<p>{_a_completer(champ.libelle)}</p>"
 
-    html = re.sub(r"<p[^>]*>\s*\{\{\s*([a-z_]+)\s*\}\}\s*</p>", bloc, html)
+    html = re.sub(
+        rf"<p[^>]*>\s*(?:<{_BALISES_EN_LIGNE}[^>]*>\s*)*\{{\{{\s*([^{{}}<>]+?)\s*\}}\}}\s*(?:</{_BALISES_EN_LIGNE}>\s*)*</p>",
+        bloc_seul,
+        html,
+    )
+    coupe = False
 
     def en_ligne(correspondance: re.Match) -> str:
-        cle = correspondance.group(1)
+        nonlocal coupe
+        cle = cle_du_champ(correspondance.group(1))
         champ = champs.get(cle)
         if champ is None:
-            return _a_completer(f"champ inconnu « {cle} »")
+            return _a_completer(f"champ inconnu « {correspondance.group(1).strip()} »")
         if not champ.renseigne:
             return _a_completer(champ.libelle)
+        if champ.bloc:
+            coupe = True
+            return f"{_AVANT_BLOC}</p>{champ.valeur}<p {_APRES_BLOC}>"
         return champ.valeur
 
-    return CHAMP.sub(en_ligne, html)
+    html = CHAMP.sub(en_ligne, html)
+    if coupe:
+        # Retire les morceaux de paragraphe restés vides de part et d'autre du bloc,
+        # puis laisse le nettoyage HTML refermer correctement les balises coupées.
+        html = re.sub(rf"<p[^>]*>(?:\s*<{_BALISES_EN_LIGNE}[^>]*>)*\s*{_AVANT_BLOC}</p>", "", html)
+        html = re.sub(rf"<p {_APRES_BLOC}>(?:\s*</{_BALISES_EN_LIGNE}>)*\s*</p>", "", html)
+        html = nettoyer_html(html.replace(_AVANT_BLOC, "").replace(f"<p {_APRES_BLOC}>", "<p>"))
+        html = re.sub(rf"<({_BALISES_EN_LIGNE})(?:\s[^>]*)?>(\s*)</\1>", r"\2", html)
+    return html
+
+
+_AVANT_BLOC = '<span data-avant-bloc=""></span>'
+_APRES_BLOC = 'data-apres-bloc=""'
 
 
 def remplacer_dans_titre(titre: str, champs: dict[str, Champ]) -> str:
     """Version texte brut (titres) : les champs sont remplacés par leur aperçu."""
     def remplacement(correspondance: re.Match) -> str:
-        champ = champs.get(correspondance.group(1))
-        return champ.apercu if champ and champ.renseigne else "[à compléter]"
+        champ = champs.get(cle_du_champ(correspondance.group(1)))
+        if champ is None:
+            return f"[champ inconnu « {correspondance.group(1).strip()} »]"
+        return champ.apercu if champ.renseigne else f"[à compléter : {champ.libelle}]"
 
     return CHAMP.sub(remplacement, titre or "")
 
 
 def champs_utilises(textes: list[str]) -> set[str]:
-    return {m.group(1) for texte in textes for m in CHAMP.finditer(texte or "")}
+    return {cle_du_champ(m.group(1)) for texte in textes for m in CHAMP.finditer(texte or "")}
