@@ -1,0 +1,5 @@
+# GED sur Internet par Cloudflare Tunnel : cloudflared (service « tunnel ») relaie vers ce port,
+# qui n'est pas publié sur le PC. Le HTTPS est assuré par Cloudflare.
+http://:8081 {
+	import ged_public
+}

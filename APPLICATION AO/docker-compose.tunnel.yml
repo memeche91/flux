@@ -1,0 +1,37 @@
+# GED ouverte aux entreprises sur Internet par Cloudflare Tunnel (solution de secours, gratuite).
+#
+# À utiliser si la box n'a pas d'adresse IP fixe ou ne permet pas d'ouvrir le port 443.
+# Prérequis : le nom de domaine du cabinet géré par Cloudflare (offre gratuite), un tunnel créé
+# dans Cloudflare Zero Trust avec le nom public (ex. ged.cabinet.fr) dirigé vers http://web:8081,
+# et son jeton dans TUNNEL_TOKEN (.env). Limite de Cloudflare : 100 Mo par fichier envoyé.
+# Aucun port n'est ouvert sur la box.
+services:
+  web:
+    environment:
+      MODE_GED: tunnel
+    depends_on:
+      - ged
+
+  ged:
+    extends:
+      file: docker-compose.yml
+      service: backend
+    environment:
+      INITIALISER: "0"
+      DJANGO_SETTINGS_MODULE: config.settings_ged
+      GED_URL_PUBLIQUE: ${GED_URL_PUBLIQUE:?Renseignez GED_URL_PUBLIQUE dans .env (par exemple https://ged.cabinet.fr)}
+      # L'adresse des visiteurs est transmise par Cloudflare : elle peut servir à bloquer les abus.
+      GED_IP_FIABLE: "1"
+    command: ["gunicorn", "config.wsgi:application", "--bind", "0.0.0.0:8000", "--workers", "2", "--worker-class", "gthread", "--threads", "4", "--timeout", "120"]
+    depends_on:
+      backend:
+        condition: service_started
+
+  tunnel:
+    image: cloudflare/cloudflared:2026.10.7
+    restart: unless-stopped
+    command: ["tunnel", "--no-autoupdate", "run"]
+    environment:
+      TUNNEL_TOKEN: ${TUNNEL_TOKEN:?Renseignez TUNNEL_TOKEN dans .env (jeton du tunnel Cloudflare)}
+    depends_on:
+      - web

@@ -1,0 +1,10 @@
+# GED sur Internet par l'adresse publique du cabinet : la box redirige le port 443 vers ce PC.
+# Le certificat HTTPS (Let's Encrypt, gratuit) est obtenu et renouvelé sur ce même port 443.
+{$GED_URL_PUBLIQUE} {
+	tls {
+		issuer acme {
+			disable_http_challenge
+		}
+	}
+	import ged_public
+}

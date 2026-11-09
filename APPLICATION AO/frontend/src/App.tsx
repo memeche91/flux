@@ -9,6 +9,7 @@ import Bibliotheque from "./pages/Bibliotheque";
 import DCE from "./pages/DCE";
 import EntrepriseFiche from "./pages/EntrepriseFiche";
 import Entreprises from "./pages/Entreprises";
+import Ged from "./pages/Ged";
 import Connexion from "./pages/Connexion";
 import LotEditeur from "./pages/LotEditeur";
 import Offres from "./pages/Offres";
@@ -41,6 +42,7 @@ export default function App() {
             <Route path="entreprises/:entrepriseId" element={<EntrepriseFiche key="fiche" />} />
             <Route path="projets/:projetId/dce" element={<DCE />} />
             <Route path="projets/:projetId/offres" element={<Offres />} />
+            <Route path="projets/:projetId/ged" element={<Ged />} />
             <Route path="projets" element={<Projets />} />
             <Route path="projets/:projetId" element={<ProjetDetail />} />
             <Route path="projets/:projetId/lots/:lotId" element={<LotEditeur />} />

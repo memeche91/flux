@@ -1,4 +1,4 @@
-import { FolderPlus } from "lucide-react";
+import { Archive, Download, FolderPlus } from "lucide-react";
 import { useState, type FormEvent } from "react";
 import { Link, useNavigate } from "react-router";
 
@@ -6,7 +6,8 @@ import { api } from "../api/client";
 import type { Lot, Projet, ProjetResume } from "../api/types";
 import EnTetePage from "../components/EnTetePage";
 import { CLASSE_CHAMP, Champ } from "../components/Filtres";
-import { formaterDate, pluriel } from "../lib/format";
+import type { ArchiveProjet } from "../ged/types";
+import { formaterDate, formaterTaille, pluriel } from "../lib/format";
 import { useRequete } from "../lib/useRequete";
 
 export default function Projets() {
@@ -66,7 +67,55 @@ export default function Projets() {
           </li>
         ))}
       </ul>
+
+      <ArchivesProjets />
     </>
+  );
+}
+
+/** Archives de fin de chantier, y compris celles des projets dont les fichiers ont été purgés. */
+function ArchivesProjets() {
+  const archives = useRequete<ArchiveProjet[]>("/archives");
+  const liste = (archives.donnees ?? []).filter((a) => a.statut === "VERIFIEE");
+  if (!liste.length) return null;
+  return (
+    <section aria-labelledby="titre-archives" className="flex flex-col gap-3">
+      <h2 id="titre-archives" className="flex items-center gap-2 font-titre text-lg font-semibold">
+        <Archive aria-hidden="true" className="size-5 text-attenue" />
+        Archives des chantiers
+      </h2>
+      <ul className="flex flex-col gap-2">
+        {liste.map((a) => (
+          <li key={a.id} className="flex flex-wrap items-center gap-x-4 gap-y-2 rounded-xl border border-bordure bg-surface px-4 py-3">
+            <span className="flex min-w-0 flex-[1_1_260px] flex-col">
+              {a.projet_id ? (
+                <Link to={`/projets/${a.projet_id}/ged?onglet=cloture`} className="font-semibold">
+                  {a.nom_projet}
+                </Link>
+              ) : (
+                <span className="font-semibold">{a.nom_projet}</span>
+              )}
+              <span className="text-xs text-attenue">
+                {formaterDate(a.cree_le)} · {formaterTaille(a.taille)}
+                {a.fichiers_purges_le ? " · fichiers du projet purgés : cette archive en est la seule copie" : ""}
+                {a.conserver_jusqu_au ? ` · à conserver jusqu'au ${formaterDate(a.conserver_jusqu_au)}` : ""}
+              </span>
+            </span>
+            {a.fichier_present ? (
+              <a
+                href={`/api/archives/${a.id}/telecharger`}
+                className="flex min-h-10 items-center gap-2 rounded-lg border border-bordure-forte px-3 text-sm font-semibold text-texte no-underline hover:bg-surface-2"
+              >
+                <Download aria-hidden="true" className="size-4" />
+                Télécharger
+              </a>
+            ) : (
+              <span className="text-sm text-danger">Fichier absent du dossier d'archives</span>
+            )}
+          </li>
+        ))}
+      </ul>
+    </section>
   );
 }
 
@@ -104,7 +153,14 @@ function NouveauProjet({ surAnnuler }: { surAnnuler: () => void }) {
       <h2 className="font-titre text-lg font-semibold">Nouveau projet</h2>
       <div className="flex flex-wrap gap-3">
         <Champ id="nouveau-nom" libelle="Nom de l'opération (obligatoire)" large>
-          <input id="nouveau-nom" required value={nom} onChange={(e) => setNom(e.target.value)} placeholder="Ex. Réhabilitation du groupe scolaire" className={CLASSE_CHAMP} />
+          <input
+            id="nouveau-nom"
+            required
+            value={nom}
+            onChange={(e) => setNom(e.target.value)}
+            placeholder="Ex. Réhabilitation du groupe scolaire"
+            className={CLASSE_CHAMP}
+          />
         </Champ>
         <Champ id="nouveau-moa" libelle="Maître d'ouvrage" large>
           <input id="nouveau-moa" value={maitreOuvrage} onChange={(e) => setMaitreOuvrage(e.target.value)} className={CLASSE_CHAMP} />
@@ -142,7 +198,11 @@ function NouveauProjet({ surAnnuler }: { surAnnuler: () => void }) {
         <button type="button" onClick={surAnnuler} className="min-h-11 rounded-lg border border-bordure-forte px-4 hover:bg-surface-2">
           Annuler
         </button>
-        <button type="submit" disabled={envoi || !nom.trim()} className="min-h-11 rounded-lg bg-accent px-4.5 font-bold text-sur-accent hover:bg-accent-clair disabled:opacity-50">
+        <button
+          type="submit"
+          disabled={envoi || !nom.trim()}
+          className="min-h-11 rounded-lg bg-accent px-4.5 font-bold text-sur-accent hover:bg-accent-clair disabled:opacity-50"
+        >
           {envoi ? "Création…" : "Créer le projet"}
         </button>
       </div>

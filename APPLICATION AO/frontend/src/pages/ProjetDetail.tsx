@@ -88,7 +88,12 @@ export default function ProjetDetail() {
                 ))}
               </select>
             </Champ>
-            <button type="button" onClick={() => void ajouterLot()} disabled={!lotAjoute} className="min-h-11 rounded-lg border border-bordure-forte px-4 font-semibold hover:bg-surface-2 disabled:opacity-50">
+            <button
+              type="button"
+              onClick={() => void ajouterLot()}
+              disabled={!lotAjoute}
+              className="min-h-11 rounded-lg border border-bordure-forte px-4 font-semibold hover:bg-surface-2 disabled:opacity-50"
+            >
               Ajouter
             </button>
           </div>
@@ -166,13 +171,36 @@ export default function ProjetDetail() {
         </span>
       </Link>
 
+      <Link
+        to={`/projets/${p.id}/ged`}
+        className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-accent/40 bg-accent/8 px-5 py-4 text-texte no-underline hover:bg-accent/12"
+      >
+        <span className="flex min-w-0 flex-col gap-0.5">
+          <span className="font-titre text-lg font-semibold">GED de chantier et clôture</span>
+          <span className="text-sm text-attenue">
+            Espace partagé avec les entreprises (codes d'accès), plans et visas par lot, indices ; archive complète du projet en fin de chantier.
+          </span>
+        </span>
+        <span className="flex min-h-11 items-center gap-2 rounded-lg bg-accent px-4 font-bold text-sur-accent">
+          Ouvrir la GED
+          <ArrowRight aria-hidden="true" className="size-4" />
+        </span>
+      </Link>
+
       <ConsultationFormulaire projetId={p.id} />
 
       <FormulaireProjet projet={p} surEnregistre={projet.recharger} />
 
       <section className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-danger/30 px-5 py-4">
-        <p className="text-attenue">Supprimer le projet efface ses lots, ses CCTP et ses DPGF. La bibliothèque n'est pas touchée.</p>
-        <button type="button" onClick={() => void supprimerProjet()} className="min-h-11 rounded-lg border border-danger/50 px-4 font-semibold text-danger hover:bg-danger/10">
+        <p className="text-attenue">
+          Supprimer le projet efface tout son contenu (réservé à l'administrateur). En fin de chantier, préférez l'archive puis la purge des fichiers : « GED de
+          chantier et clôture ».
+        </p>
+        <button
+          type="button"
+          onClick={() => void supprimerProjet()}
+          className="min-h-11 rounded-lg border border-danger/50 px-4 font-semibold text-danger hover:bg-danger/10"
+        >
           Supprimer le projet
         </button>
       </section>
@@ -206,7 +234,13 @@ function FormulaireProjet({ projet, surEnregistre }: { projet: Projet; surEnregi
   const texte = (cle: keyof Formulaire, libelle: string, large = false, multiligne = false) => (
     <Champ id={`projet-${cle}`} libelle={libelle} large={large}>
       {multiligne ? (
-        <textarea id={`projet-${cle}`} rows={2} value={String(valeurs[cle] ?? "")} onChange={(e) => champ(cle, e.target.value as never)} className={`${CLASSE_CHAMP} py-2`} />
+        <textarea
+          id={`projet-${cle}`}
+          rows={2}
+          value={String(valeurs[cle] ?? "")}
+          onChange={(e) => champ(cle, e.target.value as never)}
+          className={`${CLASSE_CHAMP} py-2`}
+        />
       ) : (
         <input id={`projet-${cle}`} value={String(valeurs[cle] ?? "")} onChange={(e) => champ(cle, e.target.value as never)} className={CLASSE_CHAMP} />
       )}
@@ -229,7 +263,12 @@ function FormulaireProjet({ projet, surEnregistre }: { projet: Projet; surEnregi
         {texte("adresse_operation", "Adresse de l'opération", true, true)}
         {texte("adresse_maitre_ouvrage", "Adresse du maître d'ouvrage", true, true)}
         <Champ id="projet-type_marche" libelle="Marché">
-          <select id="projet-type_marche" value={valeurs.type_marche} onChange={(e) => champ("type_marche", e.target.value as "PUBLIC" | "PRIVE")} className={CLASSE_CHAMP}>
+          <select
+            id="projet-type_marche"
+            value={valeurs.type_marche}
+            onChange={(e) => champ("type_marche", e.target.value as "PUBLIC" | "PRIVE")}
+            className={CLASSE_CHAMP}
+          >
             <option value="PUBLIC">Public</option>
             <option value="PRIVE">Privé</option>
           </select>
@@ -238,10 +277,22 @@ function FormulaireProjet({ projet, surEnregistre }: { projet: Projet; surEnregi
         {texte("phase", "Phase")}
         {texte("indice", "Indice")}
         <Champ id="projet-date" libelle="Date des documents">
-          <input id="projet-date" type="date" value={valeurs.date_document ?? ""} onChange={(e) => champ("date_document", e.target.value || null)} className={CLASSE_CHAMP} />
+          <input
+            id="projet-date"
+            type="date"
+            value={valeurs.date_document ?? ""}
+            onChange={(e) => champ("date_document", e.target.value || null)}
+            className={CLASSE_CHAMP}
+          />
         </Champ>
         <Champ id="projet-tva" libelle="TVA (%)">
-          <input id="projet-tva" inputMode="decimal" value={String(valeurs.taux_tva)} onChange={(e) => champ("taux_tva", e.target.value)} className={CLASSE_CHAMP} />
+          <input
+            id="projet-tva"
+            inputMode="decimal"
+            value={String(valeurs.taux_tva)}
+            onChange={(e) => champ("taux_tva", e.target.value)}
+            className={CLASSE_CHAMP}
+          />
         </Champ>
       </div>
       <div className="flex flex-wrap gap-3 border-t border-bordure pt-4">
@@ -264,10 +315,22 @@ function FormulaireProjet({ projet, surEnregistre }: { projet: Projet; surEnregi
           </select>
         </Champ>
         <Champ id="projet-couleur-titres" libelle="Couleur des titres et bandeaux">
-          <input id="projet-couleur-titres" type="color" value={valeurs.couleur_titres} onChange={(e) => champ("couleur_titres", e.target.value)} className="h-11 w-full cursor-pointer rounded-lg border border-bordure-forte bg-fond px-1" />
+          <input
+            id="projet-couleur-titres"
+            type="color"
+            value={valeurs.couleur_titres}
+            onChange={(e) => champ("couleur_titres", e.target.value)}
+            className="h-11 w-full cursor-pointer rounded-lg border border-bordure-forte bg-fond px-1"
+          />
         </Champ>
         <Champ id="projet-couleur-tableaux" libelle="Fond des en-têtes de tableaux">
-          <input id="projet-couleur-tableaux" type="color" value={valeurs.couleur_tableaux} onChange={(e) => champ("couleur_tableaux", e.target.value)} className="h-11 w-full cursor-pointer rounded-lg border border-bordure-forte bg-fond px-1" />
+          <input
+            id="projet-couleur-tableaux"
+            type="color"
+            value={valeurs.couleur_tableaux}
+            onChange={(e) => champ("couleur_tableaux", e.target.value)}
+            className="h-11 w-full cursor-pointer rounded-lg border border-bordure-forte bg-fond px-1"
+          />
         </Champ>
       </div>
       <div className="flex flex-wrap items-center justify-end gap-3">

@@ -3,7 +3,7 @@
 Application web pour gérer les appels d'offres de A à Z : pièces écrites (CCTP, DPGF, CCAP, RC, AE), DCE, analyse des offres (rapport ACT) et GED de chantier.
 L'application est **100 % gratuite et open source**. Elle tourne sur un poste ou un serveur du cabinet, et aucune donnée n'est envoyée sur Internet.
 
-> **Version actuelle : étape 3.** Pièces écrites et assistant IA local (étape 1), DCE et annuaire des entreprises (étape 2), et maintenant l'**analyse des offres** : lecture des DPGF remplies par les entreprises, comparatif ouvrage par ouvrage, notation pondérée selon le RC, classement et **rapport d'analyse (ACT)** en Word et PDF.
+> **Version actuelle : étape 4.** Pièces écrites et assistant IA local (étape 1), DCE et annuaire des entreprises (étape 2), analyse des offres et rapport ACT (étape 3), et maintenant la **GED de chantier** : espace partagé avec les entreprises (un code d'accès par personne), plans et visas classés par lot, indices et historique complet, notifications par courriel, puis **archive complète du projet** sur le PC ou le serveur du cabinet et purge des fichiers.
 
 ---
 
@@ -52,15 +52,18 @@ L'installateur :
 | Arrêter l'application | `docker compose down` dans le dossier |
 | Redémarrer / mettre à jour | Relancer `installer.ps1` (données conservées) |
 | Voir les journaux en cas de problème | `docker compose logs -f backend worker` |
+| Ouvrir la GED aux entreprises sur Internet | Relancer `installer.ps1` (question « Ouvrir la GED aux entreprises sur Internet ») |
 
 ### Où sont mes données ?
 
 - **Fichiers importés** : dossier `donnees\fichiers`, classés par type, puis par lot (par exemple `bibliotheque\CCTP\08\...`).
 - **Base de données** : volume Docker `application-ao_base_donnees`.
+- **Archives de fin de chantier** : dossier `donnees\archives` (ou le dossier choisi dans `.env`, ligne `DOSSIER_ARCHIVES_PC`, par exemple `D:\Archives chantiers`).
+- **Journal des connexions à la GED depuis Internet** : dossier `donnees\journaux`.
 
 > ⚠️ Ne supprimez jamais le fichier `.env` : il contient le mot de passe de la base de données. Sans lui, l'application ne peut plus ouvrir vos données.
 
-La sauvegarde et l'archivage complet (export du chantier sur le PC ou le serveur, puis purge) arrivent avec l'étape 4 (GED).
+En fin de chantier, l'archive complète du projet (bouton **Préparer l'archive complète**, page GED du projet) se télécharge ou se copie sur le serveur du cabinet ; la purge des fichiers libère ensuite la place (voir « GED de chantier »).
 
 ### Accès depuis un autre poste du cabinet
 
@@ -174,6 +177,29 @@ Bouton **Analyser les offres** sur la page du projet, un onglet par lot :
 
 **Exports** : rapport ACT d'un lot ou de tous les lots (Word modifiable et PDF, même mise en page que vos pièces écrites, avec récapitulatif général) et comparatif Excel (une feuille par lot).
 
+### GED de chantier
+
+Bouton **Ouvrir la GED** sur la page du projet, une fois les marchés notifiés.
+
+1. **Ouverture de l'espace** : les entreprises retenues à l'analyse des offres sont proposées avec leurs lots et les contacts de l'annuaire. **Chaque personne reçoit son propre code d'accès** (12 caractères) : un nouveau code (invitation renvoyée, départ d'un salarié, code divulgué) ne touche pas ses collègues. Les codes ne sont affichés qu'une fois : envoi par l'application, par votre messagerie, ou fiche d'accès imprimée. Les plans du DCE peuvent être repris comme « Pièces du marché » (indice 0). Ajoutez ensuite la maîtrise d'œuvre associée (BET), le maître d'ouvrage, le contrôleur technique, le CSPS et l'OPC ; un sous-traitant (DC4) ne voit pas les pièces chiffrées du titulaire.
+2. **Classement rigoureux** : « Commun à tous » (plans MOE, comptes rendus, planning, PIC, SPS, contrôle technique, pièces du marché, réception), un dossier par **lot** (plans d'exécution, synthèse, notes de calcul, fiches techniques, PV d'essais, PPSPS, réserves, DOE, DIUO, photos, et pièces chiffrées : OS, avenants, devis, situations, sous-traitance) et un espace **réservé à la maîtrise d'œuvre**. Chaque document reçoit une référence (`08-EXE-003`) ; le n° du cartouche de l'entreprise est conservé à côté. Une entreprise dépose dans ses lots ; elle peut consulter les documents techniques des autres lots si vous l'autorisez (option « synthèse »).
+3. **Indices** : A, B, C… (ou 0, 1, 2), jamais en arrière ; l'indice à utiliser est toujours signalé « **À utiliser** », les anciens sont conservés et téléchargés avec la mention `PERIME_`. Dépôt de plusieurs fichiers en une fois : l'indice et le n° de plan sont lus dans le nom (« EXE-08-003_C.pdf »), le DWG de même nom est joint comme fichier source, et un document déjà présent reçoit un nouvel indice.
+4. **Visas** : les documents d'exécution d'une entreprise partent automatiquement « pour visa », avec une échéance (15 jours par défaut, jours ouvrés). Le BET, le contrôleur technique et le CSPS donnent leur avis ; la maîtrise d'œuvre émet le visa de synthèse (VSO, VAO, refusé, hors mission), avec document annoté et **fiche de visa PDF**. Un indice refusé est marqué « ne pas exécuter ». OS et avenants demandent un **accusé de lecture**.
+5. **Notifications** : courriel à chaque nouveauté, regroupé (10 minutes) et limité aux personnes concernées ; chacun choisit « à chaque nouveauté », « récapitulatif quotidien » (7 h, jours ouvrés) ou « aucun ». Récépissé de dépôt à l'entreprise. Journal complet (dépôts, visas, téléchargements, connexions) et **registre des documents** Excel.
+6. **Réception puis clôture** : après la réception, les entreprises ne déposent plus que DOE, DIUO, réserves et photos ; l'espace clos passe en lecture seule.
+7. **Archive et purge** : **Préparer l'archive complète** produit un .zip vérifié (pièces écrites, DCE, offres et rapport ACT, GED classée par lot avec indices antérieurs, visas et sources, registre Excel avec liens, journal, « Lisez-moi »), enregistré dans le dossier d'archives. Après téléchargement ou copie confirmée sur le serveur du cabinet, **la purge des fichiers** est programmée à 30 jours (annulable) : les données (lots, prix, offres) restent pour vos prochaines estimations. La suppression complète d'un projet est réservée à l'administrateur.
+
+#### Ouvrir la GED aux entreprises sur Internet (gratuit)
+
+Les entreprises se connectent depuis le chantier sur une adresse du domaine du cabinet, par exemple `https://ged.cabinet.fr/ged`. Relancez `installer.ps1` et répondez **O** à la question « Ouvrir la GED aux entreprises sur Internet », puis choisissez :
+
+- **1 – Adresse IP fixe de la box (recommandé)** : chez le gestionnaire de votre nom de domaine, créez un enregistrement **A** `ged.cabinet.fr` vers l'adresse IP de la box (l'installateur l'affiche) ; dans la box, redirigez le **port TCP 443** vers le PC (l'installateur affiche l'adresse du PC à indiquer). Le certificat HTTPS est obtenu et renouvelé automatiquement (Let's Encrypt, gratuit). Le port 80 reste fermé.
+- **2 – Cloudflare Tunnel** (box sans IP fixe ou sans redirection de port) : nom de domaine géré par Cloudflare (offre gratuite), tunnel créé dans *Zero Trust > Networks > Tunnels*, nom public `ged.cabinet.fr` dirigé vers `http://web:8081`, jeton collé dans l'installateur. Aucun port ouvert ; 100 Mo maximum par fichier.
+
+Seul le portail des intervenants est accessible depuis Internet : il tourne dans un service séparé (`ged`) qui ne connaît ni l'administration ni les outils du cabinet. Le PC doit rester allumé (l'installateur propose de désactiver la mise en veille sur secteur). Testez depuis un téléphone en 4G, Wi-Fi coupé. Si Windows demande l'autorisation réseau pour Docker, acceptez pour les réseaux privés. Pour refermer l'accès : `GED_INTERNET=aucun` dans `.env`, puis relancez `installer.ps1`.
+
+Pour que les liens des courriels de la GED fonctionnent depuis les autres postes du cabinet, renseignez `URL_APPLICATION` dans `.env` (par exemple `http://192.168.1.20:8080`).
+
 ### Assistant IA (administrateur)
 
 - Page **Assistant** (visible par l'administrateur uniquement) : une conversation à l'écrit ou **au micro**, et les réponses **lues à voix haute** si vous le souhaitez.
@@ -207,6 +233,8 @@ Après un changement de réglage, relancez `installer.ps1` : il télécharge le 
 APPLICATION AO/
 ├── installer.ps1          Installation / mise à jour Windows
 ├── docker-compose.yml     Les 7 services : base, redis, backend, worker, voix, ollama, web
+├── docker-compose.internet.yml   GED sur Internet par l'adresse publique (service ged, port 443)
+├── docker-compose.tunnel.yml     GED sur Internet par Cloudflare Tunnel (services ged et tunnel)
 ├── .env.example           Modèle de configuration (copié en .env par l'installateur)
 ├── donnees/               Fichiers importés (non versionnés)
 ├── backend/               Python 3.12 · Django 5.2 · Django Ninja · Celery
@@ -219,10 +247,13 @@ APPLICATION AO/
 │   ├── entreprises/       Annuaire des entreprises (import, historique)
 │   ├── dce/               Dossier de consultation : contrôle, .zip classé, envois
 │   ├── offres/            Analyse des offres : lecture des DPGF remplies, comparatif, notation, rapport ACT
+│   ├── ged/               GED de chantier : accès par code, droits, indices, visas, notifications, archive et purge
 │   └── assistant/         Assistant IA local : recherche par le sens, conversations, voix
 └── frontend/              React 19 · TypeScript · Vite · Tailwind CSS
     └── src/
-        ├── pages/         Connexion, Tableau de bord, Projets, éditeurs, DCE, Analyse des offres, Entreprises, Documents, Articles, Prix, Assistant
+        ├── pages/         Connexion, Tableau de bord, Projets, éditeurs, DCE, Analyse des offres, GED, Entreprises, Documents, Articles, Prix, Assistant
+        ├── ged/           Explorateur des documents, dépôt, visas, intervenants, clôture (communs au cabinet et au portail)
+        ├── portail/       Portail des intervenants (ged.html), seul servi sur l'adresse Internet
         ├── components/    En-tête, liste des lots, zone d'import, tableau
         └── api/           Accès à l'API (session + protection CSRF)
 ```
@@ -232,10 +263,12 @@ APPLICATION AO/
 | `base` | PostgreSQL 16 |
 | `redis` | File d'attente des tâches (Valkey, fork open source de Redis) |
 | `backend` | API Django (gunicorn) |
-| `worker` | Tâches de fond : lecture, conversion, OCR et découpage des documents, lecture des offres, lecture des documents par l'IA |
+| `worker` | Tâches de fond : lecture, conversion, OCR et découpage des documents, lecture des offres, lecture des documents par l'IA ; tâches planifiées (récapitulatif GED du matin, relance des courriels, purges programmées) |
 | `voix` | Voix de l'assistant : transcription (Whisper) et lecture à voix haute (Piper), chargées une seule fois |
 | `ollama` | Moteur d'IA local de l'assistant (modèles dans le volume `modeles_ia`) |
-| `web` | Caddy : sert l'interface et relaie l'API |
+| `web` | Caddy : sert l'interface et relaie l'API ; en mode Internet, site HTTPS public limité au portail de la GED |
+| `ged` | (mode Internet) Processus Django séparé, limité au portail des intervenants |
+| `tunnel` | (mode Cloudflare Tunnel) Relais cloudflared |
 
 ## Développement (facultatif)
 
@@ -270,4 +303,4 @@ npm install && npm run dev
 - [x] **1.4** Assistant IA local (chat et voix, administrateur uniquement)
 - [x] **2** DCE : dossier .zip classé, annuaire des entreprises, envois public / privé
 - [x] **3** Analyse des offres : lecture des DPGF remplies, comparatif, notation, rapport ACT
-- [ ] **4** GED de chantier, accès entreprises, archivage
+- [x] **4** GED de chantier : accès par code personnel, classement par lots, indices, visas, notifications, accès Internet, archive et purge

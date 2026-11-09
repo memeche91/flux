@@ -1,0 +1,30 @@
+# GED ouverte aux entreprises sur Internet, par l'adresse publique du cabinet (mode recommandé).
+#
+# Prérequis : un nom (ex. ged.cabinet.fr) qui pointe vers l'adresse IP fixe de la box, et le port
+# 443 de la box redirigé vers ce PC. Le certificat HTTPS gratuit est obtenu automatiquement.
+# installer.ps1 active ce fichier (ligne COMPOSE_FILE de .env) quand vous répondez « O » à la
+# question « Ouvrir la GED aux entreprises sur Internet ».
+#
+# Le service « ged » est un processus séparé qui ne connaît que le portail des intervenants :
+# ni l'administration, ni les outils du cabinet ne sont accessibles depuis Internet.
+services:
+  web:
+    environment:
+      MODE_GED: ip
+    ports:
+      - "${GED_PORT_HTTPS:-443}:443"
+    depends_on:
+      - ged
+
+  ged:
+    extends:
+      file: docker-compose.yml
+      service: backend
+    environment:
+      INITIALISER: "0"
+      DJANGO_SETTINGS_MODULE: config.settings_ged
+      GED_URL_PUBLIQUE: ${GED_URL_PUBLIQUE:?Renseignez GED_URL_PUBLIQUE dans .env (par exemple https://ged.cabinet.fr)}
+    command: ["gunicorn", "config.wsgi:application", "--bind", "0.0.0.0:8000", "--workers", "2", "--worker-class", "gthread", "--threads", "4", "--timeout", "120"]
+    depends_on:
+      backend:
+        condition: service_started

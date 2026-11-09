@@ -1,5 +1,33 @@
 # Serveur web de l'application : interface React + relais vers Django.
-:80 {
+#
+# - Site interne (réseau du cabinet) : port 8080 du conteneur, publié sur APP_PORT.
+# - GED sur Internet (facultatif, MODE_GED) : « ip » = adresse publique du cabinet (port 443,
+#   certificat gratuit Let's Encrypt) ; « tunnel » = Cloudflare Tunnel (sites/tunnel).
+#   Ce site public ne sert que le portail des intervenants, relayé vers le service « ged ».
+{
+	# Pas de redirection HTTP → HTTPS : seul le port 443 est ouvert sur la box.
+	auto_https disable_redirects
+	# Tunnel : l'adresse du visiteur est transmise par cloudflared (réseau Docker privé).
+	servers :8081 {
+		trusted_proxies static private_ranges
+		client_ip_headers Cf-Connecting-Ip
+	}
+}
+
+(entetes_communs) {
+	header {
+		X-Content-Type-Options nosniff
+		X-Frame-Options DENY
+		-Server
+	}
+}
+
+# Politique de sécurité du contenu de l'interface : rien d'autre que l'application elle-même.
+(csp) {
+	header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; font-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'"
+}
+
+:8080 {
 	# Les réponses de l'assistant arrivent mot à mot : elles ne sont pas compressées.
 	@compressible not path /api/assistant/*
 	encode @compressible zstd gzip
@@ -8,17 +36,15 @@
 		max_size 1GB
 	}
 
-	header {
-		X-Content-Type-Options nosniff
-		Referrer-Policy strict-origin-when-cross-origin
-		X-Frame-Options DENY
-		-Server
-	}
+	import entetes_communs
+	header Referrer-Policy strict-origin-when-cross-origin
 
 	@django path /api /api/* /admin /admin/* /static/*
 	handle @django {
 		reverse_proxy backend:8000 {
 			flush_interval -1
+			# L'adresse du visiteur n'est transmise que par le site public.
+			header_up -X-Ip-Client
 			transport http {
 				read_timeout 10m
 				write_timeout 10m
@@ -26,9 +52,85 @@
 		}
 	}
 
+	# Portail des intervenants (GED) : application séparée, aussi accessible sur le réseau local.
+	@portail path /ged /ged/*
+	handle @portail {
+		import csp
+		root * /srv
+		rewrite * /ged.html
+		file_server
+	}
+
 	handle {
+		import csp
 		root * /srv
 		try_files {path} /index.html
 		file_server
 	}
 }
+
+# Site public de la GED : uniquement le portail des intervenants.
+(ged_public) {
+	log {
+		output file /journaux/ged-public.log {
+			roll_size 10MiB
+			roll_keep 20
+			roll_keep_for 8760h
+		}
+		format json
+	}
+
+	encode zstd gzip
+	import entetes_communs
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		Referrer-Policy no-referrer
+	}
+
+	# Saisie du code : petite requête seulement.
+	request_body /api/ged/acces {
+		max_size 16KB
+	}
+	request_body {
+		max_size 1GB
+	}
+
+	@api_ged path /api/ged/acces /api/ged/portail /api/ged/portail/*
+	handle @api_ged {
+		reverse_proxy ged:8000 {
+			header_up X-Ip-Client {client_ip}
+			transport http {
+				read_timeout 10m
+				write_timeout 10m
+			}
+		}
+	}
+
+	# Aucune autre adresse de l'application n'est accessible depuis Internet.
+	handle /api/* {
+		respond 404
+	}
+	handle /admin* {
+		respond 404
+	}
+
+	@fichiers path /assets/* /favicon.svg
+	handle @fichiers {
+		root * /srv
+		file_server
+	}
+
+	@portail path /ged /ged/*
+	handle @portail {
+		import csp
+		root * /srv
+		rewrite * /ged.html
+		file_server
+	}
+
+	handle {
+		redir * /ged
+	}
+}
+
+import sites/{$MODE_GED:aucun}/*.caddy

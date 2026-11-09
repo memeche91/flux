@@ -26,7 +26,12 @@ const PARCOURS = [
     detail: "Lecture des DPGF remplies, comparatif ouvrage par ouvrage, notation pondérée, rapport ACT Word et PDF",
     actif: true,
   },
-  { numero: "4", titre: "GED chantier", detail: "Plans, visas, indices, archivage local", actif: false },
+  {
+    numero: "4",
+    titre: "GED chantier",
+    detail: "Codes d'accès par personne, plans et visas par lot, indices et historique, notifications, archivage et purge",
+    actif: true,
+  },
 ];
 
 export default function TableauDeBord() {
@@ -68,12 +73,8 @@ export default function TableauDeBord() {
               className="group flex min-w-0 flex-[1_1_180px] flex-col gap-1.5 rounded-xl border border-bordure bg-surface px-4.5 py-4 text-texte no-underline transition-colors hover:border-bordure-forte hover:bg-surface-2"
             >
               <span className="text-xs text-attenue">{type.libelle}</span>
-              <span className="font-titre text-3xl font-semibold tabular-nums">
-                {stats ? formaterNombre(stats.par_type[type.code]) : "—"}
-              </span>
-              <span className="text-xs text-attenue group-hover:text-texte">
-                {type.parLot ? "Classés par lot" : "Pièces communes"}
-              </span>
+              <span className="font-titre text-3xl font-semibold tabular-nums">{stats ? formaterNombre(stats.par_type[type.code]) : "—"}</span>
+              <span className="text-xs text-attenue group-hover:text-texte">{type.parLot ? "Classés par lot" : "Pièces communes"}</span>
             </Link>
           ))}
         </div>
@@ -86,7 +87,12 @@ export default function TableauDeBord() {
         <div className="flex flex-wrap gap-3">
           {[
             { vers: "/articles?type=CCTP", libelle: "Articles et clauses", valeur: stats?.articles, detail: "Découpés par lot, prêts à réutiliser" },
-            { vers: "/prix", libelle: "Prix de référence", valeur: stats?.lignes_chiffrees, detail: stats ? `Sur ${formaterNombre(stats.lignes_prix)} lignes de DPGF` : "Lignes chiffrées des DPGF" },
+            {
+              vers: "/prix",
+              libelle: "Prix de référence",
+              valeur: stats?.lignes_chiffrees,
+              detail: stats ? `Sur ${formaterNombre(stats.lignes_prix)} lignes de DPGF` : "Lignes chiffrées des DPGF",
+            },
           ].map((tuile) => (
             <Link
               key={tuile.vers}
@@ -94,9 +100,7 @@ export default function TableauDeBord() {
               className="group flex min-w-0 flex-[1_1_260px] flex-col gap-1.5 rounded-xl border border-bordure bg-surface px-4.5 py-4 text-texte no-underline transition-colors hover:border-bordure-forte hover:bg-surface-2"
             >
               <span className="text-xs text-attenue">{tuile.libelle}</span>
-              <span className="font-titre text-3xl font-semibold tabular-nums">
-                {tuile.valeur === undefined ? "—" : formaterNombre(tuile.valeur)}
-              </span>
+              <span className="font-titre text-3xl font-semibold tabular-nums">{tuile.valeur === undefined ? "—" : formaterNombre(tuile.valeur)}</span>
               <span className="text-xs text-attenue group-hover:text-texte">{tuile.detail}</span>
             </Link>
           ))}
@@ -104,10 +108,7 @@ export default function TableauDeBord() {
       </section>
 
       <div className="flex flex-wrap items-start gap-5">
-        <section
-          aria-labelledby="titre-parcours"
-          className="flex min-w-0 flex-[1_1_340px] flex-col gap-4 rounded-xl border border-bordure bg-surface p-5"
-        >
+        <section aria-labelledby="titre-parcours" className="flex min-w-0 flex-[1_1_340px] flex-col gap-4 rounded-xl border border-bordure bg-surface p-5">
           <h2 id="titre-parcours" className="font-titre text-lg font-semibold">
             Parcours de l'application
           </h2>
@@ -122,9 +123,7 @@ export default function TableauDeBord() {
                   >
                     {etape.numero}
                   </span>
-                  {indice < PARCOURS.length - 1 && (
-                    <span aria-hidden="true" className="min-h-4 w-0.5 flex-1 bg-bordure-forte" />
-                  )}
+                  {indice < PARCOURS.length - 1 && <span aria-hidden="true" className="min-h-4 w-0.5 flex-1 bg-bordure-forte" />}
                 </div>
                 <div className="flex flex-col pb-4">
                   <span className="font-semibold">{etape.titre}</span>
@@ -135,17 +134,13 @@ export default function TableauDeBord() {
           </ol>
         </section>
 
-        <section
-          aria-labelledby="titre-demarrer"
-          className="flex min-w-0 flex-[1_1_340px] flex-col gap-4 rounded-xl border border-bordure bg-surface p-5"
-        >
+        <section aria-labelledby="titre-demarrer" className="flex min-w-0 flex-[1_1_340px] flex-col gap-4 rounded-xl border border-bordure bg-surface p-5">
           <h2 id="titre-demarrer" className="font-titre text-lg font-semibold">
             Pour bien démarrer
           </h2>
           <ol className="flex list-decimal flex-col gap-2.5 pl-5 marker:font-semibold marker:text-accent">
             <li>
-              Importez vos anciens <strong>CCTP</strong> lot par lot (un document « tous corps d'état » va dans
-              le lot <em>TCE</em>).
+              Importez vos anciens <strong>CCTP</strong> lot par lot (un document « tous corps d'état » va dans le lot <em>TCE</em>).
             </li>
             <li>
               Importez les <strong>DPGF</strong> correspondantes : elles fourniront vos prix de référence.
@@ -155,8 +150,8 @@ export default function TableauDeBord() {
             </li>
           </ol>
           <p className="text-xs text-attenue">
-            Tous les formats sont lus : Word, Excel, PDF (même scannés, grâce à la reconnaissance de texte), CSV et
-            OpenDocument. Les anciens .doc et .xls sont convertis automatiquement.
+            Tous les formats sont lus : Word, Excel, PDF (même scannés, grâce à la reconnaissance de texte), CSV et OpenDocument. Les anciens .doc et .xls sont
+            convertis automatiquement.
           </p>
         </section>
       </div>

@@ -8,7 +8,7 @@ from django.utils import timezone
 
 from dce.assemblage import nom_sur
 
-from .categories import CATEGORIES, CONFIDENTIELLES, LECTURE_REQUISE, PAR_CODE
+from .categories import APRES_RECEPTION, CATEGORIES, CONFIDENTIELLES, LECTURE_REQUISE, PAR_CODE
 from .droits import (
     Acteur,
     categories_de_depot,
@@ -132,6 +132,7 @@ def intervenant_out(i: Intervenant) -> dict:
     return {
         "id": i.pk, "nom": i.nom, "profil": i.profil, "profil_libelle": i.get_profil_display(), "entreprise_id": i.entreprise_id,
         "lots": [lot_court(l) for l in i.lots.all()], "actif": i.actif, "acces": [acces_out(a) for a in i.acces.all()],
+        "sous_traitant_de": i.sous_traitant_de_id, "voit_confidentielles": i.voit_confidentielles,
     }
 
 
@@ -142,7 +143,10 @@ def droits_out(acteur: Acteur, espace: EspaceChantier) -> dict:
     else:
         lots_visibles = lots
     zones = zones_de_depot(acteur) if espace.statut != StatutEspace.CLOS else []
-    categories = sorted(categories_de_depot(acteur)) if zones else []
+    categories = sorted(
+        c for c in categories_de_depot(acteur)
+        if acteur.cabinet or espace.statut != StatutEspace.RECEPTION or c in APRES_RECEPTION  # après réception : DOE, DIUO, réserves
+    ) if zones else []
     return {
         "zones_visibles": [Zone.COMMUN, Zone.LOT] + ([Zone.MOE] if acteur.maitrise_oeuvre else []),
         "lots": [lot_court(l) for l in lots_visibles],

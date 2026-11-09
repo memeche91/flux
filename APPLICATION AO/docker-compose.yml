@@ -12,9 +12,13 @@ x-backend: &backend
     MEDIA_ROOT: /donnees/fichiers
     OLLAMA_URL: http://ollama:11434
     IA_DOSSIER_MODELES: /donnees/modeles-ia
+    # Archives de fin de chantier : dossier du PC ou partage du serveur du cabinet (DOSSIER_ARCHIVES_PC).
+    DOSSIER_ARCHIVES: /donnees/archives
+    DOSSIER_ARCHIVES_AFFICHE: ${DOSSIER_ARCHIVES_PC:-donnees\archives}
   volumes:
     # Les fichiers importés restent visibles dans le dossier « donnees\fichiers » du PC.
     - ./donnees/fichiers:/donnees/fichiers
+    - ${DOSSIER_ARCHIVES_PC:-./donnees/archives}:/donnees/archives
     # Modèles de voix de l'assistant (transcription et lecture à voix haute).
     - modeles_voix:/donnees/modeles-ia
 
@@ -49,9 +53,11 @@ services:
       redis:
         condition: service_started
 
+  # Tâches de fond et tâches planifiées (--beat) : récapitulatif du matin de la GED, relance des
+  # courriels non partis, purges programmées après archivage.
   worker:
     <<: *backend
-    command: ["celery", "-A", "config", "worker", "--loglevel=info", "--concurrency=2"]
+    command: ["celery", "-A", "config", "worker", "--beat", "--schedule=/tmp/planification", "--loglevel=info", "--concurrency=2"]
     depends_on:
       backend:
         condition: service_started
@@ -79,12 +85,22 @@ services:
   web:
     build: ./frontend
     restart: unless-stopped
+    environment:
+      MODE_GED: ${MODE_GED:-aucun}
+      GED_URL_PUBLIQUE: ${GED_URL_PUBLIQUE:-}
     ports:
-      - "${APP_PORT:-8080}:80"
+      - "${APP_PORT:-8080}:8080"
+    volumes:
+      # Certificats HTTPS de la GED (mode Internet) et journal des connexions publiques.
+      - caddy_donnees:/data
+      - caddy_config:/config
+      - ./donnees/journaux:/journaux
     depends_on:
       - backend
 
 volumes:
   base_donnees:
+  caddy_donnees:
+  caddy_config:
   modeles_ia:
   modeles_voix:
