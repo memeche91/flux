@@ -86,7 +86,8 @@ def classer(lot: LotProjet) -> tuple[AnalyseLot, list[dict], list[LigneClassemen
     for offre in Offre.objects.filter(lot=lot).select_related("entreprise"):
         prix, incomplete = prix_compare(offre, retenues)
         lignes.append(LigneClassement(offre, prix, incomplete))
-    actives = [l for l in lignes if not l.offre.ecartee and l.prix is not None and l.prix > 0]
+    # Une offre qui ne chiffre pas une PSE retenue n'est pas comparable : ni notée ni classée tant qu'elle n'est pas complétée.
+    actives = [l for l in lignes if not l.offre.ecartee and not l.incomplete and l.prix is not None and l.prix > 0]
 
     if actives:
         moyenne = sum((l.prix for l in actives), Decimal("0")) / len(actives)

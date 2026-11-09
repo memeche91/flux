@@ -20,7 +20,12 @@ const PARCOURS = [
     detail: "Annuaire des entreprises, dossier .zip classé, transmission au maître d'ouvrage ou envoi aux entreprises",
     actif: true,
   },
-  { numero: "3", titre: "Analyse des offres", detail: "Comparatif, notation pondérée, rapport ACT", actif: false },
+  {
+    numero: "3",
+    titre: "Analyse des offres",
+    detail: "Lecture des DPGF remplies, comparatif ouvrage par ouvrage, notation pondérée, rapport ACT Word et PDF",
+    actif: true,
+  },
   { numero: "4", titre: "GED chantier", detail: "Plans, visas, indices, archivage local", actif: false },
 ];
 

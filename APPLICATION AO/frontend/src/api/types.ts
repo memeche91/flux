@@ -531,3 +531,108 @@ export interface EtatDCE {
   consultations: ConsultationDCE[];
   envois: EnvoiDCE[];
 }
+
+// --- Étape 3 : analyse des offres -------------------------------------------
+
+export type StatutLectureOffre = "EN_COURS" | "LUE" | "A_VERIFIER" | "NON_LUE" | "MANUELLE";
+export type MethodePrix = "PROPORTIONNELLE" | "LINEAIRE";
+
+export interface NoteCritere {
+  note: number | null;
+  commentaire: string;
+}
+
+export interface OffreAnalyse {
+  id: number;
+  entreprise_id: number;
+  entreprise: string;
+  nom: string;
+  variante: boolean;
+  libelle_variante: string;
+  recue_le: string;
+  nom_original: string;
+  a_un_fichier: boolean;
+  statut_lecture: StatutLectureOffre;
+  statut_libelle: string;
+  message_lecture: string;
+  montant_base: number | null;
+  montant_base_calcule: number | null;
+  montant_base_declare: number | null;
+  montants_options: Record<string, number | null>;
+  delai_propose: string;
+  commentaire: string;
+  ecartee: boolean;
+  motif_ecart: string;
+  notes: Record<string, NoteCritere>;
+  prix: number | null;
+  incomplete: boolean;
+  anormalement_basse: boolean;
+  ecart_estimation: number | null;
+  ecart_moyenne: number | null;
+  notes_calculees: Record<string, number | null>;
+  total: number | null;
+  rang: number | null;
+  notation_complete: boolean;
+}
+
+export interface CritereAnalyse {
+  libelle: string;
+  ponderation: number;
+  prix: boolean;
+}
+
+export interface LotAnalyse {
+  id: number;
+  code: string;
+  intitule: string;
+  options: { id: number; nom: string; libelle: string }[];
+  estimation_base: number | null;
+  estimation_options: Record<string, number | null>;
+  analyse: {
+    methode_prix: MethodePrix;
+    bareme: number;
+    seuil_anormal: number;
+    options_retenues: number[];
+    attributaire_id: number | null;
+    observations: string;
+    validee_le: string | null;
+  };
+  criteres: CritereAnalyse[];
+  offres: OffreAnalyse[];
+  consultees_sans_offre: { entreprise_id: number; entreprise: string; statut: StatutConsultation }[];
+}
+
+export interface EtatOffres {
+  type_marche: "PUBLIC" | "PRIVE";
+  taux_tva: number;
+  lots: LotAnalyse[];
+}
+
+export interface PrixOuvrageOffre {
+  pu: number | null;
+  montant: number | null;
+  quantite: number | null;
+}
+
+export interface LigneComparatif {
+  poste_id: number;
+  numero: string;
+  designation: string;
+  unite: string;
+  quantite: number | null;
+  estimation_pu: number | null;
+  estimation: number | null;
+  offres: Record<string, PrixOuvrageOffre | null>;
+  minimum: number | null;
+  maximum: number | null;
+}
+
+export interface ComparatifLot {
+  sections: {
+    titre: string;
+    option_id: number | null;
+    estimation: number | null;
+    chapitres: { numero: string; titre: string; lignes: LigneComparatif[] }[];
+  }[];
+  hors_dpgf: Record<string, { numero: string; designation: string; montant: number | null }[]>;
+}

@@ -208,6 +208,8 @@ class OffresTests(TestCase):
         offres = self.par_entreprise(etat)
         self.assertEqual(offres["Menuiseries Durand"]["prix"], 17000.0)
         self.assertTrue(offres["Alu Martin"]["incomplete"])
+        self.assertIsNone(offres["Alu Martin"]["rang"])  # PSE retenue non chiffrée : offre non comparable
+        self.assertEqual(offres["Menuiseries Durand"]["rang"], 1)
         self.json("patch", f"/api/offres/{ids['Alu Martin']}", {"montants_options": {str(self.pse.pk): "6000"}})
         self.json("patch", f"/api/offres/{ids['Petit Fermetures']}", {"montants_options": {str(self.pse.pk): "5000"}})
         self.json("patch", f"/api/offres/{ids['Petit Fermetures']}", {"montants_options": {"999999": "1"}}, attendu=400)
@@ -262,6 +264,7 @@ class OffresTests(TestCase):
         self.assertIn("Récapitulatif", texte)
         self.assertIn("Menuiseries Durand", cellules)
         self.assertIn("Valeur technique", cellules)
+        self.assertIn("(TVA 20 %)", texte)
 
         reponse = self.client.get(f"/api/projets/{self.projet.pk}/rapport-act/pdf", {"lot_id": self.lot.pk})
         self.assertEqual(reponse.status_code, 200)

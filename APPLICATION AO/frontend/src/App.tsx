@@ -11,6 +11,7 @@ import EntrepriseFiche from "./pages/EntrepriseFiche";
 import Entreprises from "./pages/Entreprises";
 import Connexion from "./pages/Connexion";
 import LotEditeur from "./pages/LotEditeur";
+import Offres from "./pages/Offres";
 import PieceEditeur from "./pages/PieceEditeur";
 import Prix from "./pages/Prix";
 import ProjetDetail from "./pages/ProjetDetail";
@@ -39,6 +40,7 @@ export default function App() {
             <Route path="entreprises/nouvelle" element={<EntrepriseFiche />} />
             <Route path="entreprises/:entrepriseId" element={<EntrepriseFiche key="fiche" />} />
             <Route path="projets/:projetId/dce" element={<DCE />} />
+            <Route path="projets/:projetId/offres" element={<Offres />} />
             <Route path="projets" element={<Projets />} />
             <Route path="projets/:projetId" element={<ProjetDetail />} />
             <Route path="projets/:projetId/lots/:lotId" element={<LotEditeur />} />

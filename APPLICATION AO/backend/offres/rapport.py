@@ -34,8 +34,16 @@ def _p(texte: str) -> str:
     return f"<p>{escape(texte)}</p>"
 
 
+def _nombre(valeur) -> str:
+    """20 → « 20 », 7.50 → « 7,5 » (sans notation scientifique ni zéros inutiles)."""
+    texte = f"{Decimal(str(valeur)):f}"
+    if "." in texte:
+        texte = texte.rstrip("0").rstrip(".")
+    return texte.replace(".", ",")
+
+
 def _note(valeur) -> str:
-    return "—" if valeur is None else f"{valeur}".replace(".", ",")
+    return "—" if valeur is None else _nombre(valeur)
 
 
 def analyse_lot(lot: LotProjet, numero: int) -> tuple[ChapitreDoc, dict]:
@@ -79,7 +87,7 @@ def analyse_lot(lot: LotProjet, numero: int) -> tuple[ChapitreDoc, dict]:
         if l.offre.ecartee:
             remarques.append("écartée")
         if l.incomplete:
-            remarques.append("incomplète (PSE non chiffrée)")
+            remarques.append("incomplète (PSE retenue non chiffrée) : non classée")
         if l.anormalement_basse:
             remarques.append(f"<strong>prix anormalement bas à vérifier</strong> (au moins {analyse.seuil_anormal} % sous la moyenne ou l'estimation)")
         contenu.append([escape(l.offre.nom), _euros(l.prix), _pourcentage(l.ecart_estimation), _pourcentage(l.ecart_moyenne), ", ".join(remarques) or "—"])
@@ -102,13 +110,13 @@ def analyse_lot(lot: LotProjet, numero: int) -> tuple[ChapitreDoc, dict]:
                     continue
                 saisie = l.offre.notes.get(critere["libelle"]) or {}
                 contenu.append([escape(l.offre.nom), f"{_note(l.notes.get(critere['libelle']))} / {analyse.bareme}", escape(saisie.get("commentaire") or "—")])
-            texte += f"<p><strong>{escape(critere['libelle'])}</strong> ({critere['ponderation']} %)</p>" + _tableau(["Entreprise", "Note", "Appréciation"], contenu)
+            texte += f"<p><strong>{escape(critere['libelle'])}</strong> ({_nombre(critere['ponderation'])} %)</p>" + _tableau(["Entreprise", "Note", "Appréciation"], contenu)
         chapitre.elements.append(ElementDoc(f"lot-{lot.pk}-technique", f"{numero}.3 Analyse technique", texte))
 
     # Classement
     classees = sorted((l for l in lignes if l.rang), key=lambda l: l.rang)
     if criteres and classees:
-        entetes = ["Rang", "Entreprise"] + [f"{c['libelle']} ({c['ponderation']} %)" for c in criteres] + ["Total / 100"]
+        entetes = ["Rang", "Entreprise"] + [f"{c['libelle']} ({_nombre(c['ponderation'])} %)" for c in criteres] + ["Total / 100"]
         contenu = [
             [str(l.rang), escape(l.offre.nom)] + [f"{_note(l.notes.get(c['libelle']))} / {analyse.bareme}" for c in criteres] + [f"<strong>{_note(l.total)}</strong>"]
             for l in classees
@@ -126,7 +134,7 @@ def analyse_lot(lot: LotProjet, numero: int) -> tuple[ChapitreDoc, dict]:
         ttc = (attributaire.prix or Decimal("0")) * (1 + taux / 100)
         texte = _p(
             f"Au vu de l'analyse, il est proposé de retenir l'offre de {attributaire.offre.nom} pour un montant de "
-            f"{_euros(attributaire.prix)} HT, soit {_euros(ttc)} TTC (TVA {str(taux.normalize()).replace('.', ',')} %)"
+            f"{_euros(attributaire.prix)} HT, soit {_euros(ttc)} TTC (TVA {_nombre(taux)} %)"
             + (f", PSE retenues comprises ({', '.join(o.nom_court for o in retenues)})." if retenues else ".")
         )
         if analyse.observations:

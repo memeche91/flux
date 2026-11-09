@@ -152,6 +152,20 @@ export default function ProjetDetail() {
         </span>
       </Link>
 
+      <Link
+        to={`/projets/${p.id}/offres`}
+        className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-accent/40 bg-accent/8 px-5 py-4 text-texte no-underline hover:bg-accent/12"
+      >
+        <span className="flex min-w-0 flex-col gap-0.5">
+          <span className="font-titre text-lg font-semibold">Analyse des offres (ACT)</span>
+          <span className="text-sm text-attenue">Offres reçues, comparatif ouvrage par ouvrage, notation pondérée et rapport d'analyse Word ou PDF.</span>
+        </span>
+        <span className="flex min-h-11 items-center gap-2 rounded-lg bg-accent px-4 font-bold text-sur-accent">
+          Analyser les offres
+          <ArrowRight aria-hidden="true" className="size-4" />
+        </span>
+      </Link>
+
       <ConsultationFormulaire projetId={p.id} />
 
       <FormulaireProjet projet={p} surEnregistre={projet.recharger} />
