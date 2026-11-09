@@ -7,6 +7,7 @@ from articles.models import Article, Categorie, LignePrix
 from articles.normalisation import detecter_lot, separer_numero
 from bibliotheque.models import DocumentReference, TypeDocument
 
+from . import ordre
 from .html import texte_vers_html
 from .models import GenrePoste, LotProjet, Poste
 
@@ -17,64 +18,22 @@ def postes_ordonnes(lot: LotProjet) -> list[Poste]:
     return list(lot.postes.order_by("ordre", "id"))
 
 
-def renumeroter(postes: list[Poste]) -> None:
-    for indice, poste in enumerate(postes):
-        poste.ordre = (indice + 1) * 10
-    Poste.objects.bulk_update(postes, ["ordre"])
-
-
 def creer_chapitres_par_defaut(lot: LotProjet) -> None:
     Poste.objects.bulk_create(
         [Poste(lot=lot, genre=GenrePoste.CHAPITRE, titre=titre, ordre=(i + 1) * 10) for i, titre in enumerate(CHAPITRES_PAR_DEFAUT)]
     )
 
 
-@transaction.atomic
 def inserer(lot: LotProjet, nouveaux: list[Poste], apres: Poste | None = None) -> None:
     """Insère des postes (non enregistrés) après « apres », ou à la fin du lot."""
-    postes = postes_ordonnes(lot)
-    position = len(postes)
-    if apres is not None:
-        position = next((i + 1 for i, p in enumerate(postes) if p.pk == apres.pk), len(postes))
     for poste in nouveaux:
         poste.lot = lot
-        poste.ordre = 0
-    Poste.objects.bulk_create(nouveaux)
-    renumeroter(postes[:position] + nouveaux + postes[position:])
+    ordre.inserer(postes_ordonnes(lot), nouveaux, apres.pk if apres is not None else None)
 
 
-@transaction.atomic
 def deplacer(poste: Poste, sens: str) -> None:
     """Monte ou descend un poste ; un chapitre se déplace avec tout son contenu."""
-    postes = postes_ordonnes(poste.lot)
-    i = next(indice for indice, p in enumerate(postes) if p.pk == poste.pk)
-    n = len(postes)
-    if poste.genre != GenrePoste.CHAPITRE:
-        voisin = i - 1 if sens == "haut" else i + 1
-        if 0 <= voisin < n:
-            postes[i], postes[voisin] = postes[voisin], postes[i]
-            renumeroter(postes)
-        return
-
-    fin = i + 1
-    while fin < n and postes[fin].genre != GenrePoste.CHAPITRE:
-        fin += 1
-    bloc = postes[i:fin]
-    if sens == "haut":
-        if i == 0:
-            return
-        debut_precedent = i - 1
-        while debut_precedent > 0 and postes[debut_precedent].genre != GenrePoste.CHAPITRE:
-            debut_precedent -= 1
-        nouvel_ordre = postes[:debut_precedent] + bloc + postes[debut_precedent:i] + postes[fin:]
-    else:
-        if fin >= n:
-            return
-        fin_suivant = fin + 1
-        while fin_suivant < n and postes[fin_suivant].genre != GenrePoste.CHAPITRE:
-            fin_suivant += 1
-        nouvel_ordre = postes[:i] + postes[fin:fin_suivant] + bloc + postes[fin_suivant:]
-    renumeroter(nouvel_ordre)
+    ordre.deplacer(postes_ordonnes(poste.lot), poste, sens)
 
 
 def _titre_chapitre(rubrique: str, par_defaut: str) -> str:

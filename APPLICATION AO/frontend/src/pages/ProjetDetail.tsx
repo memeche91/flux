@@ -6,6 +6,8 @@ import { api } from "../api/client";
 import type { Lot, Police, Projet } from "../api/types";
 import EnTetePage from "../components/EnTetePage";
 import { CLASSE_CHAMP, Champ } from "../components/Filtres";
+import ConsultationFormulaire from "../components/pieces/ConsultationFormulaire";
+import PiecesAdministratives from "../components/pieces/PiecesAdministratives";
 import { formaterEuros, pluriel } from "../lib/format";
 import { useRequete } from "../lib/useRequete";
 
@@ -129,6 +131,10 @@ export default function ProjetDetail() {
           </ul>
         )}
       </section>
+
+      <PiecesAdministratives projetId={p.id} typeMarche={p.type_marche} lots={p.lots} />
+
+      <ConsultationFormulaire projetId={p.id} />
 
       <FormulaireProjet projet={p} surEnregistre={projet.recharger} />
 

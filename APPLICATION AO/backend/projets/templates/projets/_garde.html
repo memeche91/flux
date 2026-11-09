@@ -3,13 +3,12 @@
   <h1 class="garde-operation">{{ projet.nom }}</h1>
   {% if projet.adresse_operation %}<p class="garde-adresse">{{ projet.adresse_operation|linebreaksbr }}</p>{% endif %}
   <div class="garde-bandeau">
-    <div class="garde-piece">{{ titre_piece|default:garde.titre_piece }}</div>
-    <div class="garde-lot">Lot {{ lot.code }} – {{ lot.intitule }}</div>
+    <div class="garde-piece">{{ document.titre_piece }}</div>
+    {% if document.sous_titre %}<div class="garde-lot">{{ document.sous_titre }}</div>{% endif %}
   </div>
   <table class="garde-infos">
-    {% for libelle, valeur in garde.lignes_operation %}<tr><th>{{ libelle }}</th><td>{{ valeur|linebreaksbr }}</td></tr>{% endfor %}
+    {% for libelle, valeur in document.lignes_operation %}<tr><th>{{ libelle }}</th><td>{{ valeur|linebreaksbr }}</td></tr>{% endfor %}
     <tr><th>Phase</th><td>{{ projet.phase }} – indice {{ projet.indice }}</td></tr>
-    <tr><th>Date</th><td>{{ garde.date }}</td></tr>
+    <tr><th>Date</th><td>{{ document.date }}</td></tr>
   </table>
-  {% block apres_garde %}{% endblock %}
 </section>

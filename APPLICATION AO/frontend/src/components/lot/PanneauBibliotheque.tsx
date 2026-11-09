@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 
 import { api } from "../../api/client";
-import type { Article, DocumentReference, Lot, PageArticles } from "../../api/types";
+import type { Article, DocumentReference, Lot, PageArticles, TypeDocument } from "../../api/types";
 import { origineDocument, pluriel } from "../../lib/format";
 import { useRequete } from "../../lib/useRequete";
 import { CLASSE_CHAMP, delaiSaisie } from "../Filtres";
@@ -11,9 +11,12 @@ interface Proprietes {
   surInsertion: (articleId: number) => Promise<void>;
   surReprise: (document: DocumentReference) => Promise<void>;
   occupe: boolean;
+  /** CCTP (articles, par lot) ou pièce administrative (clauses du même type de document). */
+  typeDocument?: TypeDocument;
 }
 
-export default function PanneauBibliotheque({ lotReferenceId, surInsertion, surReprise, occupe }: Proprietes) {
+export default function PanneauBibliotheque({ lotReferenceId, surInsertion, surReprise, occupe, typeDocument = "CCTP" }: Proprietes) {
+  const mot = typeDocument === "CCTP" ? "article" : "clause";
   const [onglet, setOnglet] = useState<"articles" | "documents">("articles");
 
   return (
@@ -24,7 +27,7 @@ export default function PanneauBibliotheque({ lotReferenceId, surInsertion, surR
       <div role="tablist" aria-label="Source" className="flex gap-1 rounded-lg bg-fond p-1">
         {(
           [
-            ["articles", "Insérer un article"],
+            ["articles", `Insérer un${mot === "clause" ? "e" : ""} ${mot}`],
             ["documents", "Reprendre un document"],
           ] as const
         ).map(([cle, libelle]) => (
@@ -41,15 +44,26 @@ export default function PanneauBibliotheque({ lotReferenceId, surInsertion, surR
         ))}
       </div>
       {onglet === "articles" ? (
-        <RechercheArticles lotReferenceId={lotReferenceId} surInsertion={surInsertion} occupe={occupe} />
+        <RechercheArticles lotReferenceId={lotReferenceId} surInsertion={surInsertion} occupe={occupe} typeDocument={typeDocument} />
       ) : (
-        <DocumentsDuLot lotReferenceId={lotReferenceId} surReprise={surReprise} occupe={occupe} />
+        <DocumentsDuLot lotReferenceId={lotReferenceId} surReprise={surReprise} occupe={occupe} typeDocument={typeDocument} />
       )}
     </section>
   );
 }
 
-function RechercheArticles({ lotReferenceId, surInsertion, occupe }: { lotReferenceId: number | null; surInsertion: (id: number) => Promise<void>; occupe: boolean }) {
+function RechercheArticles({
+  lotReferenceId,
+  surInsertion,
+  occupe,
+  typeDocument,
+}: {
+  lotReferenceId: number | null;
+  surInsertion: (id: number) => Promise<void>;
+  occupe: boolean;
+  typeDocument: TypeDocument;
+}) {
+  const mot = typeDocument === "CCTP" ? "article" : "clause";
   const [recherche, setRecherche] = useState("");
   const [appliquee, setAppliquee] = useState("");
   const [tousLesLots, setTousLesLots] = useState(lotReferenceId == null);
@@ -58,7 +72,7 @@ function RechercheArticles({ lotReferenceId, surInsertion, occupe }: { lotRefere
   useEffect(() => delaiSaisie(() => setAppliquee(recherche.trim())), [recherche]);
 
   useEffect(() => {
-    const filtres = new URLSearchParams({ type_document: "CCTP", page: "1" });
+    const filtres = new URLSearchParams({ type_document: typeDocument, page: "1" });
     if (!tousLesLots && lotReferenceId) filtres.set("lot_id", String(lotReferenceId));
     if (categorie) filtres.set("categorie", categorie);
     if (appliquee) filtres.set("recherche", appliquee);
@@ -67,23 +81,27 @@ function RechercheArticles({ lotReferenceId, surInsertion, occupe }: { lotRefere
     return () => {
       actif = false;
     };
-  }, [appliquee, tousLesLots, categorie, lotReferenceId]);
+  }, [appliquee, tousLesLots, categorie, lotReferenceId, typeDocument]);
 
   return (
     <div className="flex flex-col gap-2">
       <label htmlFor="recherche-article-lot" className="sr-only">
-        Rechercher un article
+        Rechercher dans ma bibliothèque
       </label>
-      <input id="recherche-article-lot" type="search" value={recherche} onChange={(e) => setRecherche(e.target.value)} placeholder="Rechercher un article…" className={CLASSE_CHAMP} />
+      <input id="recherche-article-lot" type="search" value={recherche} onChange={(e) => setRecherche(e.target.value)} placeholder={mot === "article" ? "Rechercher un article…" : "Rechercher une clause…"} className={CLASSE_CHAMP} />
       <div className="flex flex-wrap items-center gap-2">
-        <label htmlFor="categorie-article-lot" className="sr-only">
-          Catégorie
-        </label>
-        <select id="categorie-article-lot" value={categorie} onChange={(e) => setCategorie(e.target.value)} className={`${CLASSE_CHAMP} flex-1`}>
-          <option value="">Toutes catégories</option>
-          <option value="GENERALITES">Généralités</option>
-          <option value="OUVRAGE">Ouvrages</option>
-        </select>
+        {typeDocument === "CCTP" && (
+          <>
+            <label htmlFor="categorie-article-lot" className="sr-only">
+              Catégorie
+            </label>
+            <select id="categorie-article-lot" value={categorie} onChange={(e) => setCategorie(e.target.value)} className={`${CLASSE_CHAMP} flex-1`}>
+              <option value="">Toutes catégories</option>
+              <option value="GENERALITES">Généralités</option>
+              <option value="OUVRAGE">Ouvrages</option>
+            </select>
+          </>
+        )}
         {lotReferenceId && (
           <label className="flex min-h-11 cursor-pointer items-center gap-2 text-xs">
             <input type="checkbox" checked={tousLesLots} onChange={(e) => setTousLesLots(e.target.checked)} className="size-4 accent-accent" />
@@ -92,7 +110,7 @@ function RechercheArticles({ lotReferenceId, surInsertion, occupe }: { lotRefere
         )}
       </div>
       <p className="text-xs text-attenue" aria-live="polite">
-        {page ? pluriel(page.total, "article") : "Chargement…"} · insertion après l'élément sélectionné
+        {page ? pluriel(page.total, mot) : "Chargement…"} · insertion après l'élément sélectionné
       </p>
       <ul className="flex max-h-[52vh] flex-col gap-1.5 overflow-y-auto">
         {(page?.resultats ?? []).map((article) => (
@@ -125,25 +143,38 @@ function CarteArticleLot({ article, surInsertion, occupe }: { article: Article; 
           onClick={() => void surInsertion(article.id)}
           className="min-h-10 self-start rounded-lg bg-accent px-3 text-sm font-bold text-sur-accent hover:bg-accent-clair disabled:opacity-50"
         >
-          Insérer dans le lot
+          Insérer ici
         </button>
       </div>
     </details>
   );
 }
 
-function DocumentsDuLot({ lotReferenceId, surReprise, occupe }: { lotReferenceId: number | null; surReprise: (d: DocumentReference) => Promise<void>; occupe: boolean }) {
+function DocumentsDuLot({
+  lotReferenceId,
+  surReprise,
+  occupe,
+  typeDocument,
+}: {
+  lotReferenceId: number | null;
+  surReprise: (d: DocumentReference) => Promise<void>;
+  occupe: boolean;
+  typeDocument: TypeDocument;
+}) {
   const lots = useRequete<Lot[]>("/referentiel/lots");
   const codeTce = lots.donnees?.find((l) => l.code === "TCE")?.id;
   const [documents, setDocuments] = useState<DocumentReference[] | null>(null);
 
   useEffect(() => {
     if (!lots.donnees) return;
-    const requetes = ["CCTP", "DPGF"].flatMap((type) =>
-      [lotReferenceId, codeTce]
-        .filter((id): id is number => id != null)
-        .map((id) => api<DocumentReference[]>(`/bibliotheque/documents?type_document=${type}&lot_id=${id}`)),
-    );
+    const requetes =
+      typeDocument === "CCTP"
+        ? ["CCTP", "DPGF"].flatMap((type) =>
+            [lotReferenceId, codeTce]
+              .filter((id): id is number => id != null)
+              .map((id) => api<DocumentReference[]>(`/bibliotheque/documents?type_document=${type}&lot_id=${id}`)),
+          )
+        : [api<DocumentReference[]>(`/bibliotheque/documents?type_document=${typeDocument}`)];
     if (requetes.length === 0) {
       setDocuments([]);
       return;
@@ -155,17 +186,21 @@ function DocumentsDuLot({ lotReferenceId, surReprise, occupe }: { lotReferenceId
     return () => {
       actif = false;
     };
-  }, [lots.donnees, lotReferenceId, codeTce]);
+  }, [lots.donnees, lotReferenceId, codeTce, typeDocument]);
 
   return (
     <div className="flex flex-col gap-2">
       <p className="text-xs text-attenue">
-        Reprenez d'un coup un ancien CCTP (articles) ou une ancienne DPGF (ouvrages chiffrés) de ce lot ; tout est ajouté à la fin du lot et reste modifiable.
+        {typeDocument === "CCTP"
+          ? "Reprenez d'un coup un ancien CCTP (articles) ou une ancienne DPGF (ouvrages chiffrés) de ce lot ; tout est ajouté à la fin du lot et reste modifiable."
+          : "Reprenez d'un coup toutes les clauses d'un ancien document ; elles sont ajoutées après l'élément sélectionné et restent modifiables."}
       </p>
       {documents === null ? (
         <p className="text-attenue">Chargement…</p>
       ) : documents.length === 0 ? (
-        <p className="text-attenue">Aucun CCTP ni DPGF analysé pour ce lot dans la bibliothèque.</p>
+        <p className="text-attenue">
+          {typeDocument === "CCTP" ? "Aucun CCTP ni DPGF analysé pour ce lot dans la bibliothèque." : "Aucun document de ce type analysé dans la bibliothèque."}
+        </p>
       ) : (
         <ul className="flex max-h-[52vh] flex-col gap-1.5 overflow-y-auto">
           {documents.map((document) => (

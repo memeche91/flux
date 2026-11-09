@@ -238,3 +238,89 @@ export interface LotDetail {
   postes: Poste[];
   total_base: number;
 }
+
+// --- Pièces administratives (étape 1.3) ---
+
+export type TypePiece = "CCAP" | "RC" | "AE";
+export type GenreClause = "CHAPITRE" | "ARTICLE";
+
+export interface Critere {
+  libelle: string;
+  ponderation: number;
+}
+
+export interface Consultation {
+  date_limite_offres: string | null;
+  duree_validite_offres: number;
+  delai_execution: string;
+  date_debut_travaux: string;
+  visite: "SANS_OBJET" | "FACULTATIVE" | "OBLIGATOIRE";
+  modalites_visite: string;
+  variantes_autorisees: boolean;
+  forme_prix: "FERME_ACTUALISABLE" | "REVISABLE";
+  index_reference: string;
+  taux_retenue_garantie: number | string;
+  taux_avance: number | string;
+  penalites_retard: string;
+  profil_acheteur: string;
+  contact: string;
+  criteres: Critere[];
+}
+
+export interface LotCourt {
+  id: number;
+  code: string;
+  intitule: string;
+}
+
+export interface PieceResume {
+  id: number;
+  type_piece: TypePiece;
+  titre: string;
+  origine: string;
+  lot: LotCourt | null;
+  nb_clauses: number;
+  modifie_le: string;
+}
+
+export interface Clause {
+  id: number;
+  genre: GenreClause;
+  numero: string;
+  titre: string;
+  contenu: string;
+  article_source_id: number | null;
+}
+
+export interface PieceDetail {
+  id: number;
+  type_piece: TypePiece;
+  titre: string;
+  origine: string;
+  lot: LotCourt | null;
+  projet: { id: number; nom: string; type_marche: "PUBLIC" | "PRIVE" };
+  clauses: Clause[];
+}
+
+export interface Modele {
+  id: string;
+  nom: string;
+  type_piece: TypePiece;
+  marche: "PUBLIC" | "PRIVE";
+  origine: "BASE" | "CABINET";
+  nb_clauses: number;
+}
+
+export interface ChampPiece {
+  cle: string;
+  libelle: string;
+  apercu: string;
+  renseigne: boolean;
+  bloc: boolean;
+}
+
+export const NOMS_PIECES: Record<TypePiece, string> = {
+  CCAP: "CCAP",
+  RC: "Règlement de consultation",
+  AE: "Acte d'engagement",
+};

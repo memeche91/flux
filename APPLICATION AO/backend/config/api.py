@@ -7,6 +7,7 @@ from bibliotheque.api import router as bibliotheque_router
 from comptes.api import router as comptes_router
 from comptes.securite import session_bureau_etudes
 from projets.api import router as projets_router
+from projets.api_pieces import router as pieces_router
 from referentiel.api import router as referentiel_router
 
 api = NinjaAPI(
@@ -22,3 +23,4 @@ api.add_router("/referentiel", referentiel_router)
 api.add_router("/bibliotheque", bibliotheque_router)
 api.add_router("", articles_router)
 api.add_router("", projets_router)
+api.add_router("", pieces_router)

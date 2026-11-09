@@ -61,15 +61,22 @@ const EXTENSIONS = [
 const POLICES = ["Arial", "Calibri", "Times New Roman"];
 const TAILLES = ["8pt", "9pt", "10pt", "11pt", "12pt", "14pt", "16pt"];
 
+export interface ChampInserable {
+  cle: string;
+  libelle: string;
+}
+
 interface Proprietes {
   valeur: string;
   surChangement: (html: string) => void;
   police: string;
   taille: number;
   libelle: string;
+  /** Champs automatiques proposés à l'insertion (pièces administratives). */
+  champs?: ChampInserable[];
 }
 
-export default function EditeurRiche({ valeur, surChangement, police, taille, libelle }: Proprietes) {
+export default function EditeurRiche({ valeur, surChangement, police, taille, libelle, champs }: Proprietes) {
   // Le contenu n'est lu qu'à la création : l'éditeur est ensuite la seule source de vérité
   // (le composant est recréé quand on change d'élément, grâce à sa clé).
   const [contenuInitial] = useState(valeur);
@@ -83,7 +90,7 @@ export default function EditeurRiche({ valeur, surChangement, police, taille, li
 
   return (
     <div className="flex flex-col overflow-hidden rounded-lg border border-bordure-forte">
-      {editeur && <BarreOutils editeur={editeur} />}
+      {editeur && <BarreOutils editeur={editeur} champs={champs} />}
       <div
         className="editeur-page max-h-[60vh] min-h-56 overflow-y-auto bg-white px-6 py-5 text-[#1a1a1a]"
         style={{ fontFamily: `"${police}", "Liberation Sans", Arial, sans-serif`, fontSize: `${taille}pt` }}
@@ -94,7 +101,7 @@ export default function EditeurRiche({ valeur, surChangement, police, taille, li
   );
 }
 
-function BarreOutils({ editeur }: { editeur: Editor }) {
+function BarreOutils({ editeur, champs }: { editeur: Editor; champs?: ChampInserable[] }) {
   const etat = useEditorState({
     editor: editeur,
     selector: ({ editor }) => ({
@@ -169,6 +176,23 @@ function BarreOutils({ editeur }: { editeur: Editor }) {
         <Bouton libelle="Insérer un tableau" actif={false} surClic={() => chaine().insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run()}>
           <IconeTableau className="size-4" />
         </Bouton>
+        {champs && champs.length > 0 && (
+          <select
+            aria-label="Insérer un champ automatique"
+            value=""
+            onChange={(e) => {
+              if (e.target.value) chaine().insertContent(`{{${e.target.value}}}`).run();
+            }}
+            className="h-10 max-w-48 rounded-md border border-accent/50 bg-fond px-2 text-xs text-accent"
+          >
+            <option value="">Insérer un champ…</option>
+            {champs.map((c) => (
+              <option key={c.cle} value={c.cle}>
+                {c.libelle}
+              </option>
+            ))}
+          </select>
+        )}
         <Bouton libelle="Annuler" actif={false} desactive={!etat.peutAnnuler} surClic={() => chaine().undo().run()}><Undo2 className="size-4" /></Bouton>
         <Bouton libelle="Rétablir" actif={false} desactive={!etat.peutRetablir} surClic={() => chaine().redo().run()}><Redo2 className="size-4" /></Bouton>
       </div>

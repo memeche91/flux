@@ -1,4 +1,4 @@
-"""Export du CCTP d'un lot au format Word (.docx).
+"""Export d'une pièce écrite (CCTP, CCAP, RC, acte d'engagement) au format Word (.docx).
 
 Page de garde, sommaire automatique (champ TOC mis à jour par Word à l'ouverture),
 titres numérotés (styles Titre 1 / Titre 2), descriptions mises en forme,
@@ -17,7 +17,7 @@ from docx.oxml.ns import qn
 from docx.shared import Cm, Pt, RGBColor
 
 from ..structure import StructureLot
-from .commun import page_de_garde
+from .document import DocumentExport, document_cctp
 from .html_docx import ConvertisseurHtmlDocx, ombrer
 
 
@@ -72,8 +72,12 @@ def _mettre_a_jour_champs_a_l_ouverture(document):
 
 
 def exporter_cctp_docx(structure: StructureLot) -> bytes:
-    projet = structure.lot.projet
-    garde = page_de_garde(structure, "Cahier des Clauses Techniques Particulières", "CCTP")
+    return exporter_docx(document_cctp(structure))
+
+
+def exporter_docx(doc: DocumentExport) -> bytes:
+    """Pièce écrite au format Word : page de garde, sommaire, titres numérotés, pied de page paginé."""
+    projet = doc.projet
     couleur = projet.couleur_titres.lstrip("#").upper()
     couleur_tableaux = projet.couleur_tableaux.lstrip("#").upper()
 
@@ -113,7 +117,9 @@ def exporter_cctp_docx(structure: StructureLot) -> bytes:
     bandeau.alignment = WD_TABLE_ALIGNMENT.CENTER
     cellule = bandeau.cell(0, 0)
     ombrer(cellule._tc.get_or_add_tcPr(), couleur)
-    for texte, taille in ((garde.titre_piece.upper(), 16), (f"LOT {garde.lot_code} – {garde.lot_intitule.upper()}", 14)):
+    for texte, taille in ((doc.titre_piece.upper(), 16), (doc.sous_titre.upper(), 14)):
+        if not texte:
+            continue
         p = cellule.paragraphs[0] if not cellule.paragraphs[0].text else cellule.add_paragraph()
         p.alignment = WD_ALIGN_PARAGRAPH.CENTER
         p.paragraph_format.space_before = Pt(8)
@@ -126,7 +132,7 @@ def exporter_cctp_docx(structure: StructureLot) -> bytes:
 
     tableau = document.add_table(rows=0, cols=2)
     tableau.style = "Table Grid"
-    for libelle, valeur in [*garde.lignes_operation, ("Phase", f"{projet.phase} – indice {projet.indice}"), ("Date", garde.date)]:
+    for libelle, valeur in [*doc.lignes_operation, ("Phase", f"{projet.phase} – indice {projet.indice}"), ("Date", doc.date)]:
         cellules = tableau.add_row().cells
         ombrer(cellules[0]._tc.get_or_add_tcPr(), couleur_tableaux)
         cellules[0].paragraphs[0].add_run(libelle).bold = True
@@ -143,31 +149,34 @@ def exporter_cctp_docx(structure: StructureLot) -> bytes:
     for position in (Cm(8.255), Cm(16.51)):  # taquets du modèle Word par défaut
         taquets.add_tab_stop(position, WD_TAB_ALIGNMENT.CLEAR)
     taquets.add_tab_stop(largeur_texte, WD_TAB_ALIGNMENT.RIGHT)
-    pied.text = f"{projet.nom} – CCTP lot {garde.lot_code} – indice {projet.indice}\tPage "
+    pied.text = f"{doc.pied}\tPage "
     pied.style.font.size = Pt(8)
     _champ(pied, "PAGE", "1")
     pied.add_run(" / ")
     _champ(pied, "NUMPAGES", "1")
 
-    document.add_paragraph("Sommaire", style="Title")
-    entrees = []
-    for chapitre in structure.chapitres:
-        if chapitre.titre:
-            entrees.append(f"{chapitre.numero} {chapitre.titre}")
-        entrees.extend(f"    {e.numero} {e.titre_cctp}" for e in chapitre.elements)
-    sommaire = document.add_paragraph()
-    _champ(sommaire, 'TOC \\o "1-2" \\h \\z \\u', "\n".join(entrees) or "Mettez à jour le sommaire (F9).")
-    sommaire.add_run().add_break(WD_BREAK.PAGE)
+    if doc.sommaire:
+        document.add_paragraph("Sommaire", style="Title")
+        entrees = []
+        for chapitre in doc.chapitres:
+            if chapitre.intitule:
+                entrees.append(chapitre.intitule)
+            entrees.extend(f"    {e.intitule}" for e in chapitre.elements)
+        sommaire = document.add_paragraph()
+        _champ(sommaire, 'TOC \\o "1-2" \\h \\z \\u', "\n".join(entrees) or "Mettez à jour le sommaire (F9).")
+        sommaire.add_run().add_break(WD_BREAK.PAGE)
 
     # --- Contenu ---
     convertisseur = ConvertisseurHtmlDocx(document, couleur_entetes=couleur_tableaux)
-    for chapitre in structure.chapitres:
-        if chapitre.titre:
-            document.add_heading(f"{chapitre.numero} {chapitre.titre}", level=1)
+    for chapitre in doc.chapitres:
+        if chapitre.intitule:
+            document.add_heading(chapitre.intitule, level=1)
+        if chapitre.html:
+            convertisseur.ajouter(chapitre.html)
         for element in chapitre.elements:
-            document.add_heading(f"{element.numero} {element.titre_cctp}", level=2)
-            if element.poste.description:
-                convertisseur.ajouter(element.poste.description)
+            document.add_heading(element.intitule, level=2)
+            if element.html:
+                convertisseur.ajouter(element.html)
 
     _mettre_a_jour_champs_a_l_ouverture(document)
     flux = io.BytesIO()

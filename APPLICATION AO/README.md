@@ -3,7 +3,7 @@
 Application web pour gérer les appels d'offres de A à Z : pièces écrites (CCTP, DPGF, CCAP, RC, AE), DCE, analyse des offres (rapport ACT) et GED de chantier.
 L'application est **100 % gratuite et open source**. Elle tourne sur un poste ou un serveur du cabinet, et aucune donnée n'est envoyée sur Internet.
 
-> **Version actuelle : étape 1.2.** Bibliothèque documentaire, articles et prix de référence (étapes 1.0 et 1.1), et maintenant **rédaction du CCTP et de la DPGF de chaque lot** : éditeur visuel, PSE et variantes, reprise d'un ancien CCTP ou d'une ancienne DPGF, exports **Word, PDF et Excel** avec page de garde, sommaire et récapitulatif.
+> **Version actuelle : étape 1.3.** Bibliothèque documentaire, articles et prix de référence (étapes 1.0 et 1.1), rédaction du CCTP et de la DPGF de chaque lot (étape 1.2), et maintenant les **pièces administratives : CCAP, règlement de consultation et un acte d'engagement par lot**, à partir de modèles (marché public ou privé), de vos anciens documents ou d'une page blanche, avec des **champs automatiques** remplis par les paramètres de la consultation et des exports **Word et PDF**.
 
 ---
 
@@ -105,11 +105,27 @@ La sauvegarde et l'archivage complet (export du chantier sur le PC ou le serveur
 - **Mise en page** par projet : police (Arial, Calibri, Times New Roman), taille, couleur des titres, fond des en-têtes de tableaux.
 - Raccourci **Ctrl+S** pour enregistrer.
 
+### Pièces administratives : CCAP, RC et actes d'engagement
+
+- **Paramètres de la consultation** (sur la page du projet) : date et heure limites de remise des offres, validité des offres, délai d'exécution, démarrage prévisionnel, visite du site, variantes, forme des prix et index de référence, retenue de garantie, avance, pénalités de retard, profil d'acheteur, contact, et **critères de jugement des offres** pondérés (le total doit faire 100 %).
+- Un **CCAP** et un **RC** communs à tous les lots, et **un acte d'engagement par lot** (bouton pour créer d'un coup tous les actes d'engagement manquants).
+- Point de départ au choix :
+  - un **modèle de base** (marché public ou privé, celui qui correspond au projet est proposé en premier) ;
+  - un **modèle du cabinet** : bouton **Enregistrer comme modèle** sur n'importe quelle pièce ;
+  - un **ancien CCAP, RC ou AE** de votre bibliothèque, repris clause par clause ;
+  - une page blanche.
+- **Champs automatiques** : `{{nom_operation}}`, `{{maitre_ouvrage}}`, `{{date_limite_offres}}`, `{{criteres_jugement}}`, `{{liste_lots}}`, `{{lot_intitule}}`… s'insèrent depuis l'éditeur et sont remplacés à l'export par les données du projet, du lot et de la consultation. Le panneau **Champs** liste ceux qui restent à compléter ; à l'export, une valeur manquante apparaît surlignée « [à compléter : …] ».
+- Les clauses sont numérotées automatiquement (« Article 3 – Prix », « 3.1 Forme des prix ») et se déplacent avec leurs sous-articles.
+- **Ma bibliothèque** dans l'éditeur : insérer une clause de vos anciens documents du même type.
+
+> Les modèles de base sont un point de départ : relisez-les et adaptez-les à chaque opération. Leurs références (code de la commande publique, CCAG-Travaux 2021, Code civil, norme NF P 03-001) ont été vérifiées à la date de leur rédaction ; contrôlez-les sur [Légifrance](https://www.legifrance.gouv.fr) avant chaque consultation.
+
 **Exports**
 
 | Pièce | Formats | Contenu |
 |---|---|---|
 | CCTP | Word, PDF | Page de garde, sommaire (le PDF a les numéros de page ; Word le met à jour à l'ouverture), titres numérotés, pied de page « Page X / Y » |
+| CCAP, RC, AE | Word, PDF | Page de garde (avec le lot pour l'acte d'engagement), sommaire, articles numérotés, champs automatiques remplis, pied de page « Page X / Y » |
 | DPGF vierge | Excel, PDF | Page de garde avec **cadre réservé à l'entreprise**, quantités, prix à compléter, sous-totaux et totaux en formules, récapitulatif HT / TVA / TTC, emplacement pour cachet et signature |
 | DPGF chiffrée | Excel, PDF | La même DPGF avec vos prix unitaires : estimation du maître d'œuvre |
 
@@ -134,10 +150,10 @@ APPLICATION AO/
 │   ├── referentiel/       Nomenclature des lots (modifiable dans Paramétrage)
 │   ├── bibliotheque/      Documents de référence, import, lecture (conversion, OCR)
 │   ├── articles/          Découpage en articles, lignes de prix, normes citées
-│   └── projets/           Projets, lots, PSE, CCTP et DPGF, exports Word / PDF / Excel
+│   └── projets/           Projets, lots, PSE, CCTP et DPGF, CCAP / RC / AE, modèles, exports Word / PDF / Excel
 └── frontend/              React 19 · TypeScript · Vite · Tailwind CSS
     └── src/
-        ├── pages/         Connexion, Tableau de bord, Projets, éditeur de lot, Documents, Articles, Prix
+        ├── pages/         Connexion, Tableau de bord, Projets, éditeur de lot, éditeur de pièce, Documents, Articles, Prix
         ├── components/    En-tête, liste des lots, zone d'import, tableau
         └── api/           Accès à l'API (session + protection CSRF)
 ```
@@ -176,7 +192,7 @@ npm install && npm run dev
 - [x] **1.0** Socle, thème « Chantier Nuit », bibliothèque documentaire
 - [x] **1.1** Découpage en articles par lot, prix de référence, OCR, conversion des anciens formats
 - [x] **1.2** Rédaction CCTP / DPGF (PSE, variantes), éditeur visuel, exports Word / PDF / Excel
-- [ ] **1.3** CCAP, RC, AE à partir de modèles
+- [x] **1.3** CCAP, RC, AE à partir de modèles, champs automatiques, paramètres de la consultation
 - [ ] **1.4** Assistant IA local (chat et voix, administrateur uniquement)
 - [ ] **2** DCE : dossier .zip classé, annuaire des entreprises
 - [ ] **3** Analyse des offres et rapport ACT

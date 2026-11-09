@@ -7,6 +7,7 @@ import Articles from "./pages/Articles";
 import Bibliotheque from "./pages/Bibliotheque";
 import Connexion from "./pages/Connexion";
 import LotEditeur from "./pages/LotEditeur";
+import PieceEditeur from "./pages/PieceEditeur";
 import Prix from "./pages/Prix";
 import ProjetDetail from "./pages/ProjetDetail";
 import Projets from "./pages/Projets";
@@ -32,6 +33,7 @@ export default function App() {
             <Route path="projets" element={<Projets />} />
             <Route path="projets/:projetId" element={<ProjetDetail />} />
             <Route path="projets/:projetId/lots/:lotId" element={<LotEditeur />} />
+            <Route path="projets/:projetId/pieces/:pieceId" element={<PieceEditeur />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Route>
         </Routes>

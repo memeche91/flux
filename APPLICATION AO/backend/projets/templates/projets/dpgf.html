@@ -38,19 +38,19 @@ table.recap td.prix { text-align: right; width: 30mm; }
 </head>
 <body>
 {% if avec_prix %}
-  {% include "projets/_garde.html" with titre_piece="Estimation du maître d'œuvre (DPGF chiffrée)" %}
+  {% include "projets/_garde.html" %}
 {% else %}
   <section class="garde garde-compacte">
     {% if projet.maitre_ouvrage %}<div class="garde-moa">{{ projet.maitre_ouvrage }}</div>{% endif %}
     <h1 class="garde-operation">{{ projet.nom }}</h1>
     <div class="garde-bandeau">
-      <div class="garde-piece">{{ garde.titre_piece }}</div>
-      <div class="garde-lot">Lot {{ lot.code }} – {{ lot.intitule }}</div>
+      <div class="garde-piece">{{ document.titre_piece }}</div>
+      <div class="garde-lot">{{ document.sous_titre }}</div>
     </div>
     <table class="garde-infos">
-      {% for libelle, valeur in garde.lignes_operation %}<tr><th>{{ libelle }}</th><td>{{ valeur|linebreaksbr }}</td></tr>{% endfor %}
+      {% for libelle, valeur in document.lignes_operation %}<tr><th>{{ libelle }}</th><td>{{ valeur|linebreaksbr }}</td></tr>{% endfor %}
       <tr><th>Phase</th><td>{{ projet.phase }} – indice {{ projet.indice }}</td></tr>
-      <tr><th>Date</th><td>{{ garde.date }}</td></tr>
+      <tr><th>Date</th><td>{{ document.date }}</td></tr>
     </table>
     <table class="entreprise">
       <caption>Cadre réservé à l'entreprise</caption>

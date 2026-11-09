@@ -2,7 +2,7 @@
 @page {
   size: A4;
   margin: 20mm 17mm 22mm 17mm;
-  @bottom-left { content: "{{ projet.nom|chaine_css }} – {{ garde.sigle }} lot {{ lot.code|chaine_css }} – indice {{ projet.indice|chaine_css }}"; font-family: {{ police|safe }}; font-size: 7.5pt; color: #555; }
+  @bottom-left { content: "{{ document.pied|chaine_css }}"; font-family: {{ police|safe }}; font-size: 7.5pt; color: #555; }
   @bottom-right { content: "Page " counter(page) " / " counter(pages); font-family: {{ police|safe }}; font-size: 7.5pt; color: #555; }
 }
 @page garde { @bottom-left { content: none; } @bottom-right { content: none; } }
@@ -33,4 +33,7 @@ h3 { color: {{ couleur_titres }}; font-size: {{ taille|add:1 }}pt; margin: 5mm 0
 .description th { background: {{ couleur_tableaux }}; }
 .description td p, .description th p { margin: 0; text-align: left; }
 .description mark { background: #fff59d; }
+</style>
+<style>
+.chapitre-texte p { margin: 0 0 2mm; text-align: justify; }
 </style>

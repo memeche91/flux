@@ -2,7 +2,7 @@
 <html lang="fr">
 <head>
 <meta charset="utf-8">
-<title>CCTP – Lot {{ lot.code }} – {{ lot.intitule }}</title>
+<title>{{ document.sigle }} – {{ document.sous_titre }}</title>
 {% include "projets/_styles.html" %}
 <style>
 .sommaire { break-after: page; }
@@ -18,24 +18,27 @@
 <body>
 {% include "projets/_garde.html" %}
 
+{% if document.sommaire %}
 <section class="sommaire">
   <h2>Sommaire</h2>
   <ul>
-  {% for chapitre in structure.chapitres %}
-    {% if chapitre.titre %}<li class="niv1"><a href="#chapitre-{{ forloop.counter }}">{{ chapitre.numero }} {{ chapitre.titre }}</a></li>{% endif %}
-    {% for element in chapitre.elements %}<li class="niv2"><a href="#poste-{{ element.poste.pk }}">{{ element.numero }} {{ element.titre_cctp }}</a></li>{% endfor %}
+  {% for chapitre in document.chapitres %}
+    {% if chapitre.intitule %}<li class="niv1"><a href="#{{ chapitre.ancre }}">{{ chapitre.intitule }}</a></li>{% endif %}
+    {% for element in chapitre.elements %}<li class="niv2"><a href="#{{ element.ancre }}">{{ element.intitule }}</a></li>{% endfor %}
   {% empty %}
     <li>Aucun article.</li>
   {% endfor %}
   </ul>
 </section>
+{% endif %}
 
 <main>
-{% for chapitre in structure.chapitres %}
-  {% if chapitre.titre %}<h2 id="chapitre-{{ forloop.counter }}">{{ chapitre.numero }} {{ chapitre.titre }}</h2>{% endif %}
+{% for chapitre in document.chapitres %}
+  {% if chapitre.intitule %}<h2 id="{{ chapitre.ancre }}">{{ chapitre.intitule }}</h2>{% endif %}
+  {% if chapitre.html %}<div class="description chapitre-texte">{{ chapitre.html|safe }}</div>{% endif %}
   {% for element in chapitre.elements %}
-    <h3 id="poste-{{ element.poste.pk }}">{{ element.numero }} {{ element.titre_cctp }}</h3>
-    <div class="description">{{ element.poste.description|safe }}</div>
+    <h3 id="{{ element.ancre }}">{{ element.intitule }}</h3>
+    <div class="description">{{ element.html|safe }}</div>
   {% endfor %}
 {% endfor %}
 </main>

@@ -1,30 +1,27 @@
-"""Exports PDF du CCTP et de la DPGF (WeasyPrint : HTML + CSS d'impression).
+"""Exports PDF (WeasyPrint : HTML + CSS d'impression).
 
-Le sommaire du CCTP est calculé à la mise en page : chaque titre y figure avec
-son numéro de page réel.
+Toutes les pièces écrites (CCTP, CCAP, RC, actes d'engagement) partagent le même
+gabarit ; le sommaire est calculé à la mise en page, avec les vrais numéros de page.
 """
 from __future__ import annotations
 
 from django.template.loader import render_to_string
 
 from ..structure import StructureLot
-from .commun import POLICES_PDF, page_de_garde
+from .document import POLICES_PDF, DocumentExport, document_cctp
 
 
 def _rendre(gabarit: str, contexte: dict) -> bytes:
     from weasyprint import HTML
 
-    html = render_to_string(gabarit, contexte)
-    return HTML(string=html).write_pdf()
+    return HTML(string=render_to_string(gabarit, contexte)).write_pdf()
 
 
-def _contexte_commun(structure: StructureLot, titre: str, sigle: str) -> dict:
-    projet = structure.lot.projet
+def _contexte(doc: DocumentExport) -> dict:
+    projet = doc.projet
     return {
-        "structure": structure,
-        "lot": structure.lot,
+        "document": doc,
         "projet": projet,
-        "garde": page_de_garde(structure, titre, sigle),
         "police": POLICES_PDF.get(projet.police, POLICES_PDF["Arial"]),
         "taille": projet.taille_police,
         "couleur_titres": projet.couleur_titres,
@@ -32,20 +29,34 @@ def _contexte_commun(structure: StructureLot, titre: str, sigle: str) -> dict:
     }
 
 
+def exporter_pdf(doc: DocumentExport) -> bytes:
+    return _rendre("projets/document.html", _contexte(doc))
+
+
 def exporter_cctp_pdf(structure: StructureLot) -> bytes:
-    contexte = _contexte_commun(structure, "Cahier des Clauses Techniques Particulières", "CCTP")
-    return _rendre("projets/cctp.html", contexte)
+    return exporter_pdf(document_cctp(structure))
 
 
 def exporter_dpgf_pdf(structure: StructureLot, *, avec_prix: bool = False) -> bytes:
-    contexte = _contexte_commun(structure, "Décomposition du Prix Global et Forfaitaire", "DPGF")
-    taux = structure.lot.projet.taux_tva
-    recap = []
+    lot = structure.lot
+    projet = lot.projet
+    doc = DocumentExport(
+        projet=projet,
+        titre_piece="Estimation du maître d'œuvre (DPGF chiffrée)" if avec_prix else "Décomposition du Prix Global et Forfaitaire",
+        sigle="DPGF",
+        sous_titre=f"Lot {lot.code} – {lot.intitule}",
+        pied=f"{projet.nom} – DPGF lot {lot.code} – indice {projet.indice}",
+        nom_fichier=f"DPGF Lot {lot.code} - {lot.intitule}",
+        chapitres=[],
+    )
+    taux = projet.taux_tva
+    recapitulatif = []
     for section in structure.sections_dpgf:
         if section.option is not None and not section.lignes:
             continue
         total = section.total
         tva = (total * taux / 100).quantize(total.__class__("0.01"))
-        recap.append({"titre": section.titre, "ht": total, "tva": tva, "ttc": total + tva})
-    contexte.update({"avec_prix": avec_prix, "recapitulatif": recap, "taux_tva": taux})
+        recapitulatif.append({"titre": section.titre, "ht": total, "tva": tva, "ttc": total + tva})
+    contexte = _contexte(doc)
+    contexte.update({"structure": structure, "lot": lot, "avec_prix": avec_prix, "recapitulatif": recapitulatif, "taux_tva": taux})
     return _rendre("projets/dpgf.html", contexte)

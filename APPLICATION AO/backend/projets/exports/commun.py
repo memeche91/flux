@@ -10,12 +10,6 @@ from django.utils.formats import date_format
 from ..models import Projet
 from ..structure import StructureLot
 
-POLICES_PDF = {
-    "Arial": "Arial, 'Liberation Sans', 'DejaVu Sans', sans-serif",
-    "Calibri": "Calibri, Carlito, 'Liberation Sans', 'DejaVu Sans', sans-serif",
-    "Times New Roman": "'Times New Roman', 'Liberation Serif', 'DejaVu Serif', serif",
-}
-
 
 @dataclass
 class PageDeGarde:
