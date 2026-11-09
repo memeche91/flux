@@ -30,7 +30,7 @@ def notifier_espace(espace_id: int) -> None:
     if espace is None:
         return
     with transaction.atomic():
-        en_attente = Evenement.objects.select_for_update(skip_locked=True).filter(espace=espace, a_notifier=True, notifie_le__isnull=True)
+        en_attente = Evenement.objects.select_for_update(skip_locked=True, of=("self",)).filter(espace=espace, a_notifier=True, notifie_le__isnull=True)
         evenements = list(en_attente.select_related("document__lot", "version__document", "utilisateur").order_by("date", "id"))
         if not evenements:
             return

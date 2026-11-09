@@ -1,7 +1,7 @@
 /** Explorateur des documents du chantier : classement par zone, lot et catégorie, indices,
  * visas et avis. Commun au cabinet et au portail des intervenants (droits fournis par le serveur). */
 import { AlertTriangle, ChevronDown, ChevronRight, Clock, Download, Eye, FileSpreadsheet, Lock, RefreshCw, Upload } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { CLASSE_CHAMP, Champ, ChampRecherche } from "../components/Filtres";
 import type { ClientGed } from "./client";
@@ -80,14 +80,23 @@ export default function Explorateur({ client, droits, referentiels, documentOuve
     };
   }, [documents, droits]);
 
-  // Lien direct : le document est affiché même s'il n'est pas dans la vue en cours.
+  // Lien direct (courriel, journal) : le document est affiché même s'il n'est pas dans la vue en
+  // cours. Un document ouvert d'un clic dans la liste garde la vue choisie.
+  const ouvertParClic = useRef<number | null>(null);
+  const lienTraite = useRef<number | null>(null);
   useEffect(() => {
-    if (documentOuvert === null || !documents) return;
-    if (!documents.some((d) => d.id === documentOuvert)) return;
+    if (documentOuvert === null) {
+      lienTraite.current = null;
+      return;
+    }
+    if (!documents || lienTraite.current === documentOuvert) return;
+    const cible = documents.find((d) => d.id === documentOuvert);
+    if (!cible) return;
+    lienTraite.current = documentOuvert;
+    if (ouvertParClic.current === documentOuvert) return;
     setVue("tous");
     setRecherche("");
     setCategorie("");
-    setAnnules(true);
     const minuterie = window.setTimeout(
       () => document.getElementById(`document-${documentOuvert}`)?.scrollIntoView({ block: "start", behavior: "smooth" }),
       50,
@@ -99,8 +108,10 @@ export default function Explorateur({ client, droits, referentiels, documentOuve
     const terme = sansAccents(recherche.trim());
     return (documents ?? [])
       .filter((d) => {
+        // Le document ouvert reste affiché (après un visa, il quitte la vue « À viser »).
+        if (d.id === documentOuvert) return true;
         const v = derniere(d);
-        if (d.annule && !annules && d.id !== documentOuvert) return false;
+        if (d.annule && !annules) return false;
         if (categorie && d.categorie !== categorie) return false;
         if (terme && !sansAccents(`${d.reference} ${d.reference_emetteur} ${d.titre} ${d.categorie_libelle} ${d.auteur}`).includes(terme)) return false;
         switch (vue) {
@@ -160,12 +171,12 @@ export default function Explorateur({ client, droits, referentiels, documentOuve
   }, [visibles, vue]);
 
   const entreesVues: { vue: Vue; libelle: string; nombre?: number; alerte?: boolean }[] = [
-    ...(compteurs.a_viser ? [{ vue: "a_viser" as Vue, libelle: "À viser", nombre: compteurs.a_viser }] : []),
-    ...(compteurs.retard ? [{ vue: "retard" as Vue, libelle: "Visas en retard", nombre: compteurs.retard, alerte: true }] : []),
-    ...(compteurs.avis ? [{ vue: "avis" as Vue, libelle: "Avis à donner", nombre: compteurs.avis }] : []),
-    ...(compteurs.a_reprendre ? [{ vue: "a_reprendre" as Vue, libelle: "À reprendre (nouvel indice)", nombre: compteurs.a_reprendre, alerte: true }] : []),
-    ...(compteurs.en_attente ? [{ vue: "en_attente" as Vue, libelle: "En attente de visa", nombre: compteurs.en_attente }] : []),
-    ...(compteurs.a_lire ? [{ vue: "a_lire" as Vue, libelle: "À lire (accusé demandé)", nombre: compteurs.a_lire, alerte: true }] : []),
+    ...(compteurs.a_viser || vue === "a_viser" ? [{ vue: "a_viser" as Vue, libelle: "À viser", nombre: compteurs.a_viser }] : []),
+    ...(compteurs.retard || vue === "retard" ? [{ vue: "retard" as Vue, libelle: "Visas en retard", nombre: compteurs.retard, alerte: true }] : []),
+    ...(compteurs.avis || vue === "avis" ? [{ vue: "avis" as Vue, libelle: "Avis à donner", nombre: compteurs.avis }] : []),
+    ...(compteurs.a_reprendre || vue === "a_reprendre" ? [{ vue: "a_reprendre" as Vue, libelle: "À reprendre (nouvel indice)", nombre: compteurs.a_reprendre, alerte: true }] : []),
+    ...(compteurs.en_attente || vue === "en_attente" ? [{ vue: "en_attente" as Vue, libelle: "En attente de visa", nombre: compteurs.en_attente }] : []),
+    ...(compteurs.a_lire || vue === "a_lire" ? [{ vue: "a_lire" as Vue, libelle: "À lire (accusé demandé)", nombre: compteurs.a_lire, alerte: true }] : []),
   ];
   const nombreParVue = (filtre: (d: DocumentGed) => boolean) => (documents ?? []).filter((d) => !d.annule && filtre(d)).length;
   const entreesZones: { vue: Vue; libelle: string; nombre: number; mien?: boolean }[] = [
@@ -284,7 +295,10 @@ export default function Explorateur({ client, droits, referentiels, documentOuve
                       key={d.id}
                       document={d}
                       ouvert={documentOuvert === d.id}
-                      surBascule={() => surOuvrir(documentOuvert === d.id ? null : d.id)}
+                      surBascule={() => {
+                        ouvertParClic.current = documentOuvert === d.id ? null : d.id;
+                        surOuvrir(ouvertParClic.current);
+                      }}
                       client={client}
                       droits={droits}
                       referentiels={referentiels}

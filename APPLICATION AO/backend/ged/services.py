@@ -230,7 +230,7 @@ def nouvel_indice(acteur: Acteur, document: Document, *, fichier, indice: str = 
     verifier_fichier(fichier, document.espace)
     _verifier_reference_pdf(acteur, document.categorie, fichier)
     with transaction.atomic():
-        document = Document.objects.select_for_update().select_related("espace__projet", "lot").get(pk=document.pk)  # indices distincts
+        document = Document.objects.select_for_update(of=("self",)).select_related("espace__projet", "lot").get(pk=document.pk)  # indices distincts
         precedente = derniere_version(document)
         indice = _verifier_indice(normaliser_indice(indice) or indice_suivant(precedente.indice if precedente else None))
         if document.versions.filter(indice=indice).exists():
@@ -286,7 +286,7 @@ def viser(acteur: Acteur, version: Version, *, statut: str, commentaire: str = "
     if fichier is not None:
         verifier_fichier(fichier, document.espace)
     with transaction.atomic():
-        version = Version.objects.select_for_update().select_related("document__espace__projet", "document__lot").get(pk=version.pk)
+        version = Version.objects.select_for_update(of=("self",)).select_related("document__espace__projet", "document__lot").get(pk=version.pk)
         version.visa, version.visa_commentaire = statut, (commentaire or "").strip()[:4000]
         version.vise_par_nom, version.vise_le = acteur.nom[:255], timezone.now()
         version.nouvel_indice_attendu = True if statut == StatutVisa.REF else (statut == StatutVisa.VAO if nouvel_indice_attendu is None else nouvel_indice_attendu)
