@@ -167,6 +167,14 @@ CELERY_ACCEPT_CONTENT = ["json"]
 CELERY_TASK_IGNORE_RESULT = True
 CELERY_TIMEZONE = TIME_ZONE
 CELERY_TASK_TIME_LIMIT = 60 * 60  # OCR d'un gros document scanné
+CELERY_RESULT_BACKEND = env("REDIS_URL") or None
+CELERY_RESULT_EXPIRES = 60 * 60
+# La voix (Whisper, Piper) tourne dans un seul processus dédié (service « voix ») :
+# les modèles ne sont chargés qu'une fois en mémoire.
+CELERY_TASK_ROUTES = {
+    "assistant.tasks.transcrire_audio": {"queue": "voix"},
+    "assistant.tasks.synthetiser_texte": {"queue": "voix"},
+}
 
 # Assistant IA local (administrateur) : Ollama pour le texte, Whisper et Piper pour la voix.
 # Tout tourne sur le poste ou le serveur du cabinet ; seuls les modèles sont téléchargés.

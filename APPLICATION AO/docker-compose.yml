@@ -48,12 +48,19 @@ services:
         condition: service_healthy
       redis:
         condition: service_started
-      ollama:
-        condition: service_started
 
   worker:
     <<: *backend
     command: ["celery", "-A", "config", "worker", "--loglevel=info", "--concurrency=2"]
+    depends_on:
+      backend:
+        condition: service_started
+
+  # Voix de l'assistant (transcription Whisper, lecture Piper) : un seul processus,
+  # pour ne charger les modèles qu'une fois en mémoire.
+  voix:
+    <<: *backend
+    command: ["celery", "-A", "config", "worker", "--loglevel=info", "--queues=voix", "--concurrency=1", "--hostname=voix@%h"]
     depends_on:
       backend:
         condition: service_started

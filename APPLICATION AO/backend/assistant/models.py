@@ -66,7 +66,17 @@ class EtatIndexation(models.Model):
     faits = models.PositiveIntegerField(default=0)
     message = models.CharField(max_length=500, blank=True)
     debut = models.DateTimeField(null=True, blank=True)
+    battement = models.DateTimeField("dernier signe de vie", null=True, blank=True)
     fin = models.DateTimeField(null=True, blank=True)
+
+    def perime(self) -> bool:
+        """Tâche arrêtée sans avoir rendu la main (worker redémarré, PC éteint…)."""
+        from datetime import timedelta
+
+        from django.utils import timezone
+
+        repere = self.battement or self.debut
+        return self.en_cours and (repere is None or timezone.now() - repere > timedelta(minutes=10))
 
     @classmethod
     def courant(cls) -> "EtatIndexation":

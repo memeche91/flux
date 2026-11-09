@@ -215,6 +215,16 @@ def _toucher(piece: PieceEcrite) -> None:
     PieceEcrite.objects.filter(pk=piece.pk).update(modifie_le=timezone.now())
 
 
+def _reindexer_assistant() -> None:
+    """Les modèles du cabinet nourrissent l'assistant IA : son index suit leurs changements."""
+    try:
+        from assistant.tasks import planifier_indexation
+
+        planifier_indexation()
+    except Exception:  # noqa: BLE001 - l'assistant est facultatif
+        pass
+
+
 def _titre(valeur: str) -> str:
     titre = texte_propre(valeur)
     if not titre:
@@ -267,6 +277,7 @@ def lister_modeles(request, type_piece: TypePiece | None = None):
 @router.post("/pieces/{piece_id}/enregistrer-modele", response={201: ModeleOut})
 def enregistrer_modele(request, piece_id: int, donnees: NouveauModele):
     modele = pieces.enregistrer_comme_modele(_piece(piece_id), _titre(donnees.nom), request.auth)
+    _reindexer_assistant()
     return 201, {
         "id": f"cabinet-{modele.pk}",
         "nom": modele.nom,
@@ -283,6 +294,7 @@ def supprimer_modele(request, modele_id: str):
     if correspondance is None:
         raise HttpError(400, "Seuls les modèles du cabinet peuvent être supprimés.")
     get_object_or_404(ModelePiece, pk=int(correspondance.group(1))).delete()
+    _reindexer_assistant()
     return 204, None
 
 

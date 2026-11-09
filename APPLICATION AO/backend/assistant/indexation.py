@@ -59,8 +59,18 @@ def _passages_articles() -> dict[str, dict]:
     return attendus
 
 
+MOTS_GENERIQUES = {"type", "ensemble", "article", "ouvrage", "ouvrages", "fourniture", "pose", "idem", "option", "variante", "lot", "poste", "element", "elements", "modele", "repere"}
+
+
+def _designation_precise(designation: str) -> bool:
+    """« Porte-fenêtre aluminium 2 vantaux » est précise ; « Type F1 – 120 x 135 » dépend de son chapitre."""
+    mots = [m for m in designation.split() if m.isalpha() and len(m) >= 3 and m not in MOTS_GENERIQUES]
+    return len(mots) >= 2
+
+
 def _passages_prix() -> dict[str, dict]:
-    """Un passage par ouvrage et par unité, quel que soit le chapitre où il a été relevé."""
+    """Un passage par ouvrage et par unité. Une désignation précise regroupe les prix de toutes les
+    DPGF ; une désignation vague (« Type F1 ») reste rattachée à son chapitre."""
     groupes: dict[tuple[str, str], dict] = {}
     lignes = (
         LignePrix.objects.filter(prix_unitaire__gt=0)
@@ -71,13 +81,14 @@ def _passages_prix() -> dict[str, dict]:
         designation = normaliser(ligne["designation"])
         if not designation:
             continue
-        groupe = groupes.setdefault((designation, ligne["unite_normalisee"]), {**ligne, "normalisees": set()})
+        cle = designation if _designation_precise(designation) else f"{normaliser(ligne['chapitre'])} | {designation}"
+        groupe = groupes.setdefault((cle, ligne["unite_normalisee"]), {**ligne, "normalisees": set()})
         groupe["normalisees"].add(ligne["designation_normalisee"])
     attendus = {}
-    for (designation, unite), groupe in groupes.items():
+    for (cle, unite), groupe in groupes.items():
         lot = f"lot {groupe['lot__code']}" if groupe["lot__code"] else ""
         texte = " – ".join(x for x in [groupe["designation"], f"unité {groupe['unite'] or unite}", groupe["chapitre"], lot] if x)
-        attendus[f"prix:{_empreinte(designation + '|' + unite)}"] = {
+        attendus[f"prix:{_empreinte(cle + '|' + unite)}"] = {
             "source": SourcePassage.PRIX,
             "article_id": None,
             "titre": groupe["designation"][:500],

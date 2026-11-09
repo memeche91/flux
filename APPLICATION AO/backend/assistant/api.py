@@ -1,9 +1,11 @@
 """API de l'assistant IA local (réservée à l'administrateur)."""
 from __future__ import annotations
 
+import base64
 import datetime
-import tempfile
 from pathlib import Path
+
+from celery.exceptions import TimeoutError as DelaiDepasse
 
 from django.http import HttpResponse, StreamingHttpResponse
 from django.shortcuts import get_object_or_404
@@ -16,12 +18,13 @@ from projets.models import Projet
 from . import ollama, voix
 from .conversation import repondre
 from .models import Conversation, EtatIndexation, Passage
-from .tasks import indexer_assistant
+from .tasks import indexer_assistant, synthetiser_texte, transcrire_audio
 
 router = Router(tags=["Assistant IA"])
 
-TAILLE_MAX_AUDIO = 25 * 1024 * 1024
+TAILLE_MAX_AUDIO = 10 * 1024 * 1024
 TEXTE_MAX_SYNTHESE = 4000
+DELAI_VOIX = 300
 
 
 def _administrateur(request) -> None:
@@ -129,7 +132,7 @@ def etat(request):
         "index": {
             "passages": passages,
             "a_jour": a_jour,
-            "en_cours": index.en_cours,
+            "en_cours": index.en_cours and not index.perime(),
             "total": index.total,
             "faits": index.faits,
             "message": index.message,
@@ -204,16 +207,17 @@ def poser_question(request, conversation_id: int, donnees: Question):
 def transcrire(request, audio: File[UploadedFile]):
     _administrateur(request)
     if audio.size and audio.size > TAILLE_MAX_AUDIO:
-        raise HttpError(413, "Enregistrement trop long (25 Mo au maximum).")
-    suffixe = Path(audio.name or "audio.webm").suffix or ".webm"
-    with tempfile.NamedTemporaryFile(suffix=suffixe) as fichier:
-        for morceau in audio.chunks():
-            fichier.write(morceau)
-        fichier.flush()
-        try:
-            texte = voix.transcrire(Path(fichier.name))
-        except Exception as erreur:  # noqa: BLE001 - format audio illisible, modèle absent…
-            raise HttpError(400, f"Transcription impossible ({erreur.__class__.__name__}).") from None
+        raise HttpError(413, "Enregistrement trop long : dictez votre question en moins de 10 minutes.")
+    suffixe = Path(audio.name or "audio.webm").suffix.lower()
+    if suffixe not in {".webm", ".ogg", ".m4a", ".mp4", ".wav", ".mp3"}:
+        raise HttpError(400, "Format audio non reconnu.")
+    contenu = base64.b64encode(audio.read()).decode("ascii")
+    try:
+        texte = transcrire_audio.delay(contenu, suffixe).get(timeout=DELAI_VOIX)
+    except DelaiDepasse:
+        raise HttpError(503, "La transcription ne répond pas. Vérifiez que le service « voix » est démarré.") from None
+    except Exception as erreur:  # noqa: BLE001 - format audio illisible, modèle absent…
+        raise HttpError(400, f"Transcription impossible ({erreur.__class__.__name__}).") from None
     return {"texte": texte}
 
 
@@ -221,7 +225,9 @@ def transcrire(request, audio: File[UploadedFile]):
 def synthese(request, donnees: Synthese):
     _administrateur(request)
     try:
-        audio = voix.synthetiser(donnees.texte[:TEXTE_MAX_SYNTHESE])
+        audio = synthetiser_texte.delay(donnees.texte[:TEXTE_MAX_SYNTHESE]).get(timeout=DELAI_VOIX)
+    except DelaiDepasse:
+        raise HttpError(503, "La lecture à voix haute ne répond pas. Vérifiez que le service « voix » est démarré.") from None
     except Exception as erreur:  # noqa: BLE001
         raise HttpError(503, f"Lecture à voix haute indisponible ({erreur.__class__.__name__}).") from None
-    return HttpResponse(audio, content_type="audio/wav")
+    return HttpResponse(base64.b64decode(audio), content_type="audio/wav")

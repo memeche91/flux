@@ -18,6 +18,7 @@ const SUGGESTIONS = [
   "Quel est le délai de la garantie de parfait achèvement ?",
 ];
 const CLE_LECTURE = "application-ao:assistant-lecture";
+const LONGUEUR_MAX = 4000;
 
 interface ReponseEnCours {
   question: string;
@@ -49,6 +50,8 @@ export default function Assistant() {
   const arret = useRef<AbortController | null>(null);
   const fil = useRef<HTMLDivElement>(null);
   const lecteur = useLecteur();
+  const lectureAutoRef = useRef(lectureAuto);
+  lectureAutoRef.current = lectureAuto;
 
   const chargerEtat = useCallback(() => api<EtatAssistant>("/assistant/etat").then(setEtat).catch(() => undefined), []);
   const chargerConversations = useCallback(
@@ -127,57 +130,102 @@ export default function Assistant() {
   async function envoyer(question: string) {
     const texte = question.trim();
     if (!texte || enCours) return;
+    if (texte.length > LONGUEUR_MAX) {
+      setErreur(`Votre question fait ${texte.length.toLocaleString("fr-FR")} caractères : ${LONGUEUR_MAX.toLocaleString("fr-FR")} au maximum. Raccourcissez-la ou envoyez-la en plusieurs fois.`);
+      return;
+    }
     setErreur(null);
-    setSaisie("");
+    setAnnonce("");
     lecteur.arreter();
     let conversation = detail;
+    let creee = false;
     try {
       if (!conversation) {
         conversation = await api<ConversationDetail>("/assistant/conversations", { method: "POST", body: JSON.stringify({ projet_id: projetNouvelle }) });
+        creee = true;
         setDetail(conversation);
       }
     } catch (probleme) {
       setErreur(probleme instanceof Error ? probleme.message : "Conversation impossible.");
-      setSaisie(texte);
       return;
     }
     const identifiant = conversation.id;
     const controleur = new AbortController();
     arret.current = controleur;
     let reponse = "";
+    let sourcesRecues: SourceAssistant[] = [];
+    let recu = false;
     let terminee = false;
+    let messageId: number | null = null;
+    let supprimee = false;
+    setSaisie("");
     setEnCours({ question: texte, etape: "Envoi…", texte: "", sources: [] });
     try {
       await poserQuestion(
         identifiant,
         texte,
         (evenement) => {
+          recu = true;
           if (evenement.type === "etape") setEnCours((e) => (e ? { ...e, etape: evenement.texte } : e));
-          else if (evenement.type === "sources") setEnCours((e) => (e ? { ...e, sources: evenement.sources } : e));
-          else if (evenement.type === "texte") {
+          else if (evenement.type === "sources") {
+            sourcesRecues = evenement.sources;
+            setEnCours((e) => (e ? { ...e, sources: evenement.sources } : e));
+          } else if (evenement.type === "texte") {
             reponse += evenement.texte;
             setEnCours((e) => (e ? { ...e, texte: e.texte + evenement.texte } : e));
-          } else if (evenement.type === "erreur") setErreur(evenement.message);
-          else if (evenement.type === "fin") terminee = true;
+          } else if (evenement.type === "erreur") {
+            setErreur(evenement.message);
+            setAnnonce(evenement.message);
+          } else if (evenement.type === "fin") {
+            terminee = true;
+            messageId = evenement.message_id;
+          }
         },
         controleur.signal,
       );
     } catch (probleme) {
       if (!(probleme instanceof DOMException && probleme.name === "AbortError")) {
         setErreur(probleme instanceof Error ? probleme.message : "L'assistant ne répond pas.");
+        if (!recu) {
+          // Rien n'est parti : la question revient dans la zone de saisie.
+          setSaisie(texte);
+          if (creee) {
+            supprimee = true;
+            await api(`/assistant/conversations/${identifiant}`, { method: "DELETE" }).catch(() => undefined);
+          }
+        }
       }
     } finally {
       arret.current = null;
-      try {
-        setDetail(await api<ConversationDetail>(`/assistant/conversations/${identifiant}`));
-      } catch {
-        // La conversation reste affichée telle quelle.
+      const interrompue = controleur.signal.aborted;
+      if (supprimee) {
+        setDetail(null);
+      } else {
+        try {
+          let relue = await api<ConversationDetail>(`/assistant/conversations/${identifiant}`);
+          // Après « Arrêter », le serveur enregistre le début de réponse un instant plus tard.
+          for (let essai = 0; interrompue && reponse && relue.messages.at(-1)?.role !== "assistant" && essai < 10; essai++) {
+            await new Promise((r) => setTimeout(r, 300));
+            relue = await api<ConversationDetail>(`/assistant/conversations/${identifiant}`);
+          }
+          if (interrompue && reponse && relue.messages.at(-1)?.role !== "assistant") {
+            relue = {
+              ...relue,
+              messages: [...relue.messages, { id: -1, role: "assistant", texte: reponse, sources: sourcesRecues, interrompu: true, cree_le: "" }],
+            };
+          }
+          setDetail(relue);
+        } catch {
+          // Conversation supprimée entre-temps : rien à relire.
+        }
       }
       setEnCours(null);
       void chargerConversations();
       if (terminee) {
         setAnnonce("Réponse de l'assistant terminée.");
-        if (lectureAuto && reponse) void lecteur.lire(-1, reponse);
+        if (lectureAutoRef.current && reponse) void lecteur.lire(messageId ?? -1, reponse);
+      } else if (interrompue) {
+        setAnnonce("Réponse interrompue.");
       }
     }
   }
@@ -202,12 +250,25 @@ export default function Assistant() {
         surtitre="Administrateur · IA locale et gratuite"
         titre="Assistant"
         sousTitre="Il répond à partir de vos documents, de vos prix et des modèles de pièces vérifiés. Tout reste sur votre poste : rien n'est envoyé sur Internet."
+        actions={
+          etat?.moteur.joignable ? (
+            <button
+              type="button"
+              onClick={() => void api("/assistant/indexer", { method: "POST" }).then(chargerEtat)}
+              disabled={etat.index.en_cours}
+              className="flex min-h-11 items-center gap-2 rounded-lg border border-bordure-forte px-3 text-sm font-semibold hover:bg-surface-2 disabled:opacity-50"
+            >
+              <RefreshCw aria-hidden="true" className={`size-4 ${etat.index.en_cours ? "animate-spin" : ""}`} />
+              {etat.index.en_cours ? "Lecture des documents…" : "Relire mes documents"}
+            </button>
+          ) : undefined
+        }
       />
       <span className="sr-only" aria-live="polite">
         {annonce}
       </span>
 
-      {etat && <PanneauEtat etat={etat} surIndexation={() => api("/assistant/indexer", { method: "POST" }).then(chargerEtat)} />}
+      {etat && <PanneauEtat etat={etat} />}
 
       <div className="flex flex-wrap items-start gap-4">
         <aside aria-label="Conversations" className="flex min-w-0 flex-[1_1_240px] flex-col gap-2 rounded-xl border border-bordure bg-surface p-3 lg:max-w-[300px]">
@@ -241,8 +302,9 @@ export default function Assistant() {
                 <button
                   type="button"
                   onClick={() => void supprimer(c)}
+                  disabled={Boolean(enCours)}
                   aria-label={`Supprimer la conversation « ${c.titre} »`}
-                  className="grid w-9 place-items-center rounded-lg text-attenue hover:bg-danger/10 hover:text-danger"
+                  className="grid w-9 place-items-center rounded-lg text-attenue hover:bg-danger/10 hover:text-danger disabled:opacity-40"
                 >
                   <Trash2 aria-hidden="true" className="size-4" />
                 </button>
@@ -485,6 +547,12 @@ function Saisie({
 }) {
   const enregistreur = useEnregistreur();
   const [transcription, setTranscription] = useState(false);
+  const { enregistre, annuler } = enregistreur;
+
+  // Question envoyée autrement (clavier, suggestion) pendant une dictée : le micro est coupé.
+  useEffect(() => {
+    if (enCours && enregistre) annuler();
+  }, [enCours, enregistre, annuler]);
 
   function soumettre(evenement: FormEvent) {
     evenement.preventDefault();
@@ -547,15 +615,24 @@ function Saisie({
         rows={Math.min(6, Math.max(1, valeur.split("\n").length))}
         placeholder={desactive ? "L'assistant n'est pas encore prêt (voir ci-dessus)." : enregistreur.enregistre ? "Je vous écoute…" : "Votre question… (Entrée pour envoyer, Maj+Entrée pour aller à la ligne)"}
         disabled={desactive}
+        maxLength={LONGUEUR_MAX}
+        aria-describedby={valeur.length > LONGUEUR_MAX * 0.8 ? "compteur-question" : undefined}
         className={`${CLASSE_CHAMP} min-h-11 flex-1 resize-none py-2.5 leading-snug`}
       />
+      {valeur.length > LONGUEUR_MAX * 0.8 && (
+        <span id="compteur-question" className="self-center text-xs whitespace-nowrap text-attenue">
+          {valeur.length.toLocaleString("fr-FR")} / {LONGUEUR_MAX.toLocaleString("fr-FR")}
+        </span>
+      )}
       {micro && (
         <button
           type="button"
           onClick={() => void basculerMicro()}
-          disabled={desactive || enCours || transcription}
+          disabled={!enregistreur.enregistre && (desactive || enCours || transcription || enregistreur.ouverture)}
           aria-pressed={enregistreur.enregistre}
-          aria-label={enregistreur.enregistre ? "Arrêter l'enregistrement et transcrire" : "Dicter la question au micro"}
+          aria-label={
+            enregistreur.enregistre ? "Arrêter l'enregistrement et transcrire" : enregistreur.ouverture ? "Ouverture du micro…" : "Dicter la question au micro"
+          }
           className={`flex min-h-11 items-center gap-2 rounded-lg border px-3 font-semibold disabled:opacity-50 ${
             enregistreur.enregistre ? "animate-pulse border-danger/70 bg-danger/15 text-danger" : "border-bordure-forte text-texte hover:bg-surface-2"
           }`}
@@ -583,58 +660,39 @@ function Saisie({
   );
 }
 
-function PanneauEtat({ etat, surIndexation }: { etat: EtatAssistant; surIndexation: () => Promise<unknown> }) {
+function PanneauEtat({ etat }: { etat: EtatAssistant }) {
   const { moteur, index, voix } = etat;
-  const [envoi, setEnvoi] = useState(false);
   let probleme: string | null = null;
   if (!moteur.joignable) probleme = "Le moteur d'IA (Ollama) ne répond pas. Relancez installer.ps1, ou démarrez l'application avec « docker compose up -d ».";
   else if (!moteur.modele_installe || !moteur.embedding_installe)
     probleme = `Les modèles d'IA ne sont pas encore téléchargés (${[!moteur.modele_installe && moteur.modele, !moteur.embedding_installe && moteur.embedding].filter(Boolean).join(", ")}). Relancez installer.ps1 : il les télécharge une fois pour toutes (environ 8 Go).`;
 
   const aIndexer = index.passages - index.a_jour;
-  if (!probleme && !index.en_cours && aIndexer === 0 && index.passages > 0 && voix.transcription_installee && voix.synthese_installee) return null;
+  const voixManquante = !voix.transcription_installee || !voix.synthese_installee;
+  const messageIndex = index.message && index.message !== "Index à jour." ? index.message : "";
+  if (!probleme && !index.en_cours && aIndexer === 0 && index.passages > 0 && !voixManquante && !messageIndex) return null;
 
   return (
-    <section aria-label="État de l'assistant" className="flex flex-wrap items-center gap-x-4 gap-y-2 rounded-xl border border-bordure bg-surface px-4 py-3">
+    <section aria-label="État de l'assistant" className="flex flex-col gap-1.5 rounded-xl border border-bordure bg-surface px-4 py-3">
       {probleme ? (
-        <p role="alert" className="flex-[1_1_300px] text-danger">
+        <p role="alert" className="text-danger">
           {probleme}
         </p>
+      ) : index.en_cours ? (
+        <>
+          <p>
+            <strong className="text-accent">Lecture de vos documents par l'IA…</strong> {index.faits} / {index.total}. L'assistant répond déjà avec ce qui est lu.
+          </p>
+          <div className="h-1.5 overflow-hidden rounded-full bg-fond" role="progressbar" aria-valuemin={0} aria-valuemax={index.total || 1} aria-valuenow={index.faits} aria-label="Lecture des documents">
+            <div className="h-full bg-accent transition-all" style={{ width: `${index.total ? (100 * index.faits) / index.total : 5}%` }} />
+          </div>
+        </>
       ) : (
-        <div className="flex flex-[1_1_300px] flex-col gap-1.5">
-          {index.en_cours ? (
-            <>
-              <p>
-                <strong className="text-accent">Lecture de vos documents par l'IA…</strong> {index.faits} / {index.total}. L'assistant répond déjà avec ce qui est lu.
-              </p>
-              <div className="h-1.5 overflow-hidden rounded-full bg-fond" role="progressbar" aria-valuemin={0} aria-valuemax={index.total || 1} aria-valuenow={index.faits} aria-label="Indexation">
-                <div className="h-full bg-accent transition-all" style={{ width: `${index.total ? (100 * index.faits) / index.total : 5}%` }} />
-              </div>
-            </>
-          ) : (
-            <p className="text-attenue">
-              {index.passages === 0 || aIndexer > 0
-                ? `${aIndexer || "Aucun"} élément${aIndexer > 1 ? "s" : ""} de vos documents à faire lire par l'IA.`
-                : "Index à jour."}{" "}
-              {index.message && index.message !== "Index à jour." ? index.message : ""}
-              {!voix.transcription_installee || !voix.synthese_installee ? " La voix n'est pas encore installée : relancez installer.ps1." : ""}
-            </p>
-          )}
-        </div>
-      )}
-      {!probleme && !index.en_cours && (
-        <button
-          type="button"
-          disabled={envoi}
-          onClick={() => {
-            setEnvoi(true);
-            void surIndexation().finally(() => setEnvoi(false));
-          }}
-          className="flex min-h-10 items-center gap-2 rounded-lg border border-bordure-forte px-3 text-sm font-semibold hover:bg-surface-2 disabled:opacity-50"
-        >
-          <RefreshCw aria-hidden="true" className="size-4" />
-          Mettre à jour l'index
-        </button>
+        <p className="text-attenue">
+          {aIndexer > 0 || index.passages === 0 ? `${aIndexer || "Aucun"} élément${aIndexer > 1 ? "s" : ""} de vos documents à faire lire par l'IA (bouton « Relire mes documents »). ` : ""}
+          {messageIndex}
+          {voixManquante ? " La voix n'est pas encore installée : relancez installer.ps1." : ""}
+        </p>
       )}
     </section>
   );

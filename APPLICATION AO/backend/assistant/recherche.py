@@ -14,6 +14,7 @@ from django.db.models import Max
 
 from articles.models import LignePrix
 from articles.normalisation import normaliser
+from projets.modeles import lister_modeles
 
 from . import ollama
 from .indexation import vers_octets
@@ -75,7 +76,13 @@ def statistiques_prix(meta: dict) -> tuple[dict | None, list[dict]]:
         return None, []
     prix = [ligne.prix_unitaire for ligne in lignes]
     details = [
-        {"document": ligne.document.nom_original, "operation": ligne.document.operation, "annee": ligne.document.annee, "prix": float(ligne.prix_unitaire)}
+        {
+            "document": ligne.document.nom_original,
+            "operation": ligne.document.operation,
+            "annee": ligne.document.annee,
+            "chapitre": ligne.chapitre,
+            "prix": float(ligne.prix_unitaire),
+        }
         for ligne in lignes[:6]
     ]
     return {
@@ -97,6 +104,11 @@ def rechercher(question: str, *, nombre: int = 6) -> list[Extrait]:
     scores = matrice @ requete
     meilleurs = np.argsort(-scores)[:80]
     candidats = {p.pk: p for p in Passage.objects.filter(pk__in=identifiants[meilleurs].tolist())}
+    # Un modèle du cabinet supprimé depuis la dernière indexation n'est plus cité.
+    modeles_existants = {m["id"] for m in lister_modeles()}
+    candidats = {
+        pk: p for pk, p in candidats.items() if p.source != SourcePassage.MODELE or p.meta.get("modele_id") in modeles_existants
+    }
 
     # Bonus lexical : les mots exacts de la question (référence, matériau, unité) départagent.
     mots = set(mots_cles(question))
@@ -154,7 +166,10 @@ def formater_extrait(extrait: Extrait) -> str:
     passage, meta = extrait.passage, extrait.passage.meta
     if passage.source == SourcePassage.PRIX:
         s = extrait.statistiques
-        sources = " ; ".join(f"{d['document']}{' ' + str(d['annee']) if d['annee'] else ''} : {_euros(d['prix'])}" for d in extrait.lignes[:4])
+        sources = " ; ".join(
+            f"{d['document']}{' ' + str(d['annee']) if d['annee'] else ''}{' (' + d['chapitre'] + ')' if d.get('chapitre') else ''} : {_euros(d['prix'])}"
+            for d in extrait.lignes[:4]
+        )
         return (
             f"[{extrait.numero}] Prix relevés dans les DPGF du cabinet pour « {passage.titre} » (unité {s['unite']}) : "
             f"médiane {_euros(s['mediane'])} HT, minimum {_euros(s['minimum'])}, maximum {_euros(s['maximum'])}, "

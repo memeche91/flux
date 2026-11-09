@@ -239,6 +239,50 @@ class ConversationTests(Donnees):
         synthetiser.assert_called_once_with("Bonjour")
 
 
+@mock.patch("assistant.ollama.vectoriser", side_effect=faux_vecteurs)
+class RobustesseTests(Donnees):
+    def test_indexation_perimee_reprise_et_tranches(self, _vectoriser):
+        from datetime import timedelta
+
+        from django.utils import timezone
+
+        from . import tasks
+
+        EtatIndexation.objects.update_or_create(pk=1, defaults={"en_cours": True, "battement": timezone.now() - timedelta(hours=1)})
+        with mock.patch.object(tasks, "PASSAGES_PAR_TRANCHE", 50):
+            indexer_assistant.apply()
+        etat = EtatIndexation.courant()
+        self.assertFalse(etat.en_cours)
+        self.assertEqual(etat.message, "Index à jour.")
+        self.assertEqual(etat.faits, etat.total)
+        self.assertFalse(Passage.objects.filter(vecteur__isnull=True).exists())
+
+    def test_indexation_en_cours_recente_non_doublee(self, _vectoriser):
+        from django.utils import timezone
+
+        EtatIndexation.objects.update_or_create(pk=1, defaults={"en_cours": True, "battement": timezone.now()})
+        indexer_assistant.apply()
+        self.assertTrue(EtatIndexation.courant().relancer)
+        self.assertFalse(Passage.objects.exists())
+
+    def test_conversation_supprimee_pendant_la_reponse(self, _vectoriser):
+        from .conversation import repondre
+
+        conversation = Conversation.objects.create(utilisateur=self.admin, titre="Nouvelle conversation")
+
+        def reponse(messages, **_):
+            yield "Réponse"
+
+        evenements = []
+        with mock.patch("assistant.ollama.discuter", side_effect=reponse):
+            for ligne in repondre(conversation, "Question ?"):
+                evenements.append(json.loads(ligne))
+                if evenements[-1]["type"] == "sources":
+                    Conversation.objects.filter(pk=conversation.pk).delete()  # supprimée pendant la réponse
+        self.assertEqual(evenements[-1]["type"], "fin")
+        self.assertFalse(Message.objects.exists())
+
+
 class VoixTests(SimpleTestCase):
     def test_texte_pour_voix(self):
         self.assertEqual(

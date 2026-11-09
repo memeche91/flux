@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 import io
+import json
 import os
 import re
+import tempfile
 import threading
 import wave
 from pathlib import Path
@@ -14,9 +16,11 @@ INVITE_VOCABULAIRE = (
     "Vocabulaire : CCTP, DPGF, CCAP, RC, DCE, acte d'engagement, lot, porte-fenêtre, menuiseries extérieures, "
     "plâtrerie, DTU, maître d'ouvrage, maître d'œuvre, PSE, variante, retenue de garantie, euros HT."
 )
-_verrou = threading.Lock()
+_verrou_whisper = threading.Lock()
+_verrou_voix = threading.Lock()
 _whisper = None
 _voix = None
+TAILLE_MIN_VOIX = 5 * 1024 * 1024  # une voix Piper « medium » pèse environ 60 Mo
 
 
 def dossier_whisper() -> Path:
@@ -37,9 +41,19 @@ def transcription_installee() -> bool:
         return False
 
 
-def synthese_installee() -> bool:
+def _fichiers_voix() -> tuple[Path, Path]:
     modele = dossier_voix() / f"{settings.IA_VOIX}.onnx"
-    return modele.exists() and Path(f"{modele}.json").exists()
+    return modele, Path(f"{modele}.json")
+
+
+def synthese_installee() -> bool:
+    """Voix complète : un téléchargement interrompu laisse un fichier tronqué, refusé ici."""
+    modele, configuration = _fichiers_voix()
+    try:
+        json.loads(configuration.read_text(encoding="utf-8"))
+        return modele.stat().st_size >= TAILLE_MIN_VOIX
+    except (OSError, ValueError):
+        return False
 
 
 def preparer_transcription() -> None:
@@ -50,15 +64,25 @@ def preparer_transcription() -> None:
 
 
 def preparer_synthese() -> None:
+    """Télécharge la voix dans un dossier temporaire, vérifie qu'elle se charge, puis la met en place."""
+    if synthese_installee():
+        return
+    from piper import PiperVoice
     from piper.download_voices import download_voice
 
     dossier_voix().mkdir(parents=True, exist_ok=True)
-    download_voice(settings.IA_VOIX, dossier_voix())
+    with tempfile.TemporaryDirectory(dir=dossier_voix()) as temporaire:
+        download_voice(settings.IA_VOIX, Path(temporaire), force_redownload=True)
+        nom = f"{settings.IA_VOIX}.onnx"
+        PiperVoice.load(str(Path(temporaire) / nom))  # lève une erreur si le fichier est incomplet
+        modele, configuration = _fichiers_voix()
+        os.replace(Path(temporaire) / f"{nom}.json", configuration)
+        os.replace(Path(temporaire) / nom, modele)
 
 
 def _modele_whisper():
     global _whisper
-    with _verrou:
+    with _verrou_whisper:
         if _whisper is None:
             from faster_whisper import WhisperModel
 
@@ -81,13 +105,20 @@ def transcrire(chemin: Path) -> str:
 
 def _modele_voix():
     global _voix
-    with _verrou:
+    with _verrou_voix:
         if _voix is None:
             from piper import PiperVoice
 
             if not synthese_installee():
                 preparer_synthese()
-            _voix = PiperVoice.load(str(dossier_voix() / f"{settings.IA_VOIX}.onnx"))
+            modele, configuration = _fichiers_voix()
+            try:
+                _voix = PiperVoice.load(str(modele))
+            except Exception:
+                # Fichier abîmé : on le retire pour qu'une relance de l'installateur le retélécharge.
+                for fichier in (modele, configuration):
+                    fichier.unlink(missing_ok=True)
+                raise
         return _voix
 
 

@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import json
 import logging
+import queue
+import threading
 from collections.abc import Iterator
 from decimal import Decimal
 
@@ -32,6 +34,7 @@ Règles impératives :
 
 AUCUN_EXTRAIT = "Aucun extrait pertinent n'a été trouvé dans les documents du cabinet pour cette question."
 HISTORIQUE_MAX = 4
+SIGNE_DE_VIE = 2.0  # secondes : une ligne d'attente permet de voir vite que l'utilisateur est parti
 
 
 def _euros(valeur: Decimal) -> str:
@@ -84,35 +87,77 @@ def _ligne(donnees: dict) -> bytes:
     return (json.dumps(donnees, ensure_ascii=False) + "\n").encode("utf-8")
 
 
+def _produire(messages: list[dict], file: queue.Queue, controle: dict) -> None:
+    """Fil de lecture d'Ollama : dépose les morceaux dans la file, puis « fin » ou « erreur »."""
+    try:
+        for morceau in ollama.discuter(messages, controle=controle):
+            if controle.get("arret"):
+                return
+            file.put(("texte", morceau))
+        file.put(("fin", None))
+    except ollama.OllamaIndisponible as erreur:
+        file.put(("erreur", str(erreur)))
+    except Exception:  # noqa: BLE001 - y compris la connexion fermée volontairement
+        if not controle.get("arret"):
+            logger.exception("Réponse de l'assistant impossible")
+            file.put(("erreur", "L'assistant a rencontré une erreur. Réessayez."))
+
+
 def repondre(conversation: Conversation, question: str) -> Iterator[bytes]:
-    """Flux NDJSON : {"type": "sources"}, puis des {"type": "texte"}, puis {"type": "fin"} ou {"type": "erreur"}."""
+    """Flux NDJSON : {"type": "sources"}, puis des {"type": "texte"}, puis {"type": "fin"} ou {"type": "erreur"}.
+
+    Des lignes {"type": "attente"} sont envoyées pendant le calcul : si l'utilisateur a arrêté
+    la réponse, l'écriture échoue aussitôt et le calcul d'Ollama est interrompu.
+    """
     Message.objects.create(conversation=conversation, role=Message.Role.UTILISATEUR, texte=question)
     if conversation.titre == "Nouvelle conversation":
         conversation.titre = tronquer(question.replace("\n", " "), 80)
     conversation.save(update_fields=["titre", "modifie_le"])
 
-    morceaux: list[str] = []
+    envoyes: list[str] = []
     sources: list[dict] = []
     termine = False
-    message_id = None
+    controle: dict = {}
     try:
         yield _ligne({"type": "etape", "texte": "Recherche dans vos documents…"})
-        messages, sources = preparer(conversation, question)
+        try:
+            messages, sources = preparer(conversation, question)
+        except ollama.OllamaIndisponible as erreur:
+            yield _ligne({"type": "erreur", "message": str(erreur)})
+            return
         yield _ligne({"type": "sources", "sources": sources})
         yield _ligne({"type": "etape", "texte": "Rédaction de la réponse…"})
-        for morceau in ollama.discuter(messages):
-            morceaux.append(morceau)
-            yield _ligne({"type": "texte", "texte": morceau})
-        termine = True
-    except ollama.OllamaIndisponible as erreur:
-        yield _ligne({"type": "erreur", "message": str(erreur)})
+
+        file: queue.Queue = queue.Queue()
+        threading.Thread(target=_produire, args=(messages, file, controle), daemon=True).start()
+        while True:
+            try:
+                genre, valeur = file.get(timeout=SIGNE_DE_VIE)
+            except queue.Empty:
+                yield _ligne({"type": "attente"})
+                continue
+            if genre == "texte":
+                yield _ligne({"type": "texte", "texte": valeur})
+                envoyes.append(valeur)
+            elif genre == "erreur":
+                yield _ligne({"type": "erreur", "message": valeur})
+                break
+            else:
+                termine = True
+                break
     except Exception:  # noqa: BLE001 - l'utilisateur doit toujours recevoir un message
         logger.exception("Réponse de l'assistant impossible")
         yield _ligne({"type": "erreur", "message": "L'assistant a rencontré une erreur. Réessayez."})
     finally:
-        # Exécuté aussi quand l'utilisateur arrête la réponse : le début est conservé.
-        texte = "".join(morceaux).strip()
-        if texte:
+        # Aussi exécuté quand l'utilisateur arrête la réponse : Ollama est libéré et le texte
+        # déjà affiché est conservé.
+        controle["arret"] = True
+        client = controle.get("client")
+        if client is not None:
+            client.close()
+        texte = "".join(envoyes).strip()
+        message_id = None
+        if texte and Conversation.objects.filter(pk=conversation.pk).exists():
             message_id = Message.objects.create(
                 conversation=conversation, role=Message.Role.ASSISTANT, texte=texte, sources=sources, interrompu=not termine
             ).pk

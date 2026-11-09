@@ -65,8 +65,12 @@ def vectoriser(textes: list[str]) -> list[list[float]]:
         raise OllamaIndisponible(_explication(erreur)) from erreur
 
 
-def discuter(messages: list[dict], *, temperature: float = 0.3) -> Iterator[str]:
-    """Réponse du modèle de conversation, morceau par morceau."""
+def discuter(messages: list[dict], *, temperature: float = 0.3, controle: dict | None = None) -> Iterator[str]:
+    """Réponse du modèle de conversation, morceau par morceau.
+
+    `controle["client"]` reçoit le client HTTP : le fermer depuis un autre fil coupe la
+    connexion, et Ollama abandonne aussitôt le calcul (utilisateur qui clique « Arrêter »).
+    """
     corps = {
         "model": settings.IA_MODELE,
         "messages": messages,
@@ -77,6 +81,8 @@ def discuter(messages: list[dict], *, temperature: float = 0.3) -> Iterator[str]
     }
     try:
         with _client(None) as client:
+            if controle is not None:
+                controle["client"] = client
             for tentative in range(2):
                 with client.stream("POST", _url("/api/chat"), json=corps) as reponse:
                     if reponse.status_code == 400 and tentative == 0 and "think" in corps:

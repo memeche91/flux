@@ -56,23 +56,50 @@ Ecrire-Etape "Assistant IA : réglages selon votre ordinateur"
 $contenuEnv = [System.IO.File]::ReadAllText($cheminEnv)
 if ($contenuEnv -notmatch '(?m)^IA_MODELE=') {
     # Fichier .env d'une version précédente : ajout des réglages de l'assistant.
-    $contenuEnv = $contenuEnv.TrimEnd() + "`n`n# Assistant IA local`nIA_MODELE=qwen3.5:9b`n"
+    $contenuEnv = $contenuEnv.TrimEnd() + "`n`n# Assistant IA local`nIA_MODELE=qwen3.5:9b`nIA_WHISPER=large-v3-turbo`n"
 }
-$memoireGo = [math]::Round((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory / 1GB)
-if ($memoireGo -lt 16 -and $contenuEnv -match '(?m)^IA_MODELE=qwen3\.5:9b') {
+# Docker Desktop (WSL 2) ne reçoit qu'une partie de la mémoire du PC : c'est elle qui compte.
+$memoireDocker = 0
+$octets = docker info --format "{{.MemTotal}}" 2>$null
+if ($LASTEXITCODE -eq 0 -and "$octets".Trim() -match '^\d+$') { $memoireDocker = [math]::Round([double]"$octets".Trim() / 1GB, 1) }
+$memoirePc = [math]::Round((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory / 1GB)
+Write-Host "Mémoire du PC : $memoirePc Go ; mémoire disponible pour Docker : $memoireDocker Go."
+if ($memoireDocker -gt 0 -and $memoireDocker -lt 14) {
     $contenuEnv = $contenuEnv -replace '(?m)^IA_MODELE=qwen3\.5:9b', 'IA_MODELE=qwen3.5:4b'
-    Write-Host "Mémoire : $memoireGo Go. Modèle léger choisi pour l'assistant (qwen3.5:4b)."
-} else {
-    Write-Host "Mémoire : $memoireGo Go."
+    Write-Host "Modèle léger choisi pour l'assistant (qwen3.5:4b)."
+    if ($memoirePc -ge 24) {
+        Write-Host "Astuce : pour le modèle complet, donnez plus de mémoire à Docker. Créez le fichier"
+        Write-Host "  $env:USERPROFILE\.wslconfig  contenant :  [wsl2]  puis  memory=$([math]::Floor($memoirePc * 0.75))GB"
+        Write-Host "puis redémarrez le PC et relancez ce script (remettez IA_MODELE=qwen3.5:9b dans .env)."
+    }
+}
+if ($memoireDocker -gt 0 -and $memoireDocker -lt 10) {
+    $contenuEnv = $contenuEnv -replace '(?m)^IA_WHISPER=large-v3-turbo', 'IA_WHISPER=small'
 }
 if ((Get-Command nvidia-smi -ErrorAction SilentlyContinue) -and $contenuEnv -notmatch '(?m)^COMPOSE_FILE=') {
-    $contenuEnv = $contenuEnv.TrimEnd() + "`nCOMPOSE_FILE=docker-compose.yml;docker-compose.gpu.yml`n"
-    Write-Host "Carte graphique NVIDIA détectée : l'assistant l'utilisera."
+    # Une carte NVIDIA ne suffit pas : Docker doit pouvoir l'utiliser (pilote récent, moteur WSL 2).
+    Write-Host "Carte graphique NVIDIA détectée : vérification de son accès depuis Docker…"
+    docker pull ollama/ollama:0.40.15 | Out-Null
+    docker run --rm --gpus all --entrypoint /bin/true ollama/ollama:0.40.15 2>$null | Out-Null
+    if ($LASTEXITCODE -eq 0) {
+        $contenuEnv = $contenuEnv.TrimEnd() + "`nCOMPOSE_FILE=docker-compose.yml;docker-compose.gpu.yml`n"
+        Write-Host "La carte graphique sera utilisée par l'assistant."
+    } else {
+        Write-Host "Docker ne peut pas utiliser la carte graphique (pilote NVIDIA à mettre à jour ?) : l'assistant utilisera le processeur."
+    }
 }
 [System.IO.File]::WriteAllText($cheminEnv, $contenuEnv, (New-Object System.Text.UTF8Encoding($false)))
 
 Ecrire-Etape "Construction et démarrage (le premier lancement peut prendre 5 à 10 minutes)"
 docker compose up -d --build
+if ($LASTEXITCODE -ne 0 -and (Select-String -LiteralPath $cheminEnv -Pattern '^COMPOSE_FILE=' -Quiet)) {
+    # La carte graphique n'est plus accessible (pilote, réglage de Docker) : on repart sans elle.
+    Write-Host "Démarrage impossible avec la carte graphique : nouvel essai sans elle." -ForegroundColor Yellow
+    $sansGpu = (Get-Content -LiteralPath $cheminEnv -Encoding UTF8 | Where-Object { $_ -notmatch '^COMPOSE_FILE=' }) -join "`n"
+    [System.IO.File]::WriteAllText($cheminEnv, $sansGpu + "`n", (New-Object System.Text.UTF8Encoding($false)))
+    $env:COMPOSE_FILE = "docker-compose.yml"
+    docker compose up -d --build
+}
 if ($LASTEXITCODE -ne 0) {
     Arreter "Le démarrage a échoué. Consultez les messages ci-dessus, ou lancez : docker compose logs"
 }

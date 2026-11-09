@@ -39,7 +39,7 @@ L'installateur :
 5. télécharge **une seule fois** les modèles gratuits de l'assistant IA (environ 8 Go : comptez 10 à 30 minutes selon la connexion) ;
 6. ouvre **http://localhost:8080** dans votre navigateur.
 
-> Ordinateur de moins de 16 Go de mémoire : l'installateur choisit automatiquement un modèle plus léger. Carte graphique NVIDIA : elle est détectée et utilisée, l'assistant répond alors beaucoup plus vite.
+> **Mémoire** : Docker Desktop ne reçoit par défaut que la moitié de la mémoire du PC. L'installateur la mesure et choisit le modèle de l'assistant en conséquence : modèle complet à partir de 14 Go pour Docker (PC de 32 Go), modèle léger en dessous. **Carte graphique NVIDIA** : l'installateur vérifie que Docker peut l'utiliser ; l'assistant répond alors beaucoup plus vite. Si elle cesse d'être accessible, l'application redémarre sans elle.
 
 ---
 
@@ -164,7 +164,7 @@ Après un changement de réglage, relancez `installer.ps1` : il télécharge le 
 ```
 APPLICATION AO/
 ├── installer.ps1          Installation / mise à jour Windows
-├── docker-compose.yml     Les 6 services : base, redis, backend, worker, ollama, web
+├── docker-compose.yml     Les 7 services : base, redis, backend, worker, voix, ollama, web
 ├── .env.example           Modèle de configuration (copié en .env par l'installateur)
 ├── donnees/               Fichiers importés (non versionnés)
 ├── backend/               Python 3.12 · Django 5.2 · Django Ninja · Celery
@@ -188,6 +188,7 @@ APPLICATION AO/
 | `redis` | File d'attente des tâches (Valkey, fork open source de Redis) |
 | `backend` | API Django (gunicorn) |
 | `worker` | Tâches de fond : lecture, conversion, OCR et découpage des documents, lecture des documents par l'IA |
+| `voix` | Voix de l'assistant : transcription (Whisper) et lecture à voix haute (Piper), chargées une seule fois |
 | `ollama` | Moteur d'IA local de l'assistant (modèles dans le volume `modeles_ia`) |
 | `web` | Caddy : sert l'interface et relaie l'API |
 
