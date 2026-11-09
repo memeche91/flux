@@ -66,11 +66,21 @@ export default function FormulairePoste({
           {brouillon.genre === "CHAPITRE" ? "Chapitre" : brouillon.genre === "ARTICLE" ? "Article (CCTP seul)" : "Ouvrage (CCTP + DPGF)"}
         </h2>
         <div className="flex items-center gap-2">
-          {modifie && <span className="text-xs font-semibold text-accent">Modifications non enregistrées</span>}
-          <button type="button" onClick={surAbandonner} disabled={!modifie || enregistrement} className="min-h-10 rounded-lg px-3 text-attenue hover:bg-surface-2 hover:text-texte disabled:opacity-40">
+          {modifie && <span className="text-xs font-semibold text-attention">Modifications non enregistrées</span>}
+          <button
+            type="button"
+            onClick={surAbandonner}
+            disabled={!modifie || enregistrement}
+            className="min-h-10 rounded-lg px-3 text-attenue hover:bg-surface-2 hover:text-texte disabled:opacity-40"
+          >
             Annuler
           </button>
-          <button type="button" onClick={surEnregistrer} disabled={!modifie || enregistrement} className="min-h-10 rounded-lg bg-accent px-4 font-bold text-sur-accent hover:bg-accent-clair disabled:opacity-40">
+          <button
+            type="button"
+            onClick={surEnregistrer}
+            disabled={!modifie || enregistrement}
+            className="min-h-10 rounded-lg bg-accent px-4 font-bold text-sur-accent hover:bg-accent-clair disabled:opacity-40"
+          >
             {enregistrement ? "Enregistrement…" : "Enregistrer"}
           </button>
         </div>
@@ -93,13 +103,31 @@ export default function FormulairePoste({
         <div className="flex flex-col gap-3 rounded-lg border border-bordure bg-fond/50 p-3">
           <div className="flex flex-wrap items-end gap-3">
             <Champ id="poste-unite" libelle="Unité">
-              <input id="poste-unite" value={brouillon.unite} onChange={(e) => surChangement({ unite: e.target.value })} placeholder="u, m², ml, ft…" className={CLASSE_CHAMP} />
+              <input
+                id="poste-unite"
+                value={brouillon.unite}
+                onChange={(e) => surChangement({ unite: e.target.value })}
+                placeholder="u, m², ml, ft…"
+                className={CLASSE_CHAMP}
+              />
             </Champ>
             <Champ id="poste-quantite" libelle="Quantité">
-              <input id="poste-quantite" inputMode="decimal" value={brouillon.quantite} onChange={(e) => surChangement({ quantite: e.target.value })} className={CLASSE_CHAMP} />
+              <input
+                id="poste-quantite"
+                inputMode="decimal"
+                value={brouillon.quantite}
+                onChange={(e) => surChangement({ quantite: e.target.value })}
+                className={CLASSE_CHAMP}
+              />
             </Champ>
             <Champ id="poste-prix" libelle="PU estimé HT (€)">
-              <input id="poste-prix" inputMode="decimal" value={brouillon.prix_unitaire} onChange={(e) => surChangement({ prix_unitaire: e.target.value })} className={CLASSE_CHAMP} />
+              <input
+                id="poste-prix"
+                inputMode="decimal"
+                value={brouillon.prix_unitaire}
+                onChange={(e) => surChangement({ prix_unitaire: e.target.value })}
+                className={CLASSE_CHAMP}
+              />
             </Champ>
             <Champ id="poste-option" libelle="Solution">
               <select id="poste-option" value={brouillon.option_id} onChange={(e) => surChangement({ option_id: e.target.value })} className={CLASSE_CHAMP}>
@@ -191,8 +219,9 @@ function SuggestionPrix({ titre, surChoix }: { titre: string; surChoix: (pu: num
         </button>
       </form>
       {chargement && <p className="text-attenue">Recherche…</p>}
-      {resultat && !chargement && (
-        resultat.statistiques.length === 0 ? (
+      {resultat &&
+        !chargement &&
+        (resultat.statistiques.length === 0 ? (
           <p className="text-attenue">Aucun prix trouvé. Essayez avec moins de mots.</p>
         ) : (
           <ul className="flex flex-col gap-1.5">
@@ -200,16 +229,22 @@ function SuggestionPrix({ titre, surChoix }: { titre: string; surChoix: (pu: num
               <li key={s.unite} className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-surface-2 px-3 py-2">
                 <span>
                   <strong className="tabular-nums">{formaterEuros(s.mediane)}</strong>
-                  <span className="text-attenue"> / {s.unite} · médiane de {s.nombre} prix ({formaterEuros(s.minimum)} à {formaterEuros(s.maximum)})</span>
+                  <span className="text-attenue">
+                    {" "}
+                    / {s.unite} · médiane de {s.nombre} prix ({formaterEuros(s.minimum)} à {formaterEuros(s.maximum)})
+                  </span>
                 </span>
-                <button type="button" onClick={() => surChoix(s.mediane, s.unite === "—" ? "" : s.unite)} className="min-h-9 rounded-lg bg-accent/15 px-3 text-sm font-semibold text-accent hover:bg-accent/25">
+                <button
+                  type="button"
+                  onClick={() => surChoix(s.mediane, s.unite === "—" ? "" : s.unite)}
+                  className="min-h-9 rounded-lg bg-accent/15 px-3 text-sm font-semibold text-accent hover:bg-accent/25"
+                >
                   Utiliser la médiane
                 </button>
               </li>
             ))}
           </ul>
-        )
-      )}
+        ))}
     </div>
   );
 }

@@ -33,14 +33,13 @@ export default function Connexion() {
       <div className="flex w-full max-w-sm flex-col gap-8">
         <div className="flex flex-col items-center gap-3 text-center">
           <Logo taille="grand" />
-          <p className="text-attenue">Appels d'offres, DCE, analyse des offres et GED de chantier.</p>
+          <div className="flex flex-col gap-1">
+            <p className="font-titre text-base text-texte">Vos projets d’aplomb, de l’appel d’offres à la réception.</p>
+            <p className="text-xs text-attenue">Appels d’offres, DCE, analyse des offres et GED de chantier.</p>
+          </div>
         </div>
 
-        <form
-          onSubmit={soumettre}
-          className="flex flex-col gap-4 rounded-xl border border-bordure bg-surface p-6"
-          noValidate
-        >
+        <form onSubmit={soumettre} className="flex flex-col gap-4 rounded-xl border border-bordure bg-surface p-6" noValidate>
           <h1 className="font-titre text-xl font-semibold">Connexion</h1>
 
           <div className="flex flex-col gap-1.5">

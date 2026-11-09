@@ -1,4 +1,4 @@
-"""Paramètres Django d'Application AO.
+"""Paramètres Django de D’Aplomb.
 
 Toute la configuration sensible passe par des variables d'environnement
 (fichier .env lu par Docker Compose). Sans PostgreSQL configuré, l'application

@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Utilitaire de ligne de commande Django pour Application AO."""
+"""Utilitaire de ligne de commande Django pour D’Aplomb."""
 import os
 import sys
 

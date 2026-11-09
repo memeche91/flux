@@ -6,6 +6,7 @@ import { BrowserRouter, Navigate, Route, Routes, useNavigate, useParams } from "
 
 import { ErreurApi } from "../api/client";
 import { CLASSE_CHAMP } from "../components/Filtres";
+import Logo from "../components/Logo";
 import { apiPortail, clientPortail, EVENEMENT_PORTAIL_EXPIRE, jetonCsrfPortail } from "../ged/client";
 import Explorateur from "../ged/Explorateur";
 import Journal from "../ged/Journal";
@@ -123,17 +124,17 @@ function Connexion({
 
   return (
     <main className="mx-auto flex min-h-screen max-w-md flex-col justify-center gap-6 px-4 py-10">
-      <div className="flex items-center gap-3">
-        <div aria-hidden="true" className="grid size-11 place-items-center rounded-md bg-accent text-sur-accent">
-          <HardHat className="size-6" />
-        </div>
-        <div className="flex flex-col">
+      <header className="flex flex-col gap-5">
+        <Logo taille="grand" />
+        <div className="flex flex-col gap-1">
           <span className="text-xs font-semibold uppercase tracking-[0.08em] text-accent">Accès des intervenants</span>
           <h1 className="font-titre text-2xl font-bold tracking-tight">Espace documentaire du chantier</h1>
         </div>
-      </div>
+      </header>
       <form onSubmit={valider} className="flex flex-col gap-4 rounded-xl border border-bordure bg-surface p-5">
-        {expiree && <p className="rounded-lg border border-accent/40 bg-accent/10 px-3 py-2 text-sm">Session terminée : saisissez de nouveau votre code.</p>}
+        {expiree && (
+          <p className="rounded-lg border border-attention/40 bg-attention/10 px-3 py-2 text-sm">Session terminée : saisissez de nouveau votre code.</p>
+        )}
         <div className="flex flex-col gap-1.5">
           <label htmlFor="code-acces" className="text-sm font-semibold">
             Votre code d'accès personnel
@@ -281,7 +282,7 @@ function Espace({ espace, surMaj, surDeconnecte }: { espace: EspacePortail; surM
         )}
 
         {espace.statut_espace === "RECEPTION" && (
-          <p className="rounded-lg border border-accent/40 bg-accent/10 px-4 py-3 text-sm">
+          <p className="rounded-lg border border-attention/40 bg-attention/10 px-4 py-3 text-sm">
             Chantier réceptionné : seuls le DOE, les éléments du DIUO, les levées de réserves et les photos sont encore attendus.
           </p>
         )}

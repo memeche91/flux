@@ -3,8 +3,8 @@ from django.urls import path
 
 from .api import api
 
-admin.site.site_header = "Application AO — administration"
-admin.site.site_title = "Application AO"
+admin.site.site_header = "D’Aplomb — administration"
+admin.site.site_title = "D’Aplomb"
 admin.site.index_title = "Paramétrage"
 
 urlpatterns = [

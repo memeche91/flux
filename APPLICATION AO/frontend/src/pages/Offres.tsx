@@ -32,7 +32,7 @@ const CLASSE_BOUTON_SECONDAIRE =
 const STYLE_STATUT: Record<StatutLectureOffre, string> = {
   EN_COURS: "border-info/40 bg-info/10 text-info",
   LUE: "border-succes/40 bg-succes/10 text-succes",
-  A_VERIFIER: "border-accent/50 bg-accent/10 text-accent",
+  A_VERIFIER: "border-attention/50 bg-attention/10 text-attention",
   NON_LUE: "border-danger/40 bg-danger/10 text-danger",
   MANUELLE: "border-bordure-forte bg-surface-2 text-attenue",
 };
@@ -422,7 +422,7 @@ function OffresRecues({ lot, surLot, recharger }: { lot: LotAnalyse; surLot: (lo
           </div>
         </div>
         {dejaRemise && !variante && (
-          <p className="text-sm text-accent">
+          <p className="text-sm text-attention">
             Cette entreprise a déjà remis une offre pour ce lot : cochez « Variante » ou modifiez l'offre existante ci-dessous.
           </p>
         )}
@@ -584,8 +584,8 @@ function CarteOffre({ offre, lot, surLot, recharger }: { offre: OffreAnalyse; lo
           <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-attenue">
             {offre.nom_original && <span className="max-w-64 truncate">{offre.nom_original}</span>}
             {offre.hors_delai && <span className="font-semibold text-danger">Reçue après la date limite</span>}
-            {offre.motif_non_classee && !offre.ecartee && <span className="text-accent">Non classée : {offre.motif_non_classee}</span>}
-            {offre.variante_sans_base && <span className="text-accent">Variante sans offre de base</span>}
+            {offre.motif_non_classee && !offre.ecartee && <span className="text-attention">Non classée : {offre.motif_non_classee}</span>}
+            {offre.variante_sans_base && <span className="text-attention">Variante sans offre de base</span>}
           </div>
         </div>
         <span className={`inline-flex min-h-7 items-center gap-1.5 rounded-full border px-2.5 text-xs font-semibold ${STYLE_STATUT[offre.statut_lecture]}`}>
@@ -866,7 +866,7 @@ function Comparatif({ lot, surLot }: { lot: LotAnalyse; surLot: (lot: LotAnalyse
                 {offres.map((o) => (
                   <td key={o.id} className="px-2.5 py-2 text-right tabular-nums">
                     {formaterEuros(o.prix ?? (o.ecartee ? null : o.montant_base))}
-                    {o.incomplete && o.montant_base != null && <span className="block text-xs font-normal text-accent">PSE retenue non chiffrée</span>}
+                    {o.incomplete && o.montant_base != null && <span className="block text-xs font-normal text-attention">PSE retenue non chiffrée</span>}
                   </td>
                 ))}
               </tr>
@@ -1002,7 +1002,7 @@ function ChapitreComparatif({
                   {extreme && <span className="sr-only">{extreme === "bas" ? " (prix le plus bas)" : " (prix le plus élevé)"}</span>}
                   {prix?.pu != null && <span className="block text-xs text-attenue">PU {formaterEuros(prix.pu)}</span>}
                   {prix?.quantite != null && ligne.quantite != null && prix.quantite !== ligne.quantite && (
-                    <span className="block text-xs text-accent">Qté {formaterQuantite(prix.quantite)}</span>
+                    <span className="block text-xs text-attention">Qté {formaterQuantite(prix.quantite)}</span>
                   )}
                 </td>
               );
@@ -1123,7 +1123,7 @@ function Notation({ lot, projetId, surLot }: { lot: LotAnalyse; projetId: number
         </Champ>
       </div>
       {criteres.length === 0 ? (
-        <p className="rounded-lg border border-accent/40 bg-accent/8 px-3 py-2 text-sm">
+        <p className="rounded-lg border border-attention/40 bg-attention/8 px-3 py-2 text-sm">
           Aucun critère de jugement : renseignez-les dans les <Link to={`/projets/${projetId}`}>paramètres de la consultation</Link> (ils figurent aussi dans le
           RC).
         </p>
@@ -1132,7 +1132,7 @@ function Notation({ lot, projetId, surLot }: { lot: LotAnalyse; projetId: number
           Critères du RC : {criteres.map((c) => `${c.libelle} ${c.ponderation.toLocaleString("fr-FR")} %`).join(" · ")}.
           {!criteres.some((c) => c.prix) && " Aucun critère « Prix » : la note de prix n'est pas calculée."}
           {sommePonderations !== 100 && (
-            <span className="text-accent"> La somme des pondérations fait {sommePonderations.toLocaleString("fr-FR")} % au lieu de 100 %.</span>
+            <span className="text-attention"> La somme des pondérations fait {sommePonderations.toLocaleString("fr-FR")} % au lieu de 100 %.</span>
           )}
         </p>
       )}
@@ -1186,7 +1186,7 @@ function Notation({ lot, projetId, surLot }: { lot: LotAnalyse; projetId: number
         </div>
       )}
       {nonClassees.length > 0 && (
-        <ul className="flex flex-col gap-1 text-sm text-accent">
+        <ul className="flex flex-col gap-1 text-sm text-attention">
           {nonClassees.map((o) => (
             <li key={o.id}>
               {o.nom} : non classée ({o.motif_non_classee}).
@@ -1315,7 +1315,7 @@ function LigneNotation({
         ))}
         <td className="px-2.5 py-2 text-right font-titre text-base font-bold tabular-nums">
           {formaterNote(offre.total)}
-          {!offre.notation_complete && <span className="block text-xs font-normal text-accent">notes à compléter</span>}
+          {!offre.notation_complete && <span className="block text-xs font-normal text-attention">notes à compléter</span>}
         </td>
         <td className="px-1.5 py-2 text-right">
           <button
@@ -1527,7 +1527,7 @@ function Attribution({
               à la place. Choisissez l'offre à proposer avant de valider.
             </p>
           )}
-          {horsClassement && <p className="text-sm text-accent">L'offre proposée n'est pas la mieux classée : justifiez ce choix dans les observations.</p>}
+          {horsClassement && <p className="text-sm text-attention">L'offre proposée n'est pas la mieux classée : justifiez ce choix dans les observations.</p>}
           {prixAJustifier && (
             <p className="text-sm text-danger">
               Le prix de cette offre paraît anormalement bas : demandez des précisions écrites à l'entreprise

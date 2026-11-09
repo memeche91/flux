@@ -105,10 +105,7 @@ export default function ZoneImport({ type, lots, lotSelectionne, surDocumentAjou
   const enCours = file.some((e) => e.etat === "attente" || e.etat === "envoi");
 
   return (
-    <section
-      aria-labelledby={`${identifiant}-titre`}
-      className="flex flex-col gap-4 rounded-xl border border-bordure bg-surface p-5"
-    >
+    <section aria-labelledby={`${identifiant}-titre`} className="flex flex-col gap-4 rounded-xl border border-bordure bg-surface p-5">
       <div className="flex flex-col gap-1">
         <h2 id={`${identifiant}-titre`} className="font-titre text-lg font-semibold">
           Ajouter des {type.pluriel === type.libelle ? type.libelle : type.pluriel.toLowerCase()}
@@ -120,7 +117,7 @@ export default function ZoneImport({ type, lots, lotSelectionne, surDocumentAjou
         {type.parLot && (
           <div className="flex min-w-0 flex-[2_1_240px] flex-col gap-1.5">
             <label htmlFor={`${identifiant}-lot`} className="text-xs font-semibold text-attenue">
-              Lot <span className="text-accent">(obligatoire)</span>
+              Lot <span className="text-attention">(obligatoire)</span>
             </label>
             <select
               id={`${identifiant}-lot`}
@@ -167,12 +164,7 @@ export default function ZoneImport({ type, lots, lotSelectionne, surDocumentAjou
           <label htmlFor={`${identifiant}-marche`} className="text-xs font-semibold text-attenue">
             Marché
           </label>
-          <select
-            id={`${identifiant}-marche`}
-            value={typeMarche}
-            onChange={(e) => setTypeMarche(e.target.value as TypeMarche)}
-            className={champ}
-          >
+          <select id={`${identifiant}-marche`} value={typeMarche} onChange={(e) => setTypeMarche(e.target.value as TypeMarche)} className={champ}>
             <option value="">Non précisé</option>
             <option value="PUBLIC">Public</option>
             <option value="PRIVE">Privé</option>
@@ -223,11 +215,7 @@ export default function ZoneImport({ type, lots, lotSelectionne, surDocumentAjou
               {enCours && " · envoi en cours…"}
             </p>
             {!enCours && (
-              <button
-                type="button"
-                onClick={() => setFile([])}
-                className="min-h-11 rounded-lg px-3 text-attenue hover:bg-surface-2 hover:text-texte"
-              >
+              <button type="button" onClick={() => setFile([])} className="min-h-11 rounded-lg px-3 text-attenue hover:bg-surface-2 hover:text-texte">
                 Effacer la liste
               </button>
             )}
@@ -247,10 +235,7 @@ export default function ZoneImport({ type, lots, lotSelectionne, surDocumentAjou
                   </div>
                   {element.etat === "envoi" && (
                     <div aria-hidden="true" className="h-1.5 rounded-full bg-bordure">
-                      <div
-                        className="h-1.5 rounded-full bg-accent transition-[width]"
-                        style={{ width: `${Math.round(element.progression * 100)}%` }}
-                      />
+                      <div className="h-1.5 rounded-full bg-accent transition-[width]" style={{ width: `${Math.round(element.progression * 100)}%` }} />
                     </div>
                   )}
                   {element.message && <span className="text-xs text-danger">{element.message}</span>}

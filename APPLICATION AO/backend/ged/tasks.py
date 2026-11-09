@@ -133,7 +133,7 @@ def alerter_essais(total: int, ip_fiable: bool = False) -> None:
     texte = (
         f"Bonjour,\n\n{total} codes d'accès erronés ont été saisis sur la GED en moins d'une heure.\n"
         "Il peut s'agir d'erreurs de saisie répétées ou d'une tentative de deviner un code. Les codes justes restent acceptés.\n"
-        f"{journal}\n\nApplication AO"
+        f"{journal}\n\nD’Aplomb"
     )
     EmailMessage("GED : nombreux codes d'accès erronés", texte, settings.DEFAULT_FROM_EMAIL, adresses).send(fail_silently=True)
 

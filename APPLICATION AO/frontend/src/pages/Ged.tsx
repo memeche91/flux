@@ -184,7 +184,7 @@ function Statistiques({ espace, surVoir }: { espace: EspaceGed; surVoir: (onglet
   return (
     <div className="flex flex-wrap gap-3">
       <Tuile valeur={s.documents} libelle={s.documents > 1 ? "documents" : "document"} />
-      <Tuile valeur={s.en_attente_visa} libelle="en attente de visa" accent={s.en_attente_visa > 0} />
+      <Tuile valeur={s.en_attente_visa} libelle="en attente de visa" attention={s.en_attente_visa > 0} />
       {s.visas_en_retard > 0 && <Tuile valeur={s.visas_en_retard} libelle="visas en retard" alerte />}
       <Tuile valeur={actifs} libelle={actifs > 1 ? "intervenants" : "intervenant"} surClic={() => surVoir("intervenants")} />
       {s.notifications_en_echec > 0 && (
@@ -198,10 +198,22 @@ function Statistiques({ espace, surVoir }: { espace: EspaceGed; surVoir: (onglet
   );
 }
 
-function Tuile({ valeur, libelle, accent, alerte, surClic }: { valeur: number; libelle: string; accent?: boolean; alerte?: boolean; surClic?: () => void }) {
+function Tuile({
+  valeur,
+  libelle,
+  attention,
+  alerte,
+  surClic,
+}: {
+  valeur: number;
+  libelle: string;
+  attention?: boolean;
+  alerte?: boolean;
+  surClic?: () => void;
+}) {
   const contenu = (
     <>
-      <span className={`font-titre text-2xl font-bold ${alerte ? "text-danger" : accent ? "text-accent" : ""}`}>{valeur.toLocaleString("fr-FR")}</span>
+      <span className={`font-titre text-2xl font-bold ${alerte ? "text-danger" : attention ? "text-attention" : ""}`}>{valeur.toLocaleString("fr-FR")}</span>
       <span className="text-sm text-attenue">{libelle}</span>
     </>
   );

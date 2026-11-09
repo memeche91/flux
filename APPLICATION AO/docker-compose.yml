@@ -1,5 +1,7 @@
-# Application AO — lancement : docker compose up -d --build
+# D’Aplomb — lancement : docker compose up -d --build
 # (le script installer.ps1 fait tout automatiquement sous Windows)
+# « application-ao » est le nom technique du projet : ne le changez jamais, les volumes de
+# données (base_donnees, modeles_ia…) portent ce préfixe et seraient perdus de vue.
 name: application-ao
 
 x-backend: &backend

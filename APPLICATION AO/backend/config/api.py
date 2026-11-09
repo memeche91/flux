@@ -18,7 +18,8 @@ from projets.api_pieces import router as pieces_router
 from referentiel.api import router as referentiel_router
 
 api = NinjaAPI(
-    title="Application AO",
+    title="D’Aplomb",
+    description="Vos projets d’aplomb, de l’appel d’offres à la réception.",
     version="0.1.0",
     auth=session_bureau_etudes,
     docs_decorator=staff_member_required,

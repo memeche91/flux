@@ -43,7 +43,7 @@ export default function TableauDeBord() {
       <EnTetePage
         surtitre="Tableau de bord"
         titre={`Bonjour ${utilisateur?.nom_complet ?? ""}`}
-        sousTitre="Vos anciens documents alimentent la bibliothèque : ils serviront à reproduire votre façon de rédiger."
+        sousTitre="Vos projets d’aplomb, de l’appel d’offres à la réception."
         actions={
           <Link
             to="/bibliotheque?type=CCTP"
@@ -65,6 +65,7 @@ export default function TableauDeBord() {
         <h2 id="titre-bibliotheque" className="font-titre text-lg font-semibold">
           Bibliothèque documentaire{stats ? ` · ${formaterNombre(stats.total)} documents` : ""}
         </h2>
+        <p className="-mt-1 text-sm text-attenue">Vos anciens documents alimentent la bibliothèque : ils serviront à reproduire votre façon de rédiger.</p>
         <div className="flex flex-wrap gap-3">
           {TYPES_DOCUMENT.map((type) => (
             <Link

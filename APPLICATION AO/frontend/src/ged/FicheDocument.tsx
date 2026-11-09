@@ -200,7 +200,7 @@ function CarteVersion({ version: v, document: d, client, droits, referentiels, s
           </>
         ) : null}
       </p>
-      {v.indice_force && <p className="text-xs text-accent">Indice accepté hors séquence : {v.indice_force}</p>}
+      {v.indice_force && <p className="text-xs text-attention">Indice accepté hors séquence : {v.indice_force}</p>}
 
       <div className="flex flex-wrap gap-2">
         {v.fichier_archive ? (
@@ -239,7 +239,7 @@ function CarteVersion({ version: v, document: d, client, droits, referentiels, s
             {v.vise_le ? `, le ${formaterDateHeure(v.vise_le)}` : ""}
           </p>
           {v.visa_commentaire && <p className="whitespace-pre-line text-attenue">{v.visa_commentaire}</p>}
-          {v.nouvel_indice_attendu && <p className="mt-1 font-semibold text-accent">Un nouvel indice est attendu.</p>}
+          {v.nouvel_indice_attendu && <p className="mt-1 font-semibold text-attention">Un nouvel indice est attendu.</p>}
         </div>
       )}
 
@@ -271,7 +271,7 @@ function CarteVersion({ version: v, document: d, client, droits, referentiels, s
             v.accuses.length ? (
               <span className="text-succes">Lu par : {v.accuses.map((a) => `${a.intervenant} (${a.lu_par}, ${formaterDateHeure(a.lu_le)})`).join(" ; ")}</span>
             ) : (
-              <span className="text-accent">Accusé de lecture attendu de l'entreprise.</span>
+              <span className="text-attention">Accusé de lecture attendu de l'entreprise.</span>
             )
           ) : v.lu_le ? (
             <span className="inline-flex items-center gap-1.5 text-succes">

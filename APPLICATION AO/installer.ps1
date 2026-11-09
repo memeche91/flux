@@ -1,5 +1,6 @@
 ﻿<#
-  Application AO - installation et démarrage sous Windows
+  D’Aplomb - installation et démarrage sous Windows
+  Vos projets d’aplomb, de l’appel d’offres à la réception.
 
   Utilisation : clic droit sur ce fichier > « Exécuter avec PowerShell »
   ou, dans PowerShell :  powershell -ExecutionPolicy Bypass -File .\installer.ps1
@@ -9,6 +10,9 @@
 #>
 
 Set-Location -LiteralPath $PSScriptRoot
+
+Write-Host "D’Aplomb - installation et démarrage" -ForegroundColor Cyan
+Write-Host "Vos projets d’aplomb, de l’appel d’offres à la réception."
 
 function Ecrire-Etape([string]$texte) {
     Write-Host ""
@@ -294,6 +298,6 @@ if ($modeGed) {
 }
 
 Write-Host ""
-Write-Host "Application AO est prête : http://localhost:$port" -ForegroundColor Green
+Write-Host "D’Aplomb est prêt : http://localhost:$port" -ForegroundColor Green
 Start-Process "http://localhost:$port"
 Read-Host "Appuyez sur Entrée pour fermer"

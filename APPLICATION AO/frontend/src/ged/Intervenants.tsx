@@ -68,7 +68,7 @@ export default function Intervenants({ etat, surMaj, surInvitations }: Propriete
   return (
     <div className="flex flex-col gap-4">
       {espace.lots_sans_entreprise.length > 0 && (
-        <p className="rounded-lg border border-accent/40 bg-accent/10 px-4 py-3 text-sm">
+        <p className="rounded-lg border border-attention/40 bg-attention/10 px-4 py-3 text-sm">
           Lots sans entreprise active : {espace.lots_sans_entreprise.map((l) => `${l.code} – ${l.intitule}`).join(" ; ")}.
         </p>
       )}

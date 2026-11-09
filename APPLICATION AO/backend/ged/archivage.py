@@ -253,7 +253,7 @@ def _journal_csv(projet: Projet) -> bytes:
 def _lisez_moi(projet: Projet, archive: ProjetArchive) -> bytes:
     lignes = [
         f"ARCHIVE DU PROJET « {projet.nom} »" + (f" (n° {projet.numero})" if projet.numero else ""),
-        f"Produite le {timezone.localtime():%d/%m/%Y à %H:%M} par Application AO.",
+        f"Produite le {timezone.localtime():%d/%m/%Y à %H:%M} par D’Aplomb.",
         "",
         "01 Pieces ecrites : RC, CCAP, actes d'engagement, CCTP et DPGF (Word et PDF).",
         "02 DCE : dossiers de consultation générés et documents joints.",

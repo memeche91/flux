@@ -222,7 +222,7 @@ export default function Explorateur({ client, droits, referentiels, documentOuve
             </button>
           )}
           {entreesVues.length > 0 && (
-            <ul className="flex flex-col gap-1 rounded-xl border border-accent/30 bg-accent/5 p-2">
+            <ul className="flex flex-col gap-1 rounded-xl border border-attention/30 bg-attention/5 p-2">
               {entreesVues.map((e) => (
                 <li key={e.vue}>
                   <BoutonVue actif={vue === e.vue} surClic={() => setVue(e.vue)} libelle={e.libelle} nombre={e.nombre} alerte={e.alerte} />
@@ -409,10 +409,12 @@ function LigneDocument({ document: d, ouvert, surBascule, client, droits, refere
               </span>
             )}
             {!d.annule && v?.nouvel_indice_attendu && d.peut_ajouter_indice && !droits.cabinet && (
-              <span className="rounded-full border border-accent/50 bg-accent/10 px-2.5 py-0.5 text-xs font-semibold text-accent">Nouvel indice attendu</span>
+              <span className="rounded-full border border-attention/50 bg-attention/10 px-2.5 py-0.5 text-xs font-semibold text-attention">
+                Nouvel indice attendu
+              </span>
             )}
             {aLire && (
-              <span className="inline-flex items-center gap-1 rounded-full border border-accent/50 bg-accent/10 px-2.5 py-0.5 text-xs font-semibold text-accent">
+              <span className="inline-flex items-center gap-1 rounded-full border border-attention/50 bg-attention/10 px-2.5 py-0.5 text-xs font-semibold text-attention">
                 <Eye aria-hidden="true" className="size-3.5" />À lire
               </span>
             )}

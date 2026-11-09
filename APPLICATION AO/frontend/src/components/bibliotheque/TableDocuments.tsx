@@ -19,19 +19,12 @@ interface Proprietes {
 
 const STYLES_STATUT: Record<StatutAnalyse, string> = {
   ANALYSE: "bg-succes/12 text-succes",
-  EN_ATTENTE: "bg-accent/15 text-accent",
+  EN_ATTENTE: "bg-attention/15 text-attention",
   NON_PRIS_EN_CHARGE: "bg-info/12 text-info",
   ERREUR: "bg-danger/12 text-danger",
 };
 
-export default function TableDocuments({
-  titre,
-  documents,
-  afficherLot,
-  recherche,
-  surRecherche,
-  surSuppression,
-}: Proprietes) {
+export default function TableDocuments({ titre, documents, afficherLot, recherche, surRecherche, surSuppression }: Proprietes) {
   const [erreur, setErreur] = useState<string | null>(null);
   const [suppressionEnCours, setSuppressionEnCours] = useState<number | null>(null);
 
@@ -101,10 +94,20 @@ export default function TableDocuments({
           <table className="w-full min-w-[640px] border-collapse">
             <thead>
               <tr className="text-left text-xs uppercase tracking-[0.06em] text-attenue">
-                <th scope="col" className="px-5 py-2.5 font-semibold">Document</th>
-                {afficherLot && <th scope="col" className="px-3 py-2.5 font-semibold">Lot</th>}
-                <th scope="col" className="px-3 py-2.5 font-semibold">Contenu extrait</th>
-                <th scope="col" className="px-3 py-2.5 font-semibold">Analyse</th>
+                <th scope="col" className="px-5 py-2.5 font-semibold">
+                  Document
+                </th>
+                {afficherLot && (
+                  <th scope="col" className="px-3 py-2.5 font-semibold">
+                    Lot
+                  </th>
+                )}
+                <th scope="col" className="px-3 py-2.5 font-semibold">
+                  Contenu extrait
+                </th>
+                <th scope="col" className="px-3 py-2.5 font-semibold">
+                  Analyse
+                </th>
                 <th scope="col" className="px-5 py-2.5 text-right font-semibold">
                   <span className="sr-only">Actions</span>
                 </th>
@@ -112,11 +115,7 @@ export default function TableDocuments({
             </thead>
             <tbody>
               {documents.map((document) => {
-                const details = [
-                  document.operation,
-                  document.annee ? String(document.annee) : "",
-                  document.type_marche_libelle,
-                ].filter(Boolean);
+                const details = [document.operation, document.annee ? String(document.annee) : "", document.type_marche_libelle].filter(Boolean);
                 const fichier = `${formaterTaille(document.taille)} · ajouté le ${formaterDate(document.ajoute_le)}`;
                 return (
                   <tr key={document.id} className="border-t border-bordure align-top">
@@ -153,8 +152,7 @@ export default function TableDocuments({
                           {document.statut_analyse_libelle}
                         </span>
                         {/* Le détail n'est affiché que s'il y a un problème ; sinon la colonne « Contenu extrait » suffit. */}
-                        {(document.statut_analyse === "ERREUR" || document.statut_analyse === "NON_PRIS_EN_CHARGE") &&
-                          document.message_analyse && (
+                        {(document.statut_analyse === "ERREUR" || document.statut_analyse === "NON_PRIS_EN_CHARGE") && document.message_analyse && (
                           <span className="text-xs text-attenue">{document.message_analyse}</span>
                         )}
                       </div>

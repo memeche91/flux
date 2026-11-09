@@ -119,7 +119,7 @@ function Controle({ etat }: { etat: EtatDCE }) {
       <ul className="flex flex-col gap-1.5">
         {etat.controle.map((point, indice) => {
           const Icone = point.niveau === "OK" ? CheckCircle2 : point.niveau === "MANQUE" ? XCircle : AlertTriangle;
-          const couleur = point.niveau === "OK" ? "text-succes" : point.niveau === "MANQUE" ? "text-danger" : "text-accent";
+          const couleur = point.niveau === "OK" ? "text-succes" : point.niveau === "MANQUE" ? "text-danger" : "text-attention";
           return (
             <li key={indice} className="flex items-start gap-2.5 text-sm">
               <Icone aria-hidden="true" className={`mt-0.5 size-4 shrink-0 ${couleur}`} />
@@ -172,7 +172,9 @@ function DocumentsJoints({ projetId, lots, etat, surChangement }: { projetId: nu
 
   return (
     <Section numero={2} titre="Plans et documents à joindre">
-      <p className="text-sm text-attenue">Plans, études de sol, diagnostics, PGC… Sans limite de nombre. Un document rattaché à un lot est rangé dans le dossier de ce lot.</p>
+      <p className="text-sm text-attenue">
+        Plans, études de sol, diagnostics, PGC… Sans limite de nombre. Un document rattaché à un lot est rangé dans le dossier de ce lot.
+      </p>
       <div className="flex flex-wrap items-end gap-3">
         <Champ id="jointe-categorie" libelle="Type de document">
           <select id="jointe-categorie" value={categorie} onChange={(e) => setCategorie(e.target.value as CategoriePieceJointe)} className={CLASSE_CHAMP}>
@@ -285,7 +287,11 @@ function Generation({ projetId, etat, surChangement }: { projetId: number; etat:
 
   async function generer() {
     setErreur(null);
-    if (indice !== etat.indice && !window.confirm(`L'indice du projet passera de ${etat.indice} à ${indice} : toutes les pièces du dossier porteront l'indice ${indice}. Continuer ?`)) return;
+    if (
+      indice !== etat.indice &&
+      !window.confirm(`L'indice du projet passera de ${etat.indice} à ${indice} : toutes les pièces du dossier porteront l'indice ${indice}. Continuer ?`)
+    )
+      return;
     try {
       await api(`/projets/${projetId}/dce/dossiers`, { method: "POST", body: JSON.stringify({ indice, avec_word: avecWord }) });
       surChangement();
@@ -321,7 +327,9 @@ function Generation({ projetId, etat, surChangement }: { projetId: number; etat:
         </button>
       </div>
       {indice !== etat.indice && indice.trim() && (
-        <p className="text-sm text-accent">Toutes les pièces du dossier porteront l'indice {indice} (indice actuel du projet : {etat.indice}).</p>
+        <p className="text-sm text-attention">
+          Toutes les pièces du dossier porteront l'indice {indice} (indice actuel du projet : {etat.indice}).
+        </p>
       )}
       <details onToggle={(e) => setApercuOuvert((e.target as HTMLDetailsElement).open)} className="rounded-lg border border-bordure bg-fond/40">
         <summary className="flex min-h-10 cursor-pointer items-center gap-2 px-3 text-sm font-semibold">
@@ -467,7 +475,10 @@ function TransmissionMoa({ projetId, etat, surChangement }: { projetId: number; 
       setResultat(
         envoiCree.statut === "ENVOYE"
           ? { ok: true, texte: `DCE envoyé à ${envoiCree.destinataires}${envoiCree.piece_jointe ? " (dossier joint)" : ""}.` }
-          : { ok: envoiCree.statut === "A_ENVOYER", texte: envoiCree.erreur || "Message préparé : envoyez-le depuis votre messagerie (voir les envois ci-dessous)." },
+          : {
+              ok: envoiCree.statut === "A_ENVOYER",
+              texte: envoiCree.erreur || "Message préparé : envoyez-le depuis votre messagerie (voir les envois ci-dessous).",
+            },
       );
       surChangement();
     } catch (probleme) {
@@ -499,7 +510,14 @@ function TransmissionMoa({ projetId, etat, surChangement }: { projetId: number; 
               </select>
             </Champ>
             <Champ id="moa-destinataires" libelle="E-mail du maître d'ouvrage" large>
-              <input id="moa-destinataires" required value={destinataires} onChange={(e) => setDestinataires(e.target.value)} placeholder="prenom.nom@collectivite.fr" className={CLASSE_CHAMP} />
+              <input
+                id="moa-destinataires"
+                required
+                value={destinataires}
+                onChange={(e) => setDestinataires(e.target.value)}
+                placeholder="prenom.nom@collectivite.fr"
+                className={CLASSE_CHAMP}
+              />
             </Champ>
           </div>
           <div className="flex flex-col gap-1.5">
@@ -534,8 +552,9 @@ function TransmissionMoa({ projetId, etat, surChangement }: { projetId: number; 
             />
           </div>
           {etat.email_actif && dossier.taille > etat.piece_jointe_max_mo * 1048576 && (
-            <p className="text-sm text-accent">
-              Le dossier ({formaterTaille(dossier.taille)}) dépasse {etat.piece_jointe_max_mo} Mo : il ne sera pas joint. Transmettez-le par FranceTransfert ou un service équivalent.
+            <p className="text-sm text-attention">
+              Le dossier ({formaterTaille(dossier.taille)}) dépasse {etat.piece_jointe_max_mo} Mo : il ne sera pas joint. Transmettez-le par FranceTransfert ou
+              un service équivalent.
             </p>
           )}
           <div className="flex flex-wrap items-center justify-end gap-3">
@@ -544,7 +563,11 @@ function TransmissionMoa({ projetId, etat, surChangement }: { projetId: number; 
                 {resultat.texte}
               </span>
             )}
-            <button type="submit" disabled={envoi} className="flex min-h-11 items-center gap-2 rounded-lg bg-accent px-4.5 font-bold text-sur-accent hover:bg-accent-clair disabled:opacity-50">
+            <button
+              type="submit"
+              disabled={envoi}
+              className="flex min-h-11 items-center gap-2 rounded-lg bg-accent px-4.5 font-bold text-sur-accent hover:bg-accent-clair disabled:opacity-50"
+            >
               <Send aria-hidden="true" className="size-4" />
               {etat.email_actif ? "Envoyer au maître d'ouvrage" : "Préparer le message"}
             </button>
@@ -592,7 +615,12 @@ function Entreprises({ projetId, lots, etat, surChangement }: { projetId: number
   async function envoyer(evenement: FormEvent) {
     evenement.preventDefault();
     if (choisies.length === 0) return;
-    if (!public_ && indice !== etat.indice && !window.confirm(`L'indice du projet passera de ${etat.indice} à ${indice} : toutes les pièces des dossiers porteront l'indice ${indice}. Continuer ?`)) return;
+    if (
+      !public_ &&
+      indice !== etat.indice &&
+      !window.confirm(`L'indice du projet passera de ${etat.indice} à ${indice} : toutes les pièces des dossiers porteront l'indice ${indice}. Continuer ?`)
+    )
+      return;
     setEnvoi(true);
     setResultat(null);
     try {
@@ -624,7 +652,13 @@ function Entreprises({ projetId, lots, etat, surChangement }: { projetId: number
       </p>
       <ul className="flex flex-col gap-3">
         {lots.map((lot) => (
-          <ConsultationsLot key={lot.id} projetId={projetId} lot={lot} consultations={etat.consultations.filter((c) => c.lot_id === lot.id)} surChangement={surChangement} />
+          <ConsultationsLot
+            key={lot.id}
+            projetId={projetId}
+            lot={lot}
+            consultations={etat.consultations.filter((c) => c.lot_id === lot.id)}
+            surChangement={surChangement}
+          />
         ))}
       </ul>
 
@@ -657,7 +691,13 @@ function Entreprises({ projetId, lots, etat, surChangement }: { projetId: number
           {!public_ && (
             <div className="flex flex-wrap items-end gap-3">
               <Champ id="entreprises-indice" libelle="Indice du DCE">
-                <input id="entreprises-indice" value={indice} maxLength={10} onChange={(e) => setIndice(e.target.value.toUpperCase())} className={CLASSE_CHAMP} />
+                <input
+                  id="entreprises-indice"
+                  value={indice}
+                  maxLength={10}
+                  onChange={(e) => setIndice(e.target.value.toUpperCase())}
+                  className={CLASSE_CHAMP}
+                />
               </Champ>
               <label className="flex min-h-11 flex-[2_1_260px] items-center gap-2 text-sm">
                 <input type="checkbox" checked={avecWord} onChange={(e) => setAvecWord(e.target.checked)} className="size-4 accent-[var(--color-accent)]" />
@@ -673,9 +713,17 @@ function Entreprises({ projetId, lots, etat, surChangement }: { projetId: number
           </div>
           <div className="flex flex-col gap-1.5">
             <label htmlFor="entreprises-message" className="text-xs font-semibold text-attenue">
-              Message ({"[entreprise]"} et {"[lots]"} sont remplacés pour chaque destinataire{public_ ? "" : " ; il sert aussi de lettre de consultation dans le dossier"})
+              Message ({"[entreprise]"} et {"[lots]"} sont remplacés pour chaque destinataire
+              {public_ ? "" : " ; il sert aussi de lettre de consultation dans le dossier"})
             </label>
-            <textarea id="entreprises-message" rows={10} required value={message} onChange={(e) => setMessage(e.target.value)} className={`${CLASSE_CHAMP} py-2.5`} />
+            <textarea
+              id="entreprises-message"
+              rows={10}
+              required
+              value={message}
+              onChange={(e) => setMessage(e.target.value)}
+              className={`${CLASSE_CHAMP} py-2.5`}
+            />
           </div>
           <div className="flex flex-wrap items-center justify-end gap-3">
             {resultat && (
@@ -698,7 +746,17 @@ function Entreprises({ projetId, lots, etat, surChangement }: { projetId: number
   );
 }
 
-function ConsultationsLot({ projetId, lot, consultations, surChangement }: { projetId: number; lot: LotProjetCourt; consultations: ConsultationDCE[]; surChangement: () => void }) {
+function ConsultationsLot({
+  projetId,
+  lot,
+  consultations,
+  surChangement,
+}: {
+  projetId: number;
+  lot: LotProjetCourt;
+  consultations: ConsultationDCE[];
+  surChangement: () => void;
+}) {
   const [ouvert, setOuvert] = useState(false);
   const [suggestions, setSuggestions] = useState<{ id: number; raison_sociale: string; ville: string; email: string }[] | null>(null);
   const [choix, setChoix] = useState<Set<number>>(new Set());
@@ -819,7 +877,12 @@ function ConsultationsLot({ projetId, lot, consultations, surChangement }: { pro
             </label>
           ))}
           {suggestions && suggestions.length > 0 && (
-            <button type="button" onClick={() => void ajouter()} disabled={choix.size === 0} className="self-end min-h-10 rounded-lg bg-accent px-4 text-sm font-bold text-sur-accent disabled:opacity-50">
+            <button
+              type="button"
+              onClick={() => void ajouter()}
+              disabled={choix.size === 0}
+              className="self-end min-h-10 rounded-lg bg-accent px-4 text-sm font-bold text-sur-accent disabled:opacity-50"
+            >
               Ajouter {choix.size > 0 ? pluriel(choix.size, "entreprise") : ""}
             </button>
           )}
@@ -854,11 +917,17 @@ function Envois({ etat, surChangement }: { etat: EtatDCE; surChangement: () => v
                 {e.destinataires} · {formaterDate(e.envoye_le ?? e.cree_le)}
                 {e.piece_jointe ? " · dossier joint" : ""}
               </span>
-              {e.erreur && <span className="block text-xs text-accent">{e.erreur}</span>}
+              {e.erreur && <span className="block text-xs text-attention">{e.erreur}</span>}
             </span>
             <span
               className={`rounded-full px-2.5 py-1 text-xs font-semibold ${
-                e.statut === "ENVOYE" ? "bg-succes/12 text-succes" : e.statut === "ERREUR" ? "bg-danger/12 text-danger" : "bg-accent/12 text-accent"
+                e.statut === "ENVOYE"
+                  ? "bg-succes/12 text-succes"
+                  : e.statut === "ERREUR"
+                    ? "bg-danger/12 text-danger"
+                    : e.statut === "A_ENVOYER"
+                      ? "bg-attention/12 text-attention"
+                      : "bg-accent/12 text-accent"
               }`}
             >
               {e.statut_libelle}
@@ -866,12 +935,18 @@ function Envois({ etat, surChangement }: { etat: EtatDCE; surChangement: () => v
             {(e.statut === "A_ENVOYER" || e.statut === "ERREUR") && (
               <>
                 {e.dossier_id && (
-                  <a href={`/api/dce/dossiers/${e.dossier_id}/telecharger`} className="flex min-h-10 items-center gap-1.5 rounded-lg border border-bordure-forte px-3 text-sm text-texte no-underline hover:bg-surface-2">
+                  <a
+                    href={`/api/dce/dossiers/${e.dossier_id}/telecharger`}
+                    className="flex min-h-10 items-center gap-1.5 rounded-lg border border-bordure-forte px-3 text-sm text-texte no-underline hover:bg-surface-2"
+                  >
                     <Download aria-hidden="true" className="size-4" />
                     Dossier
                   </a>
                 )}
-                <a href={lienMail(e)} className="flex min-h-10 items-center gap-1.5 rounded-lg border border-bordure-forte px-3 text-sm text-texte no-underline hover:bg-surface-2">
+                <a
+                  href={lienMail(e)}
+                  className="flex min-h-10 items-center gap-1.5 rounded-lg border border-bordure-forte px-3 text-sm text-texte no-underline hover:bg-surface-2"
+                >
                   <Mail aria-hidden="true" className="size-4" />
                   Ouvrir dans ma messagerie
                 </a>

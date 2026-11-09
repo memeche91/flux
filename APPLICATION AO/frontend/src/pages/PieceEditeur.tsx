@@ -143,7 +143,11 @@ export default function PieceEditeur() {
         <Link to={`/projets/${projetId}`} className="text-attenue hover:text-texte">
           {piece.projet.nom}
         </Link>{" "}
-        / <span className="text-texte">{piece.type_piece}{piece.lot ? ` lot ${piece.lot.code}` : ""}</span>
+        /{" "}
+        <span className="text-texte">
+          {piece.type_piece}
+          {piece.lot ? ` lot ${piece.lot.code}` : ""}
+        </span>
       </nav>
       <div className="flex flex-col gap-1">
         <span className="text-xs font-semibold uppercase tracking-[0.08em] text-accent">
@@ -154,7 +158,10 @@ export default function PieceEditeur() {
       </div>
 
       {(erreur || message) && (
-        <p role={erreur ? "alert" : "status"} className={`rounded-lg px-4 py-2.5 ${erreur ? "border border-danger/40 bg-danger/10 text-danger" : "bg-succes/10 text-succes"}`}>
+        <p
+          role={erreur ? "alert" : "status"}
+          className={`rounded-lg px-4 py-2.5 ${erreur ? "border border-danger/40 bg-danger/10 text-danger" : "bg-succes/10 text-succes"}`}
+        >
           {erreur ?? message}
         </p>
       )}
@@ -177,7 +184,10 @@ export default function PieceEditeur() {
               )
             }
             surDeplacement={(sens) =>
-              void executer(() => api<PieceDetail>(`/clauses/${selection}/deplacer`, { method: "POST", body: JSON.stringify({ sens }) }), () => selection)
+              void executer(
+                () => api<PieceDetail>(`/clauses/${selection}/deplacer`, { method: "POST", body: JSON.stringify({ sens }) }),
+                () => selection,
+              )
             }
             surSuppression={() => {
               if (!clauseSelectionnee) return;
@@ -185,7 +195,10 @@ export default function PieceEditeur() {
               const indice = piece.clauses.findIndex((c) => c.id === selection);
               const voisin = piece.clauses[indice + 1]?.id ?? piece.clauses[indice - 1]?.id ?? null;
               setBrouillon(original);
-              void executer(() => api<PieceDetail>(`/clauses/${selection}`, { method: "DELETE" }), () => voisin);
+              void executer(
+                () => api<PieceDetail>(`/clauses/${selection}`, { method: "DELETE" }),
+                () => voisin,
+              );
             }}
           />
           <PanneauChamps champs={champs.donnees} projetId={Number(projetId)} />
@@ -200,7 +213,7 @@ export default function PieceEditeur() {
                   {brouillon.genre === "CHAPITRE" ? "Article" : "Sous-article"}
                 </h2>
                 <div className="flex items-center gap-2">
-                  {modifie && <span className="text-xs font-semibold text-accent">Modifications non enregistrées</span>}
+                  {modifie && <span className="text-xs font-semibold text-attention">Modifications non enregistrées</span>}
                   <button
                     type="button"
                     onClick={() => {
@@ -224,10 +237,20 @@ export default function PieceEditeur() {
               </div>
               <div className="flex flex-wrap gap-3">
                 <Champ id="clause-titre" libelle="Titre" large>
-                  <input id="clause-titre" value={brouillon.titre} onChange={(e) => setBrouillon({ ...brouillon, titre: e.target.value })} className={CLASSE_CHAMP} />
+                  <input
+                    id="clause-titre"
+                    value={brouillon.titre}
+                    onChange={(e) => setBrouillon({ ...brouillon, titre: e.target.value })}
+                    className={CLASSE_CHAMP}
+                  />
                 </Champ>
                 <Champ id="clause-genre" libelle="Niveau">
-                  <select id="clause-genre" value={brouillon.genre} onChange={(e) => setBrouillon({ ...brouillon, genre: e.target.value as GenreClause })} className={CLASSE_CHAMP}>
+                  <select
+                    id="clause-genre"
+                    value={brouillon.genre}
+                    onChange={(e) => setBrouillon({ ...brouillon, genre: e.target.value as GenreClause })}
+                    className={CLASSE_CHAMP}
+                  >
                     <option value="CHAPITRE">Article (Article 1, 2…)</option>
                     <option value="ARTICLE">Sous-article (1.1, 1.2…)</option>
                   </select>
@@ -262,14 +285,19 @@ export default function PieceEditeur() {
             occupe={occupe}
             surInsertion={(articleId) =>
               executer(
-                () => api<PieceDetail>(`/pieces/${piece.id}/inserer-article`, { method: "POST", body: JSON.stringify({ article_id: articleId, apres_id: selection }) }),
+                () =>
+                  api<PieceDetail>(`/pieces/${piece.id}/inserer-article`, {
+                    method: "POST",
+                    body: JSON.stringify({ article_id: articleId, apres_id: selection }),
+                  }),
                 nouvelleClause,
               )
             }
             surReprise={async (document: DocumentReference) => {
               if (!window.confirm(`Ajouter les clauses de « ${document.nom_original} » après l'élément sélectionné ?`)) return;
               await executer(
-                () => api<PieceDetail>(`/pieces/${piece.id}/importer`, { method: "POST", body: JSON.stringify({ document_id: document.id, apres_id: selection }) }),
+                () =>
+                  api<PieceDetail>(`/pieces/${piece.id}/importer`, { method: "POST", body: JSON.stringify({ document_id: document.id, apres_id: selection }) }),
                 nouvelleClause,
               );
             }}
@@ -410,7 +438,7 @@ function PanneauChamps({ champs, projetId }: { champs: ChampPiece[] | null; proj
             <dt className="text-xs text-attenue">
               {c.libelle} <code className="text-[11px] text-attenue/80">{`{{${c.cle}}}`}</code>
             </dt>
-            <dd className={`text-sm ${c.renseigne ? "text-texte" : "font-semibold text-accent"}`}>{c.renseigne ? c.apercu || "—" : "À compléter"}</dd>
+            <dd className={`text-sm ${c.renseigne ? "text-texte" : "font-semibold text-attention"}`}>{c.renseigne ? c.apercu || "—" : "À compléter"}</dd>
           </div>
         ))}
       </dl>
@@ -425,9 +453,14 @@ function ExportsPiece({ pieceId, modifie }: { pieceId: number; modifie: boolean 
         <FileDown aria-hidden="true" className="size-4 text-accent" />
         Exporter
       </h2>
-      {modifie && <p className="px-1 text-xs font-semibold text-accent">Enregistrez d'abord vos modifications : les exports utilisent la version enregistrée.</p>}
+      {modifie && (
+        <p className="px-1 text-xs font-semibold text-attention">Enregistrez d'abord vos modifications : les exports utilisent la version enregistrée.</p>
+      )}
       <div className="flex gap-1.5 px-1">
-        <a href={`/api/pieces/${pieceId}/export/docx`} className="flex min-h-10 items-center rounded-lg border border-bordure-forte px-3 text-sm font-semibold text-texte no-underline hover:bg-surface-2">
+        <a
+          href={`/api/pieces/${pieceId}/export/docx`}
+          className="flex min-h-10 items-center rounded-lg border border-bordure-forte px-3 text-sm font-semibold text-texte no-underline hover:bg-surface-2"
+        >
           Word
         </a>
         <a
@@ -491,7 +524,11 @@ function EnregistrerModele({
           Nom du modèle
         </label>
         <input id="nom-modele" value={nom} onChange={(e) => setNom(e.target.value)} className={`${CLASSE_CHAMP} min-w-0 basis-full`} />
-        <button type="submit" disabled={envoi || !nom.trim()} className="min-h-11 rounded-lg border border-bordure-forte px-3 text-sm font-semibold hover:bg-surface-2 disabled:opacity-50">
+        <button
+          type="submit"
+          disabled={envoi || !nom.trim()}
+          className="min-h-11 rounded-lg border border-bordure-forte px-3 text-sm font-semibold hover:bg-surface-2 disabled:opacity-50"
+        >
           {envoi ? "Enregistrement…" : "Enregistrer comme modèle"}
         </button>
       </form>

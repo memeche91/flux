@@ -1,7 +1,9 @@
-# Application AO
+# D’Aplomb
 
-Application web pour gérer les appels d'offres de A à Z : pièces écrites (CCTP, DPGF, CCAP, RC, AE), DCE, analyse des offres (rapport ACT) et GED de chantier.
-L'application est **100 % gratuite et open source**. Elle tourne sur un poste ou un serveur du cabinet, et aucune donnée n'est envoyée sur Internet.
+*Vos projets d’aplomb, de l’appel d’offres à la réception.*
+
+D’Aplomb est une application web pour gérer les appels d'offres de A à Z : pièces écrites (CCTP, DPGF, CCAP, RC, AE), DCE, analyse des offres (rapport ACT) et GED de chantier.
+Elle est **100 % gratuite et open source**, tourne sur un poste ou un serveur du cabinet, et aucune donnée n'est envoyée sur Internet.
 
 > **Version actuelle : étape 4.** Pièces écrites et assistant IA local (étape 1), DCE et annuaire des entreprises (étape 2), analyse des offres et rapport ACT (étape 3), et maintenant la **GED de chantier** : espace partagé avec les entreprises (un code d'accès par personne), plans et visas classés par lot, indices et historique complet, notifications par courriel, puis **archive complète du projet** sur le PC ou le serveur du cabinet et purge des fichiers.
 
@@ -17,9 +19,10 @@ L'application est **100 % gratuite et open source**. Elle tourne sur un poste ou
 
 > Docker Desktop est gratuit pour les entreprises de moins de 250 salariés **et** de moins de 10 M$ de chiffre d'affaires.
 
-### 2. Récupérer l'application
+### 2. Récupérer D’Aplomb
 
 Récupérez le dossier `APPLICATION AO`, soit avec `git clone`, soit en téléchargeant le ZIP du dépôt sur GitHub. Placez-le par exemple dans `C:\APPLICATION AO`.
+Le dossier garde son nom technique d'origine, `APPLICATION AO` (comme le projet Docker `application-ao` et ses volumes de données) : seul le nom affiché est devenu D’Aplomb.
 
 ### 3. Lancer l'installateur
 
@@ -47,9 +50,9 @@ L'installateur :
 
 | Action | Comment |
 |---|---|
-| Ouvrir l'application | http://localhost:8080 |
+| Ouvrir D’Aplomb | http://localhost:8080 |
 | Paramétrer les lots et les utilisateurs | Bouton **Paramétrage** (en haut à droite, réservé à l'administrateur) |
-| Arrêter l'application | `docker compose down` dans le dossier |
+| Arrêter D’Aplomb | `docker compose down` dans le dossier |
 | Redémarrer / mettre à jour | Relancer `installer.ps1` (données conservées) |
 | Voir les journaux en cas de problème | `docker compose logs -f backend worker` |
 | Ouvrir la GED aux entreprises sur Internet | Vider la ligne `GED_INTERNET=` du fichier `.env`, puis relancer `installer.ps1` et répondre **O** à la question « Ouvrir la GED aux entreprises sur Internet » |

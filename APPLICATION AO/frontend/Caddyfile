@@ -1,4 +1,4 @@
-# Serveur web de l'application : interface React + relais vers Django.
+# Serveur web de D’Aplomb : interface React + relais vers Django.
 #
 # - Site interne (réseau du cabinet) : port 8080 du conteneur, publié sur APP_PORT.
 # - GED sur Internet (facultatif, MODE_GED) : « ip » = adresse publique du cabinet (port 443,

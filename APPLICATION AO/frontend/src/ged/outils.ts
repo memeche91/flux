@@ -120,7 +120,7 @@ export const STYLE_STATUT: Record<StatutVersion, string> = {
 
 export const STYLE_VISA: Record<string, string> = {
   VSO: "text-succes",
-  VAO: "text-accent",
+  VAO: "text-attention",
   REF: "text-danger",
   HM: "text-attenue",
   EN_ATTENTE: "text-info",

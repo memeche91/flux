@@ -65,8 +65,18 @@ export function OptionsLot({
         <label htmlFor="libelle-option" className="sr-only">
           Libellé
         </label>
-        <input id="libelle-option" value={libelle} onChange={(e) => setLibelle(e.target.value)} placeholder="Ex. Volets roulants" className={`${CLASSE_CHAMP} min-w-0 flex-1`} />
-        <button type="submit" disabled={occupe || !libelle.trim()} className="min-h-11 rounded-lg border border-bordure-forte px-3 text-sm font-semibold hover:bg-surface-2 disabled:opacity-50">
+        <input
+          id="libelle-option"
+          value={libelle}
+          onChange={(e) => setLibelle(e.target.value)}
+          placeholder="Ex. Volets roulants"
+          className={`${CLASSE_CHAMP} min-w-0 flex-1`}
+        />
+        <button
+          type="submit"
+          disabled={occupe || !libelle.trim()}
+          className="min-h-11 rounded-lg border border-bordure-forte px-3 text-sm font-semibold hover:bg-surface-2 disabled:opacity-50"
+        >
           Ajouter
         </button>
       </form>
@@ -77,9 +87,27 @@ export function OptionsLot({
 export function Exports({ lotId, modifie }: { lotId: number; modifie: boolean }) {
   const base = `/api/lots-projet/${lotId}/export`;
   const liens = [
-    { groupe: "CCTP", elements: [{ libelle: "Word", href: `${base}/cctp-docx` }, { libelle: "PDF", href: `${base}/cctp-pdf` }] },
-    { groupe: "DPGF vierge (consultation)", elements: [{ libelle: "Excel", href: `${base}/dpgf-xlsx` }, { libelle: "PDF", href: `${base}/dpgf-pdf` }] },
-    { groupe: "DPGF chiffrée (estimation)", elements: [{ libelle: "Excel", href: `${base}/dpgf-xlsx?prix=true` }, { libelle: "PDF", href: `${base}/dpgf-pdf?prix=true` }] },
+    {
+      groupe: "CCTP",
+      elements: [
+        { libelle: "Word", href: `${base}/cctp-docx` },
+        { libelle: "PDF", href: `${base}/cctp-pdf` },
+      ],
+    },
+    {
+      groupe: "DPGF vierge (consultation)",
+      elements: [
+        { libelle: "Excel", href: `${base}/dpgf-xlsx` },
+        { libelle: "PDF", href: `${base}/dpgf-pdf` },
+      ],
+    },
+    {
+      groupe: "DPGF chiffrée (estimation)",
+      elements: [
+        { libelle: "Excel", href: `${base}/dpgf-xlsx?prix=true` },
+        { libelle: "PDF", href: `${base}/dpgf-pdf?prix=true` },
+      ],
+    },
   ];
   return (
     <section aria-labelledby="titre-exports" className="flex flex-col gap-2 rounded-xl border border-bordure bg-surface p-3">
@@ -87,7 +115,9 @@ export function Exports({ lotId, modifie }: { lotId: number; modifie: boolean })
         <FileDown aria-hidden="true" className="size-4 text-accent" />
         Exporter
       </h2>
-      {modifie && <p className="px-1 text-xs font-semibold text-accent">Enregistrez d'abord vos modifications : les exports utilisent la version enregistrée.</p>}
+      {modifie && (
+        <p className="px-1 text-xs font-semibold text-attention">Enregistrez d'abord vos modifications : les exports utilisent la version enregistrée.</p>
+      )}
       <ul className="flex flex-col gap-1.5">
         {liens.map((ligne) => (
           <li key={ligne.groupe} className="flex flex-wrap items-center justify-between gap-2 px-1">

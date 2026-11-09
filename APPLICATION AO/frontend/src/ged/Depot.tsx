@@ -273,7 +273,7 @@ export default function Depot({ client, droits, referentiels, documents, zoneIni
         )}
       </div>
       {pdfExige && (
-        <p className="text-sm text-accent">Documents soumis au visa : déposez le PDF ; le DWG ou le fichier modifiable de même nom lui sera joint.</p>
+        <p className="text-sm text-attention">Documents soumis au visa : déposez le PDF ; le DWG ou le fichier modifiable de même nom lui sera joint.</p>
       )}
 
       <div

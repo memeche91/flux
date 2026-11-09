@@ -103,7 +103,7 @@
   content: "";
   position: absolute;
   inset: 0;
-  background: rgba(245, 183, 0, 0.25);
+  background: rgba(139, 157, 117, 0.3); /* vert sauge (accent) sur la page blanche */
   pointer-events: none;
 }
 .editeur-contenu mark {
