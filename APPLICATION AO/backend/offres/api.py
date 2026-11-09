@@ -317,12 +317,13 @@ def relire(request, offre_id: int):
 
 @router.get("/offres/{offre_id}/fichier")
 def fichier(request, offre_id: int):
-    from django.http import FileResponse
+    from projets.fichiers import reponse_fichier_sure
 
     offre = get_object_or_404(Offre, pk=offre_id)
     if not offre.fichier:
         raise HttpError(404, "Aucun document.")
-    return FileResponse(offre.fichier.open("rb"), as_attachment=False, filename=offre.nom_original or "offre")
+    # Fichier remis par une entreprise : affiché seulement s'il s'agit d'un PDF ou d'une image.
+    return reponse_fichier_sure(offre.fichier, offre.nom_original or "offre")
 
 
 @router.get("/lots-projet/{lot_id}/comparatif")

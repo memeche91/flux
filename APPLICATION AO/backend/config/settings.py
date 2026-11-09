@@ -5,6 +5,7 @@ Toute la configuration sensible passe par des variables d'environnement
 bascule sur SQLite : pratique pour le développement et les tests.
 """
 import os
+import sys
 from pathlib import Path
 
 from django.core.exceptions import ImproperlyConfigured
@@ -175,6 +176,14 @@ CELERY_RESULT_BACKEND = env("REDIS_URL") or None
 CELERY_RESULT_EXPIRES = 60 * 60
 # La voix (Whisper, Piper) tourne dans un seul processus dédié (service « voix ») :
 # les modèles ne sont chargés qu'une fois en mémoire.
+# Tâches planifiées (service worker lancé avec --beat) : récapitulatif du matin de la GED.
+from celery.schedules import crontab  # noqa: E402
+
+CELERY_BEAT_SCHEDULE = {
+    "ged-recapitulatif-quotidien": {"task": "ged.tasks.recapitulatif_quotidien", "schedule": crontab(hour=7, minute=0, day_of_week="1-5")},
+    "ged-relance-notifications": {"task": "ged.tasks.relancer_notifications", "schedule": crontab(minute="*/15")},
+    "ged-purges-programmees": {"task": "ged.archivage.purges_programmees", "schedule": crontab(hour=3, minute=15)},
+}
 CELERY_TASK_ROUTES = {
     "assistant.tasks.transcrire_audio": {"queue": "voix"},
     "assistant.tasks.synthetiser_texte": {"queue": "voix"},
@@ -204,19 +213,14 @@ if env("REDIS_URL"):
 # (réseau local) ; GED_URL_PUBLIQUE : adresse Internet donnée aux entreprises (https://ged.cabinet.fr).
 URL_APPLICATION = (env("URL_APPLICATION") or f"http://localhost:{env('APP_PORT', '8080')}").strip()
 GED_URL_PUBLIQUE = (env("GED_URL_PUBLIQUE") or "").strip()
+# Adresse IP des visiteurs fiable (transmise par Caddy depuis l'adresse publique, tunnel ou IP fixe
+# vérifiée) : seulement alors une adresse peut être bloquée après des codes erronés.
+GED_IP_FIABLE = env_bool("GED_IP_FIABLE", False)
+# Espace disque à garder libre (Go) : un dépôt qui l'entamerait est refusé.
+GED_DISQUE_LIBRE_MIN_GO = int(env("GED_DISQUE_LIBRE_MIN_GO") or "5")
+TESTS = len(sys.argv) > 1 and sys.argv[1] == "test"
 # Dossier des archives de fin de chantier (monté depuis le PC ou le serveur du cabinet).
 DOSSIER_ARCHIVES = Path(env("DOSSIER_ARCHIVES", str(MEDIA_ROOT / "archives")))
-# L'adresse publique de la GED est acceptée par Django sans réglage supplémentaire.
-if GED_URL_PUBLIQUE:
-    from urllib.parse import urlsplit
-
-    _publique = urlsplit(GED_URL_PUBLIQUE)
-    if _publique.hostname and _publique.hostname not in ALLOWED_HOSTS:
-        ALLOWED_HOSTS.append(_publique.hostname)
-    _origine = f"{_publique.scheme}://{_publique.netloc}"
-    if _publique.scheme and _origine not in CSRF_TRUSTED_ORIGINS:
-        CSRF_TRUSTED_ORIGINS.append(_origine)
-
 # Assistant IA local (administrateur) : Ollama pour le texte, Whisper et Piper pour la voix.
 # Tout tourne sur le poste ou le serveur du cabinet ; seuls les modèles sont téléchargés.
 OLLAMA_URL = env("OLLAMA_URL", "http://localhost:11434").rstrip("/")

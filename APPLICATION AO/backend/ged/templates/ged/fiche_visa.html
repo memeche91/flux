@@ -1,0 +1,55 @@
+{% load format_fr %}<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<style>
+  @page { size: A4; margin: 18mm 16mm 18mm 16mm;
+    @bottom-left { content: "{{ projet.nom|chaine_css }} – fiche de visa {{ document.reference|chaine_css }} indice {{ version.indice|chaine_css }}"; font-family: {{ police|safe }}; font-size: 7.5pt; color: #666; }
+    @bottom-right { content: "Page " counter(page) " / " counter(pages); font-family: {{ police|safe }}; font-size: 7.5pt; color: #666; } }
+  body { font-family: {{ police|safe }}; font-size: 9.5pt; color: #1a1a1a; line-height: 1.4; }
+  h1 { color: {{ couleur_titres }}; font-size: 17pt; margin: 0 0 2mm; }
+  .entete { border-bottom: 2px solid {{ couleur_titres }}; padding-bottom: 4mm; margin-bottom: 6mm; }
+  .entete p { margin: 0.6mm 0; }
+  .discret { color: #555; }
+  table { width: 100%; border-collapse: collapse; margin-bottom: 5mm; }
+  th { background: {{ couleur_tableaux }}; text-align: left; font-size: 8.5pt; padding: 1.6mm 2mm; border: 0.4pt solid #b9c2cf; width: 45mm; }
+  td { padding: 1.6mm 2mm; border: 0.4pt solid #d0d6de; vertical-align: top; }
+  .avis { font-size: 15pt; font-weight: bold; padding: 4mm; border: 1.5pt solid {{ couleur_titres }}; margin: 4mm 0 6mm; }
+  .avis small { display: block; font-size: 9pt; font-weight: normal; color: #444; margin-top: 1mm; }
+  ol { margin: 0 0 5mm 5mm; padding-left: 4mm; }
+  ol li { margin-bottom: 1.6mm; }
+  h2 { font-size: 11pt; color: {{ couleur_titres }}; margin: 5mm 0 2mm; }
+</style>
+</head>
+<body>
+  <div class="entete">
+    <p class="discret">{{ projet.maitre_ouvrage }}</p>
+    <h1>Fiche de visa</h1>
+    <p><strong>{{ projet.nom }}</strong></p>
+    <p class="discret">Maîtrise d'œuvre : {{ projet.maitre_oeuvre|default:"—" }}</p>
+  </div>
+  <table>
+    <tr><th>Lot</th><td>{% if document.lot %}Lot {{ document.lot.code }} – {{ document.lot.intitule }}{% else %}{{ document.get_zone_display }}{% endif %}</td></tr>
+    <tr><th>Document</th><td>{{ document.reference }}{% if document.reference_emetteur %} (n° émetteur {{ document.reference_emetteur }}){% endif %} – {{ document.titre }}</td></tr>
+    <tr><th>Catégorie</th><td>{{ categorie }}</td></tr>
+    <tr><th>Indice examiné</th><td>{{ version.indice }}{% if version.date_indice %} du {{ version.date_indice|date:"d/m/Y" }}{% endif %} – fichier « {{ version.nom_original }} »</td></tr>
+    <tr><th>Déposé par</th><td>{{ version.deposee_par_nom }}, le {{ depose_le|date:"d/m/Y à H:i" }}</td></tr>
+    <tr><th>Empreinte du fichier</th><td style="font-size: 7.5pt; word-break: break-all">SHA-256 {{ version.empreinte }}</td></tr>
+  </table>
+  <div class="avis">{{ version.get_visa_display }}
+    <small>{% if version.nouvel_indice_attendu %}Un nouvel indice est attendu.{% elif version.visa == "VSO" or version.visa == "VAO" %}Bon pour exécution{% if version.visa == "VAO" %}, sous réserve de la prise en compte des observations ci-dessous{% endif %}.{% endif %}</small>
+  </div>
+  {% if observations %}
+  <h2>Observations</h2>
+  <ol>{% for ligne in observations %}<li>{{ ligne }}</li>{% endfor %}</ol>
+  {% endif %}
+  {% if avis %}
+  <h2>Avis des intervenants</h2>
+  <table>
+    {% for a in avis %}<tr><th>{{ a.get_role_display }}<br><span style="font-weight: normal">{{ a.auteur_nom }}</span></th><td><strong>{{ a.get_avis_display }}</strong>{% if a.observations %}<br>{{ a.observations|linebreaksbr }}{% endif %}</td></tr>{% endfor %}
+  </table>
+  {% endif %}
+  <p>Visa émis par {{ version.vise_par_nom }}, le {{ vise_le|date:"d/m/Y à H:i" }}{% if version.echeance_visa %} (échéance contractuelle : {{ version.echeance_visa|date:"d/m/Y" }}){% endif %}.</p>
+  <p class="discret">Le visa de la maîtrise d'œuvre ne dégage pas l'entreprise de sa responsabilité quant à la conformité de ses documents et de ses ouvrages aux pièces du marché, aux normes et aux règles de l'art.</p>
+</body>
+</html>

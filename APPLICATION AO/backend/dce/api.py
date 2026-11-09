@@ -10,7 +10,6 @@ from typing import Literal
 
 from django.conf import settings
 from django.db import IntegrityError, transaction
-from django.http import FileResponse
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from ninja import Field, File, Form, Router, Schema
@@ -343,7 +342,9 @@ def telecharger(request, dossier_id: int):
     dossier = get_object_or_404(DossierDCE, pk=dossier_id, statut=StatutDossier.PRET)
     if not dossier.fichier:
         raise HttpError(404, "Fichier introuvable.")
-    return FileResponse(dossier.fichier.open("rb"), as_attachment=True, filename=dossier.nom or "DCE.zip", content_type="application/zip")
+    from projets.fichiers import reponse_fichier_sure
+
+    return reponse_fichier_sure(dossier.fichier, dossier.nom or "DCE.zip", telecharger=True, type_impose="application/zip")
 
 
 @router.delete("/dce/dossiers/{dossier_id}", response={204: None})

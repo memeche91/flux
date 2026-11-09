@@ -6,7 +6,6 @@ from django.conf import settings
 from django.db import IntegrityError, transaction
 from django.db.models import Count, IntegerField, OuterRef, Q, Subquery, Value
 from django.db.models.functions import Coalesce
-from django.http import FileResponse
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from ninja import File, Form, Router, Schema
@@ -190,9 +189,9 @@ def _message_doublon(doublon: DocumentReference) -> str:
 @router.get("/documents/{document_id}/telecharger")
 def telecharger_document(request, document_id: int):
     document = get_object_or_404(DocumentReference, pk=document_id)
-    return FileResponse(
-        document.fichier.open("rb"), as_attachment=True, filename=document.nom_original
-    )
+    from projets.fichiers import reponse_fichier_sure
+
+    return reponse_fichier_sure(document.fichier, document.nom_original, telecharger=True)
 
 
 @router.post("/documents/{document_id}/analyser", response=DocumentOut)
