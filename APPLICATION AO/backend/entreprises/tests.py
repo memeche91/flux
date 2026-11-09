@@ -101,3 +101,36 @@ class AnnuaireTests(TestCase):
         reponse = self.client.post("/api/entreprises/importer", {"fichier": SimpleUploadedFile("carnet.csv", b"a;b\n1;2\n")})
         self.assertEqual(reponse.status_code, 400)
         self.assertIn("Colonnes introuvables", reponse.json()["detail"])
+
+
+class ImportColonnesTests(TestCase):
+    def setUp(self):
+        self.client.force_login(Utilisateur.objects.create_user("eco", password="mot-de-passe-solide-42", role=Utilisateur.Role.MOE))
+
+    def importer(self, nom, contenu):
+        return self.client.post("/api/entreprises/importer", {"fichier": SimpleUploadedFile(nom, contenu)})
+
+    def test_export_outlook_et_adresse_mail(self):
+        csv = "Prénom;Nom;Société;Rue (bureau);Ville (bureau);Code postal (bureau);Adresse de messagerie\nPaul;Dupont;Menuiseries Durand;1 rue du Lac;Annecy;74000;paul@durand.fr\n"
+        self.assertEqual(self.importer("contacts.csv", csv.encode()).status_code, 200)
+        entreprise = Entreprise.objects.get()
+        self.assertEqual((entreprise.raison_sociale, entreprise.email, entreprise.adresse), ("Menuiseries Durand", "paul@durand.fr", "1 rue du Lac"))
+        self.assertEqual(entreprise.contacts.get().nom, "Dupont")
+        csv = "Entreprise;Adresse mail;Téléphone\nPlâtres Martin;martin@exemple.fr;0450000000\n"
+        self.importer("carnet.csv", csv.encode())
+        self.assertEqual(Entreprise.objects.get(raison_sociale="Plâtres Martin").email, "martin@exemple.fr")
+
+    def test_zeros_initiaux_excel_et_classeur_protege(self):
+        from openpyxl import Workbook
+
+        classeur = Workbook()
+        classeur.active.append(["Entreprise", "CP", "Téléphone", "Ville"])
+        classeur.active.append(["Azur Menuiserie", 6000, 612345678, "Nice"])
+        flux = io.BytesIO()
+        classeur.save(flux)
+        self.importer("carnet.xlsx", flux.getvalue())
+        entreprise = Entreprise.objects.get()
+        self.assertEqual((entreprise.code_postal, entreprise.telephone), ("06000", "0612345678"))
+        reponse = self.importer("protege.xlsx", b"\xd0\xcf\x11\xe0 pas un zip")
+        self.assertEqual(reponse.status_code, 400)
+        self.assertIn("mot de passe", reponse.json()["detail"])

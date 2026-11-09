@@ -73,8 +73,13 @@ Bien cordialement,
     return objet, corps
 
 
-def personnaliser(texte: str, entreprise, lots: list[LotProjet]) -> str:
-    libelle_lots = ", ".join(f"lot {l.code} {l.intitule}" for l in lots) or "les lots concernés"
+def personnaliser(texte: str, entreprise, lots: list[LotProjet], *, court: bool = False) -> str:
+    """Remplace [entreprise] et [lots] ; `court` (objet du courriel) : « lots 08, 11 » sans les intitulés."""
+    if court:
+        codes = ", ".join(l.code for l in lots)
+        libelle_lots = f"lot{'s' if len(lots) > 1 else ''} {codes}" if lots else "les lots concernés"
+    else:
+        libelle_lots = ", ".join(f"lot {l.code} {l.intitule}" for l in lots) or "les lots concernés"
     return texte.replace(REPERE_ENTREPRISE, entreprise.raison_sociale if entreprise else "").replace(REPERE_LOTS, libelle_lots)
 
 

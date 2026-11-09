@@ -5,3 +5,6 @@ class DceConfig(AppConfig):
     default_auto_field = "django.db.models.BigAutoField"
     name = "dce"
     verbose_name = "Dossiers de consultation (DCE)"
+
+    def ready(self):
+        from . import signaux  # noqa: F401

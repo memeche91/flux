@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import datetime
+import logging
 import re
+from datetime import timedelta
 from pathlib import Path
 from typing import Literal
 
@@ -18,7 +20,7 @@ from ninja.files import UploadedFile
 from entreprises.models import Entreprise
 from projets.models import LotProjet, Projet
 
-from .assemblage import plan, racine
+from .assemblage import nom_zip, plan
 from .controle import controler
 from .envois import envoyer_courriel, message_entreprise, message_moa, personnaliser
 from .models import (
@@ -33,9 +35,32 @@ from .models import (
     StatutEnvoi,
     TypeEnvoi,
 )
-from .tasks import envoyer_aux_entreprises, generer_dossier, marquer_consultees
+from .tasks import envoyer_aux_entreprises, generer_dossier, liberer_taches_perdues, marquer_consultees
 
 router = Router(tags=["DCE"])
+logger = logging.getLogger(__name__)
+LOTS_SANS_ENVOI = (StatutConsultation.EXCUSEE, StatutConsultation.NON_RETENUE)
+
+
+def _lancer(tache, *args, en_cas_d_echec) -> None:
+    """Lance une tâche de fond après validation ; si la file est injoignable, l'échec est enregistré."""
+    def lancer():
+        try:
+            tache.delay(*args)
+        except Exception:  # noqa: BLE001 - Redis arrêté…
+            logger.exception("Lancement d'une tâche du DCE impossible")
+            en_cas_d_echec()
+
+    transaction.on_commit(lancer)
+
+
+def _aligner_indice(projet: Projet, indice: str) -> str:
+    """Un seul indice : celui du DCE devient celui du projet, imprimé sur toutes les pièces."""
+    indice = re.sub(r"[^\w-]", "", indice)[:10] or "A"
+    if projet.indice != indice:
+        projet.indice = indice
+        projet.save(update_fields=["indice", "modifie_le"])
+    return indice
 
 EXTENSIONS_JOINTES = {".pdf", ".dwg", ".dxf", ".ifc", ".jpg", ".jpeg", ".png", ".tif", ".tiff", ".doc", ".docx", ".xls", ".xlsx", ".odt", ".ods", ".zip", ".txt", ".csv", ".pptx"}
 
@@ -215,6 +240,7 @@ def _email_entreprise(entreprise: Entreprise) -> str:
 @router.get("/projets/{projet_id}/dce", response=EtatDCE)
 def etat(request, projet_id: int):
     projet = _projet(projet_id)
+    liberer_taches_perdues((timedelta(minutes=35), timedelta(minutes=65)))
     return {
         "type_marche": projet.type_marche,
         "indice": projet.indice,
@@ -234,7 +260,7 @@ def apercu(request, projet_id: int, avec_word: bool = False, indice: str = "A"):
     projet = _projet(projet_id)
     fichiers = plan(projet, avec_word=avec_word)
     tete = ["00 - Bordereau des pièces.pdf"]
-    return {"racine": racine(projet, indice[:10] or "A"), "fichiers": tete + [f.chemin for f in fichiers]}
+    return {"racine": nom_zip(projet, indice[:10] or "A"), "fichiers": tete + [f.chemin for f in fichiers]}
 
 
 @router.get("/projets/{projet_id}/dce/messages")
@@ -289,9 +315,7 @@ def modifier_piece_jointe(request, jointe_id: int, donnees: ModificationPieceJoi
 
 @router.delete("/dce/pieces-jointes/{jointe_id}", response={204: None})
 def supprimer_piece_jointe(request, jointe_id: int):
-    jointe = get_object_or_404(PieceJointe, pk=jointe_id)
-    jointe.fichier.delete(save=False)
-    jointe.delete()
+    get_object_or_404(PieceJointe, pk=jointe_id).delete()  # le fichier est effacé par signaux.py
     return 204, None
 
 
@@ -305,9 +329,12 @@ def generer(request, projet_id: int, donnees: DemandeDossier):
         raise HttpError(400, "Ajoutez au moins un lot avant de générer le DCE.")
     if projet.dossiers_dce.filter(statut=StatutDossier.EN_COURS, entreprise__isnull=True).exists():
         raise HttpError(409, "Un DCE est déjà en préparation : patientez quelques instants.")
-    indice = re.sub(r"[^\w-]", "", donnees.indice)[:10] or "A"
+    indice = _aligner_indice(projet, donnees.indice)
     dossier = DossierDCE.objects.create(projet=projet, indice=indice, avec_word=donnees.avec_word, cree_par=request.auth)
-    transaction.on_commit(lambda: generer_dossier.delay(dossier.pk))
+    _lancer(
+        generer_dossier, dossier.pk,
+        en_cas_d_echec=lambda: DossierDCE.objects.filter(pk=dossier.pk).update(statut=StatutDossier.ERREUR, message="Tâches de fond indisponibles : relancez l'application."),
+    )
     return 202, _dossier(dossier)
 
 
@@ -324,8 +351,6 @@ def supprimer_dossier(request, dossier_id: int):
     dossier = get_object_or_404(DossierDCE, pk=dossier_id)
     if dossier.statut == StatutDossier.EN_COURS:
         raise HttpError(409, "Ce dossier est en cours de préparation.")
-    if dossier.fichier:
-        dossier.fichier.delete(save=False)
     dossier.delete()
     return 204, None
 
@@ -382,6 +407,8 @@ def supprimer_consultation(request, consultation_id: int):
     consultation = get_object_or_404(ConsultationEntreprise, pk=consultation_id)
     if consultation.statut != StatutConsultation.A_CONSULTER:
         raise HttpError(409, "Cette entreprise a déjà été consultée : changez plutôt son statut (« S'est excusée »…).")
+    if Envoi.objects.filter(projet_id=consultation.projet_id, entreprise_id=consultation.entreprise_id, statut=StatutEnvoi.PREPARATION).exists():
+        raise HttpError(409, "Un envoi à cette entreprise est en préparation : attendez qu'il se termine.")
     consultation.delete()
     return 204, None
 
@@ -414,20 +441,36 @@ def envoyer_entreprises(request, projet_id: int, donnees: EnvoiEntreprises):
     envois = []
     with transaction.atomic():
         for entreprise in entreprises:
-            lots = [c.lot for c in ConsultationEntreprise.objects.filter(projet=projet, entreprise=entreprise).select_related("lot")]
+            if Envoi.objects.filter(projet=projet, entreprise=entreprise, statut=StatutEnvoi.PREPARATION).exists():
+                raise HttpError(409, f"Un envoi à {entreprise.raison_sociale} est déjà en préparation.")
+            # Les lots où l'entreprise s'est excusée ou n'a pas été retenue ne lui sont plus envoyés.
+            lots = [
+                c.lot
+                for c in ConsultationEntreprise.objects.filter(projet=projet, entreprise=entreprise)
+                .exclude(statut__in=LOTS_SANS_ENVOI)
+                .select_related("lot")
+                .order_by("lot__ordre", "lot__code")
+            ]
             if not lots:
-                raise HttpError(400, f"{entreprise.raison_sociale} n'est consultée pour aucun lot de ce projet.")
+                raise HttpError(400, f"{entreprise.raison_sociale} n'est consultée pour aucun lot de ce projet (ou s'est excusée).")
             adresse = _email_entreprise(entreprise)
             if mode == ModeEnvoi.EMAIL and not adresse:
                 raise HttpError(400, f"{entreprise.raison_sociale} n'a pas d'adresse e-mail dans l'annuaire.")
-            envois.append(Envoi.objects.create(
+            objet = personnaliser(donnees.objet.strip(), entreprise, lots, court=True)
+            if len(objet) > 255:
+                objet = objet[:254].rsplit(" ", 1)[0] + "…"
+            envoi = Envoi.objects.create(
                 projet=projet, type_envoi=TypeEnvoi.ENTREPRISE, entreprise=entreprise, destinataires=adresse or "—",
-                objet=personnaliser(donnees.objet.strip(), entreprise, lots), message=personnaliser(donnees.message.strip(), entreprise, lots),
-                mode=mode, cree_par=request.auth,
-            ))
+                objet=objet, message=personnaliser(donnees.message.strip(), entreprise, lots), mode=mode, cree_par=request.auth,
+            )
+            envoi.lots.set(lots)
+            envois.append(envoi)
+        indice = _aligner_indice(projet, donnees.indice) if projet.type_marche == "PRIVE" else projet.indice
     identifiants = [e.pk for e in envois]
-    indice = re.sub(r"[^\w-]", "", donnees.indice)[:10] or "A"
-    transaction.on_commit(lambda: envoyer_aux_entreprises.delay(identifiants, indice, donnees.avec_word))
+    _lancer(
+        envoyer_aux_entreprises, identifiants, indice, donnees.avec_word,
+        en_cas_d_echec=lambda: Envoi.objects.filter(pk__in=identifiants).update(statut=StatutEnvoi.ERREUR, erreur="Tâches de fond indisponibles : relancez l'application."),
+    )
     return 202, [_envoi(e) for e in envois]
 
 

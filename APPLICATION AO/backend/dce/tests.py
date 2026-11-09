@@ -79,30 +79,32 @@ class DceTests(TestCase):
         self.assertEqual(self.joindre("virus.exe").status_code, 400)
 
         apercu = self.json("get", f"/api/projets/{self.projet.pk}/dce/apercu", {"indice": "B"})
-        self.assertEqual(apercu["racine"], "DCE Groupe scolaire - les Tilleuls - Indice B")
+        self.assertEqual(apercu["racine"], "DCE Groupe scolaire - les Tilleuls - Indice B.zip")
 
         dossier = self.json("post", f"/api/projets/{self.projet.pk}/dce/dossiers", {"indice": "B", "avec_word": False}, attendu=202)
         dossier = self.json("get", f"/api/projets/{self.projet.pk}/dce")["dossiers"][0]
         self.assertEqual(dossier["statut"], "PRET", dossier["message"])
         noms = self.zip(dossier["id"]).namelist()
-        racine = "DCE Groupe scolaire - les Tilleuls - Indice B/"
-        self.assertEqual(noms[0], racine + "00 - Bordereau des pièces.pdf")
+        racine = ""  # pas de dossier racine : « Extraire tout » en crée un au nom du .zip
+        self.assertEqual(noms[0], "00 - Bordereau des pièces.pdf")
+        self.projet.refresh_from_db()
+        self.assertEqual(self.projet.indice, "B")  # toutes les pièces portent l'indice du DCE
         attendus = [
             "01 - Pièces administratives/RC - Règlement de la consultation.pdf",
             "01 - Pièces administratives/CCAP - Cahier des clauses administratives particulières.pdf",
-            "01 - Pièces administratives/Actes d'engagement/AE Lot 08 - Menuiseries extérieures.pdf",
-            "01 - Pièces administratives/Actes d'engagement/AE Lot 08 - Menuiseries extérieures.docx",
-            "02 - Pièces techniques/Lot 08 - Menuiseries extérieures/CCTP Lot 08 - Menuiseries extérieures.pdf",
-            "02 - Pièces techniques/Lot 08 - Menuiseries extérieures/DPGF Lot 08 - Menuiseries extérieures (à compléter).xlsx",
+            "01 - Pièces administratives/Actes d'engagement/AE lot 08 - Menuiseries extérieures.pdf",
+            "01 - Pièces administratives/Actes d'engagement/AE lot 08 - Menuiseries extérieures.docx",
+            "02 - Pièces techniques/Lot 08 - Menuiseries extérieures/CCTP lot 08.pdf",
+            "02 - Pièces techniques/Lot 08 - Menuiseries extérieures/DPGF lot 08 (à compléter).xlsx",
             "02 - Pièces techniques/Lot 08 - Menuiseries extérieures/Plans du lot/Carnet de détails.pdf",
-            "02 - Pièces techniques/Lot 11 - Plâtrerie - Cloisons/CCTP Lot 11 - Plâtrerie - Cloisons.pdf",
+            "02 - Pièces techniques/Lot 11 - Plâtrerie - Cloisons/CCTP lot 11.pdf",
             "03 - Plans/Plan RDC.pdf",
             "05 - Diagnostics/Amiante.pdf",
         ]
         for chemin in attendus:
             self.assertIn(racine + chemin, noms)
         self.assertNotIn(racine + "01 - Pièces administratives/CCAP - Cahier des clauses administratives particulières.docx", noms)
-        self.assertTrue(all(len(n) < 200 for n in noms))
+        self.assertTrue(all(len(n) <= 140 for n in noms))
 
         import pdfplumber
 
@@ -128,7 +130,8 @@ class DceTests(TestCase):
         self.assertEqual(len(mail.outbox), 2)
         courriel = next(m for m in mail.outbox if m.to == ["contact@durand.fr"])
         self.assertIn("Menuiseries Durand", courriel.body)
-        self.assertIn("lot 08 Menuiseries extérieures", courriel.subject)
+        self.assertTrue(courriel.subject.endswith("– lot 08"))
+        self.assertIn("lot 08 Menuiseries extérieures", courriel.body)
         nom, contenu, _ = courriel.attachments[0]
         self.assertTrue(nom.endswith("Menuiseries Durand.zip"))
         noms = zipfile.ZipFile(io.BytesIO(contenu)).namelist()
@@ -177,3 +180,88 @@ class DceTests(TestCase):
         self.assertIsNone(envoi.dossier)  # marché public : pas de dossier, la plateforme fait foi
         self.assertEqual(len(mail.outbox), 0)
         self.assertEqual(DossierDCE.objects.count(), 0)
+
+
+@override_settings(MEDIA_ROOT=DOSSIER_TEST)
+class RobustesseDceTests(DceTests):
+    """Cas limites relevés à la relecture."""
+
+    def test_noms_longs_indice_et_chemins_windows(self):
+        self.projet.nom = "Réhabilitation et extension du groupe scolaire Jules Ferry et création d'un restaurant scolaire"
+        self.projet.save()
+        self.lot08.intitule = "Menuiseries extérieures aluminium – Occultations – Protections solaires"
+        self.lot08.save()
+        self.joindre("plan.pdf", categorie="PLANS", lot_id=self.lot08.pk, titre="Carnet de détails des menuiseries extérieures, coupes et élévations")
+        dossier = self.json("post", f"/api/projets/{self.projet.pk}/dce/dossiers", {"indice": "B"}, attendu=202)
+        dossier = DossierDCE.objects.get(pk=dossier["id"])
+        self.assertTrue(dossier.nom.endswith(" - Indice B.zip"), dossier.nom)
+        self.assertLessEqual(len(dossier.nom), 75)
+        noms = self.zip(dossier.pk).namelist()
+        # « Téléchargements\<nom du .zip>\<chemin> » doit rester sous 260 caractères sous Windows.
+        self.assertLess(len("C:\\Users\\jdupont\\Downloads\\") + len(dossier.nom) + 1 + max(len(n) for n in noms), 255)
+
+    def test_lots_excuses_exclus_et_lots_figes(self):
+        self.durand.lots.add(Lot.objects.get(code="11"))
+        self.json("post", f"/api/projets/{self.projet.pk}/dce/consultations", {"lot_id": self.lot08.pk, "entreprise_ids": [self.durand.pk]}, attendu=201)
+        self.json("post", f"/api/projets/{self.projet.pk}/dce/consultations", {"lot_id": self.lot11.pk, "entreprise_ids": [self.durand.pk]}, attendu=201)
+        excusee = ConsultationEntreprise.objects.get(entreprise=self.durand, lot=self.lot11)
+        self.json("patch", f"/api/dce/consultations/{excusee.pk}", {"statut": "EXCUSEE"})
+        with override_settings(EMAIL_ACTIF=True):
+            self.json("post", f"/api/projets/{self.projet.pk}/dce/envois/entreprises", {"entreprise_ids": [self.durand.pk], "objet": "Consultation – [lots]", "message": "[lots]"}, attendu=202)
+        courriel = mail.outbox[0]
+        self.assertEqual(courriel.subject, "Consultation – lot 08")
+        noms = zipfile.ZipFile(io.BytesIO(courriel.attachments[0][1])).namelist()
+        self.assertFalse(any("Lot 11" in n for n in noms))
+        self.json("patch", f"/api/dce/consultations/{ConsultationEntreprise.objects.get(entreprise=self.durand, lot=self.lot08).pk}", {"statut": "EXCUSEE"})
+        self.json("post", f"/api/projets/{self.projet.pk}/dce/envois/entreprises", {"entreprise_ids": [self.durand.pk], "objet": "x", "message": "x"}, attendu=400)
+
+    def test_envoi_sans_lot_au_moment_de_la_tache(self):
+        from .tasks import envoyer_aux_entreprises
+
+        envoi = Envoi.objects.create(projet=self.projet, type_envoi="ENTREPRISE", entreprise=self.durand, destinataires="a@b.fr", objet="o", message="m", mode="MANUEL")
+        envoyer_aux_entreprises.apply(args=([envoi.pk], "A", False))
+        envoi.refresh_from_db()
+        self.assertEqual(envoi.statut, "ERREUR")
+        self.assertIn("plus consultée", envoi.erreur)
+        self.assertEqual(DossierDCE.objects.count(), 0)
+
+    def test_objet_tres_long_tronque(self):
+        self.durand.lots.add(Lot.objects.get(code="11"))
+        for lot in (self.lot08, self.lot11):
+            self.json("post", f"/api/projets/{self.projet.pk}/dce/consultations", {"lot_id": lot.pk, "entreprise_ids": [self.durand.pk]}, attendu=201)
+        envois = self.json("post", f"/api/projets/{self.projet.pk}/dce/envois/entreprises", {"entreprise_ids": [self.durand.pk], "objet": "x" * 248 + " [lots]", "message": "m"}, attendu=202)
+        self.assertLessEqual(len(envois[0]["objet"]), 255)
+
+    def test_document_joint_disparu_et_taches_perdues(self):
+        from datetime import timedelta
+
+        from django.utils import timezone
+
+        from .models import PieceJointe
+
+        self.joindre("Plan RDC.pdf", categorie="PLANS")
+        jointe = PieceJointe.objects.get()
+        jointe.fichier.storage.delete(jointe.fichier.name)
+        etat = self.json("get", f"/api/projets/{self.projet.pk}/dce")
+        self.assertTrue(any(p["niveau"] == "MANQUE" and "Plan RDC" in p["texte"] for p in etat["controle"]))
+        dossier = self.json("post", f"/api/projets/{self.projet.pk}/dce/dossiers", {"indice": "A"}, attendu=202)
+        dossier = DossierDCE.objects.get(pk=dossier["id"])
+        self.assertEqual(dossier.statut, "ERREUR")
+        self.assertIn("Plan RDC", dossier.message)
+
+        bloque = DossierDCE.objects.create(projet=self.projet, indice="A")
+        DossierDCE.objects.filter(pk=bloque.pk).update(cree_le=timezone.now() - timedelta(hours=2))
+        etat = self.json("get", f"/api/projets/{self.projet.pk}/dce")
+        self.assertEqual(next(d for d in etat["dossiers"] if d["id"] == bloque.pk)["statut"], "ERREUR")
+        self.json("delete", f"/api/dce/dossiers/{bloque.pk}", attendu=204)
+
+    def test_fichiers_effaces_avec_le_projet(self):
+        import os
+
+        self.joindre("Plan RDC.pdf", categorie="PLANS")
+        dossier = self.json("post", f"/api/projets/{self.projet.pk}/dce/dossiers", {"indice": "A"}, attendu=202)
+        chemins = [DossierDCE.objects.get(pk=dossier["id"]).fichier.path] + [j.fichier.path for j in self.projet.pieces_jointes.all()]
+        self.assertTrue(all(os.path.exists(c) for c in chemins))
+        with self.captureOnCommitCallbacks(execute=True):
+            self.projet.delete()
+        self.assertFalse(any(os.path.exists(c) for c in chemins))

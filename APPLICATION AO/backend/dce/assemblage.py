@@ -1,17 +1,21 @@
 """Assemblage du DCE : arborescence classée, bordereau des pièces, dossier .zip.
 
-    DCE <opération> - Indice A/
+    DCE <opération> - Indice A.zip
       00 - Bordereau des pièces.pdf
       00 - Lettre de consultation.pdf          (dossier envoyé à une entreprise)
       01 - Pièces administratives/
         RC - Règlement de la consultation.pdf
         CCAP - Cahier des clauses administratives particulières.pdf
-        Actes d'engagement/AE Lot 08 - Menuiseries extérieures.docx (+ .pdf)
+        Actes d'engagement/AE lot 08 - Menuiseries extérieures.docx (+ .pdf)
       02 - Pièces techniques/
         Lot 08 - Menuiseries extérieures/
-          CCTP Lot 08 - Menuiseries extérieures.pdf
-          DPGF Lot 08 - Menuiseries extérieures (à compléter).xlsx (+ .pdf)
+          CCTP lot 08.pdf
+          DPGF lot 08 (à compléter).xlsx (+ .pdf)
           Plans du lot/…   Documents du lot/…
+
+Pas de dossier racine dans le .zip : « Extraire tout » de Windows en crée déjà un au nom
+du fichier. Les noms sont bornés pour rester sous la limite de 260 caractères de Windows
+une fois le dossier extrait (Téléchargements + nom du .zip + chemin interne).
       03 - Plans/   04 - Études et rapports/   05 - Diagnostics/
       06 - Sécurité et santé (PGC)/   07 - Autres documents/
 """
@@ -46,7 +50,7 @@ DOSSIERS_CATEGORIES = {
     CategoriePieceJointe.SPS: "06 - Sécurité et santé (PGC)",
     CategoriePieceJointe.AUTRES: "07 - Autres documents",
 }
-LONGUEUR_NOM = 70  # Windows limite les chemins à 260 caractères une fois le dossier décompressé
+LONGUEUR_NOM = 50  # nom de fichier ; dossier de lot 40 ; racine 45 : chemin interne de 135 caractères au plus
 
 
 @dataclass
@@ -68,11 +72,24 @@ def nom_sur(texte: str, longueur: int = LONGUEUR_NOM) -> str:
 
 
 def nom_lot(lot: LotProjet) -> str:
-    return nom_sur(f"Lot {lot.code} - {lot.intitule}", 55)
+    return nom_sur(f"Lot {lot.code} - {lot.intitule}", 40)
 
 
 def racine(projet: Projet, indice: str) -> str:
-    return nom_sur(f"DCE {projet.nom} - Indice {indice}", 60)
+    """« DCE <opération> - Indice B » : l'indice est toujours conservé, le nom de l'opération raccourci."""
+    suffixe = f" - Indice {indice}"
+    return f"DCE {nom_sur(projet.nom, max(10, 45 - 4 - len(suffixe)))}{suffixe}"
+
+
+def nom_zip(projet: Projet, indice: str, entreprise=None) -> str:
+    base = racine(projet, indice)
+    if entreprise is not None:
+        base = f"{base} - {nom_sur(entreprise.raison_sociale, 24)}"
+    return f"{base}.zip"
+
+
+class DocumentManquant(Exception):
+    pass
 
 
 def _pieces(projet: Projet) -> dict[tuple[str, int | None], PieceEcrite]:
@@ -95,9 +112,10 @@ def plan(projet: Projet, *, lots: list[LotProjet] | None = None, avec_word: bool
     fichiers: list[Fichier] = []
 
     def piece_ecrite(dossier: str, base: str, designation: str, piece: PieceEcrite, word_toujours: bool = False):
-        fichiers.append(Fichier(f"{dossier}/{nom_sur(base)}.pdf", designation, "PDF", lambda p=piece: exporter_pdf(document_piece(p))))
+        nom = nom_sur(base, 60)  # dossier administratif court : le titre complet tient
+        fichiers.append(Fichier(f"{dossier}/{nom}.pdf", designation, "PDF", lambda p=piece: exporter_pdf(document_piece(p))))
         if avec_word or word_toujours:
-            fichiers.append(Fichier(f"{dossier}/{nom_sur(base)}.docx", designation, "Word", lambda p=piece: exporter_docx(document_piece(p))))
+            fichiers.append(Fichier(f"{dossier}/{nom}.docx", designation, "Word", lambda p=piece: exporter_docx(document_piece(p))))
 
     if (rc := pieces.get((TypePiece.RC, None))) is not None:
         piece_ecrite(DOSSIER_ADMINISTRATIF, "RC - Règlement de la consultation", "Règlement de la consultation (RC)", rc)
@@ -106,7 +124,8 @@ def plan(projet: Projet, *, lots: list[LotProjet] | None = None, avec_word: bool
     for lot in lots:
         if (ae := pieces.get((TypePiece.AE, lot.pk))) is not None:
             # L'entreprise complète et signe l'acte d'engagement : version Word toujours fournie.
-            piece_ecrite(f"{DOSSIER_ADMINISTRATIF}/Actes d'engagement", f"AE {nom_lot(lot)}", f"Acte d'engagement – lot {lot.code} {lot.intitule}", ae, word_toujours=True)
+            base = nom_sur(f"AE lot {lot.code} - {lot.intitule}", 45)
+            piece_ecrite(f"{DOSSIER_ADMINISTRATIF}/Actes d'engagement", base, f"Acte d'engagement – lot {lot.code} {lot.intitule}", ae, word_toujours=True)
 
     jointes = list(PieceJointe.objects.filter(projet=projet).select_related("lot"))
     for lot in lots:
@@ -114,18 +133,20 @@ def plan(projet: Projet, *, lots: list[LotProjet] | None = None, avec_word: bool
         structure = None
         if _a_un_cctp(lot):
             structure = structurer(lot)
-            base = f"CCTP {nom_lot(lot)}"
+            base = nom_sur(f"CCTP lot {lot.code}")
             designation = f"CCTP – lot {lot.code} {lot.intitule}"
-            fichiers.append(Fichier(f"{dossier_lot}/{nom_sur(base)}.pdf", designation, "PDF", lambda s=structure: exporter_cctp_pdf(s)))
+            fichiers.append(Fichier(f"{dossier_lot}/{base}.pdf", designation, "PDF", lambda s=structure: exporter_cctp_pdf(s)))
             if avec_word:
-                fichiers.append(Fichier(f"{dossier_lot}/{nom_sur(base)}.docx", designation, "Word", lambda s=structure: exporter_cctp_docx(s)))
+                fichiers.append(Fichier(f"{dossier_lot}/{base}.docx", designation, "Word", lambda s=structure: exporter_cctp_docx(s)))
         if _a_une_dpgf(lot):
             structure = structure or structurer(lot)
-            base = nom_sur(f"DPGF {nom_lot(lot)} (à compléter)")
+            base = nom_sur(f"DPGF lot {lot.code} (à compléter)")
             designation = f"DPGF – lot {lot.code} {lot.intitule} (à compléter par l'entreprise)"
             fichiers.append(Fichier(f"{dossier_lot}/{base}.xlsx", designation, "Excel", lambda s=structure: exporter_dpgf_xlsx(s)))
             fichiers.append(Fichier(f"{dossier_lot}/{base}.pdf", designation, "PDF", lambda s=structure: exporter_dpgf_pdf(s)))
-        for jointe in (j for j in jointes if j.lot_id == lot.pk):
+        # Plans du lot d'abord, puis les autres documents : chaque dossier reste groupé.
+        du_lot = [j for j in jointes if j.lot_id == lot.pk]
+        for jointe in [j for j in du_lot if j.categorie == CategoriePieceJointe.PLANS] + [j for j in du_lot if j.categorie != CategoriePieceJointe.PLANS]:
             sous_dossier = "Plans du lot" if jointe.categorie == CategoriePieceJointe.PLANS else "Documents du lot"
             fichiers.append(_fichier_joint(f"{dossier_lot}/{sous_dossier}", jointe))
 
@@ -189,7 +210,11 @@ def lettre_pdf(projet: Projet, indice: str, entreprise, lots: list[LotProjet], t
 
 def ecrire_zip(destination: Path, projet: Projet, indice: str, fichiers: list[Fichier], *, entreprise=None, lots=None, lettre: str = "") -> list[dict]:
     """Écrit le .zip et renvoie son contenu (chemin, taille) pour l'affichage et le bordereau."""
-    dossier_racine = racine(projet, indice)
+    for fichier in fichiers:
+        if fichier.source is not None and not fichier.source.exists():
+            raise DocumentManquant(
+                f"Document joint « {fichier.designation} » introuvable sur le disque : retirez-le puis déposez-le de nouveau."
+            )
     tete = [Fichier("00 - Bordereau des pièces.pdf", "Bordereau des pièces du dossier", "PDF")]
     if entreprise is not None and lettre:
         tete.append(Fichier("00 - Lettre de consultation.pdf", "Lettre de consultation", "PDF"))
@@ -200,7 +225,7 @@ def ecrire_zip(destination: Path, projet: Projet, indice: str, fichiers: list[Fi
     contenu = []
     with zipfile.ZipFile(destination, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as archive:
         for fichier in tete + fichiers:
-            chemin = f"{dossier_racine}/{fichier.chemin}"
+            chemin = fichier.chemin
             if fichier.source is not None:
                 archive.write(fichier.source, chemin)
                 taille = fichier.source.stat().st_size

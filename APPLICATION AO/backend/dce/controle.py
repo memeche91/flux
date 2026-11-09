@@ -63,6 +63,9 @@ def controler(projet: Projet) -> list[dict]:
         points.append(_point(ALERTE, "Date limite de remise des offres non renseignée.", lien_projet))
     if projet.type_marche == "PUBLIC" and not consultation.profil_acheteur:
         points.append(_point(ALERTE, "Profil d'acheteur (plateforme de publication) non renseigné.", lien_projet))
+    for jointe in PieceJointe.objects.filter(projet=projet):
+        if not jointe.fichier or not jointe.fichier.storage.exists(jointe.fichier.name):
+            points.append(_point(MANQUE, f"Document joint « {jointe.titre} » introuvable sur le disque : retirez-le puis déposez-le de nouveau."))
     if not PieceJointe.objects.filter(projet=projet, categorie=CategoriePieceJointe.PLANS).exists():
         points.append(_point(ALERTE, "Aucun plan joint au DCE.", ""))
     return points

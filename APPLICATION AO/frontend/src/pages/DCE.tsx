@@ -212,7 +212,16 @@ function DocumentsJoints({ projetId, lots, etat, surChangement }: { projetId: nu
         <FilePlus2 aria-hidden="true" className="size-6 text-accent" />
         <span className="font-semibold">Déposez vos fichiers ici ou cliquez pour les choisir</span>
         <span className="text-xs text-attenue">PDF, DWG, DXF, images, Word, Excel… · {CATEGORIES_PIECES_JOINTES[categorie]}</span>
-        <input type="file" multiple className="sr-only" onChange={(e) => void deposer(Array.from(e.target.files ?? []))} />
+        <input
+          type="file"
+          multiple
+          className="sr-only"
+          onChange={(e) => {
+            const fichiers = Array.from(e.target.files ?? []);
+            e.target.value = ""; // le même fichier pourra être redéposé
+            void deposer(fichiers);
+          }}
+        />
       </label>
       {envois.length > 0 && (
         <ul className="flex flex-col gap-1 text-sm" aria-live="polite">
@@ -253,26 +262,35 @@ function Generation({ projetId, etat, surChangement }: { projetId: number; etat:
   const [indice, setIndice] = useState(etat.indice || "A");
   const [avecWord, setAvecWord] = useState(false);
   const [apercu, setApercu] = useState<{ racine: string; fichiers: string[] } | null>(null);
+  const [apercuOuvert, setApercuOuvert] = useState(false);
+  const [erreurApercu, setErreurApercu] = useState<string | null>(null);
   const [erreur, setErreur] = useState<string | null>(null);
   const complets = etat.dossiers.filter((d) => !d.entreprise);
   const enPreparation = complets.some((d) => d.statut === "EN_COURS");
+  const nbJointes = etat.pieces_jointes.length;
+
+  // L'aperçu suit l'indice, l'option Word et les documents joints.
+  useEffect(() => {
+    if (!apercuOuvert) return;
+    const minuteur = window.setTimeout(() => {
+      api<{ racine: string; fichiers: string[] }>(`/projets/${projetId}/dce/apercu?indice=${encodeURIComponent(indice || "A")}&avec_word=${avecWord}`)
+        .then((a) => {
+          setApercu(a);
+          setErreurApercu(null);
+        })
+        .catch((p: unknown) => setErreurApercu(p instanceof Error ? p.message : "Aperçu indisponible."));
+    }, 300);
+    return () => window.clearTimeout(minuteur);
+  }, [apercuOuvert, indice, avecWord, nbJointes, projetId]);
 
   async function generer() {
     setErreur(null);
+    if (indice !== etat.indice && !window.confirm(`L'indice du projet passera de ${etat.indice} à ${indice} : toutes les pièces du dossier porteront l'indice ${indice}. Continuer ?`)) return;
     try {
       await api(`/projets/${projetId}/dce/dossiers`, { method: "POST", body: JSON.stringify({ indice, avec_word: avecWord }) });
       surChangement();
     } catch (probleme) {
       setErreur(probleme instanceof Error ? probleme.message : "Génération impossible.");
-    }
-  }
-
-  async function voirApercu(ouvert: boolean) {
-    if (!ouvert) return;
-    try {
-      setApercu(await api(`/projets/${projetId}/dce/apercu?indice=${encodeURIComponent(indice)}&avec_word=${avecWord}`));
-    } catch {
-      setApercu(null);
     }
   }
 
@@ -302,11 +320,19 @@ function Generation({ projetId, etat, surChangement }: { projetId: number; etat:
           {enPreparation ? "Préparation en cours…" : "Générer le DCE"}
         </button>
       </div>
-      <details onToggle={(e) => void voirApercu((e.target as HTMLDetailsElement).open)} className="rounded-lg border border-bordure bg-fond/40">
+      {indice !== etat.indice && indice.trim() && (
+        <p className="text-sm text-accent">Toutes les pièces du dossier porteront l'indice {indice} (indice actuel du projet : {etat.indice}).</p>
+      )}
+      <details onToggle={(e) => setApercuOuvert((e.target as HTMLDetailsElement).open)} className="rounded-lg border border-bordure bg-fond/40">
         <summary className="flex min-h-10 cursor-pointer items-center gap-2 px-3 text-sm font-semibold">
           <FolderTree aria-hidden="true" className="size-4 text-accent" />
           Aperçu de l'arborescence
         </summary>
+        {erreurApercu && (
+          <p role="alert" className="px-3 pb-2 text-sm text-danger">
+            {erreurApercu}
+          </p>
+        )}
         {apercu && <Arborescence racine={apercu.racine} chemins={apercu.fichiers} />}
       </details>
       {erreur && (
@@ -363,26 +389,40 @@ function Generation({ projetId, etat, surChangement }: { projetId: number; etat:
   );
 }
 
-/** Arborescence de dossiers et fichiers (chemins séparés par « / »). */
+interface Noeud {
+  nom: string;
+  enfants: Map<string, Noeud>;
+  fichier: boolean;
+}
+
+/** Arborescence de dossiers et fichiers (chemins séparés par « / »), dossiers regroupés. */
 function Arborescence({ racine, chemins }: { racine: string; chemins: string[] }) {
   const lignes = useMemo(() => {
-    const vus = new Set<string>();
-    const resultat: { niveau: number; nom: string; dossier: boolean }[] = [];
+    const tete: Noeud = { nom: "", enfants: new Map(), fichier: false };
     for (const chemin of chemins) {
+      let courant = tete;
       const morceaux = (racine ? `${racine}/${chemin}` : chemin).split("/");
       morceaux.forEach((nom, indice) => {
-        const cle = morceaux.slice(0, indice + 1).join("/");
-        if (vus.has(cle)) return;
-        vus.add(cle);
-        resultat.push({ niveau: indice, nom, dossier: indice < morceaux.length - 1 });
+        const fichier = indice === morceaux.length - 1;
+        const cle = `${fichier ? "f" : "d"}:${nom}`;
+        if (!courant.enfants.has(cle)) courant.enfants.set(cle, { nom, enfants: new Map(), fichier });
+        courant = courant.enfants.get(cle)!;
       });
     }
+    const resultat: { niveau: number; nom: string; dossier: boolean }[] = [];
+    const parcourir = (noeud: Noeud, niveau: number) => {
+      for (const enfant of noeud.enfants.values()) {
+        resultat.push({ niveau, nom: enfant.nom, dossier: !enfant.fichier });
+        parcourir(enfant, niveau + 1);
+      }
+    };
+    parcourir(tete, 0);
     return resultat;
   }, [racine, chemins]);
   return (
     <ul className="max-h-80 overflow-auto px-3 py-2 font-mono text-xs leading-relaxed">
       {lignes.map((ligne, i) => (
-        <li key={i} style={{ paddingLeft: `${ligne.niveau * 1.1}rem` }} className={ligne.dossier ? "font-semibold text-accent" : "text-texte"}>
+        <li key={i} style={{ paddingLeft: `${ligne.niveau * 1.1}rem` }} className={ligne.dossier ? "font-semibold text-accent" : "break-all text-texte"}>
           {ligne.dossier ? "▸ " : ""}
           {ligne.nom}
         </li>
@@ -400,16 +440,19 @@ function TransmissionMoa({ projetId, etat, surChangement }: { projetId: number; 
   const [message, setMessage] = useState("");
   const [resultat, setResultat] = useState<{ ok: boolean; texte: string } | null>(null);
   const [envoi, setEnvoi] = useState(false);
+  const [modifie, setModifie] = useState(false);
+  const indiceDossier = dossier?.indice;
 
+  // Texte type chargé à l'ouverture ou au changement de DCE, jamais par-dessus une saisie.
   useEffect(() => {
-    if (!dossier) return;
-    api<{ moa: { objet: string; message: string } }>(`/projets/${projetId}/dce/messages?indice=${encodeURIComponent(dossier.indice)}`)
+    if (!indiceDossier || modifie) return;
+    api<{ moa: { objet: string; message: string } }>(`/projets/${projetId}/dce/messages?indice=${encodeURIComponent(indiceDossier)}`)
       .then((m) => {
         setObjet(m.moa.objet);
         setMessage(m.moa.message);
       })
       .catch(() => undefined);
-  }, [projetId, dossier?.indice, dossier]);
+  }, [projetId, indiceDossier, modifie]);
 
   async function transmettre(evenement: FormEvent) {
     evenement.preventDefault();
@@ -463,13 +506,32 @@ function TransmissionMoa({ projetId, etat, surChangement }: { projetId: number; 
             <label htmlFor="moa-objet" className="text-xs font-semibold text-attenue">
               Objet
             </label>
-            <input id="moa-objet" required value={objet} onChange={(e) => setObjet(e.target.value)} className={CLASSE_CHAMP} />
+            <input
+              id="moa-objet"
+              required
+              value={objet}
+              onChange={(e) => {
+                setObjet(e.target.value);
+                setModifie(true);
+              }}
+              className={CLASSE_CHAMP}
+            />
           </div>
           <div className="flex flex-col gap-1.5">
             <label htmlFor="moa-message" className="text-xs font-semibold text-attenue">
               Message
             </label>
-            <textarea id="moa-message" rows={9} required value={message} onChange={(e) => setMessage(e.target.value)} className={`${CLASSE_CHAMP} py-2.5`} />
+            <textarea
+              id="moa-message"
+              rows={9}
+              required
+              value={message}
+              onChange={(e) => {
+                setMessage(e.target.value);
+                setModifie(true);
+              }}
+              className={`${CLASSE_CHAMP} py-2.5`}
+            />
           </div>
           {etat.email_actif && dossier.taille > etat.piece_jointe_max_mo * 1048576 && (
             <p className="text-sm text-accent">
@@ -524,15 +586,19 @@ function Entreprises({ projetId, lots, etat, surChangement }: { projetId: number
     return [...parId.values()].sort((a, b) => a.nom.localeCompare(b.nom));
   }, [etat.consultations, lots]);
 
+  // Seules les entreprises encore listées comptent (une entreprise retirée d'un lot sort de la sélection).
+  const choisies = entreprises.filter((e) => selection.has(e.id)).map((e) => e.id);
+
   async function envoyer(evenement: FormEvent) {
     evenement.preventDefault();
-    if (selection.size === 0) return;
+    if (choisies.length === 0) return;
+    if (!public_ && indice !== etat.indice && !window.confirm(`L'indice du projet passera de ${etat.indice} à ${indice} : toutes les pièces des dossiers porteront l'indice ${indice}. Continuer ?`)) return;
     setEnvoi(true);
     setResultat(null);
     try {
       const envois = await api<EnvoiDCE[]>(`/projets/${projetId}/dce/envois/entreprises`, {
         method: "POST",
-        body: JSON.stringify({ entreprise_ids: [...selection], objet, message, indice, avec_word: avecWord, mode: "EMAIL" }),
+        body: JSON.stringify({ entreprise_ids: choisies, objet, message, indice, avec_word: avecWord, mode: "EMAIL" }),
       });
       setResultat({
         ok: true,
@@ -619,11 +685,11 @@ function Entreprises({ projetId, lots, etat, surChangement }: { projetId: number
             )}
             <button
               type="submit"
-              disabled={envoi || selection.size === 0}
+              disabled={envoi || choisies.length === 0}
               className="flex min-h-11 items-center gap-2 rounded-lg bg-accent px-4.5 font-bold text-sur-accent hover:bg-accent-clair disabled:opacity-50"
             >
               <Send aria-hidden="true" className="size-4" />
-              {etat.email_actif ? `Envoyer à ${pluriel(selection.size, "entreprise")}` : `Préparer pour ${pluriel(selection.size, "entreprise")}`}
+              {etat.email_actif ? `Envoyer à ${pluriel(choisies.length, "entreprise")}` : `Préparer pour ${pluriel(choisies.length, "entreprise")}`}
             </button>
           </div>
         </form>

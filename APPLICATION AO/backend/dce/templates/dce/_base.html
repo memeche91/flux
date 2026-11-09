@@ -16,6 +16,8 @@
   td { padding: 1.4mm 2mm; border: 0.4pt solid #d0d6de; vertical-align: top; }
   td.numero, td.format { width: 12mm; white-space: nowrap; }
   td.format { width: 16mm; }
+  tr { break-inside: avoid; page-break-inside: avoid; }
+  tr.rubrique { break-after: avoid; page-break-after: avoid; }
   tr.rubrique td { background: #f2f4f7; font-weight: bold; color: {{ couleur_titres }}; }
   .nom { font-size: 7.5pt; color: #666; word-break: break-all; }
   .signature { margin-top: 10mm; }

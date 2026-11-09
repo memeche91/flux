@@ -1,6 +1,6 @@
 import { Plus, Star, Trash2 } from "lucide-react";
 import { useEffect, useState, type FormEvent } from "react";
-import { Link, useNavigate, useParams } from "react-router";
+import { Link, useLocation, useNavigate, useParams } from "react-router";
 
 import { api } from "../api/client";
 import type { ContactEntreprise, EntrepriseDetail, Lot } from "../api/types";
@@ -31,7 +31,10 @@ export default function EntrepriseFiche() {
   const [detail, setDetail] = useState<EntrepriseDetail | null>(null);
   const [valeurs, setValeurs] = useState<Formulaire | null>(nouvelle ? VIDE : null);
   const [original, setOriginal] = useState<string>(JSON.stringify(VIDE));
-  const [message, setMessage] = useState<{ ok: boolean; texte: string } | null>(null);
+  const location = useLocation();
+  const [message, setMessage] = useState<{ ok: boolean; texte: string } | null>(
+    (location.state as { message?: string } | null)?.message ? { ok: true, texte: (location.state as { message: string }).message } : null,
+  );
   const [envoi, setEnvoi] = useState(false);
 
   useEffect(() => {
@@ -65,18 +68,28 @@ export default function EntrepriseFiche() {
   async function enregistrer(evenement: FormEvent) {
     evenement.preventDefault();
     if (!valeurs) return;
+    // Une ligne de contact entièrement vide est ignorée ; une ligne remplie sans nom est signalée.
+    const remplis = valeurs.contacts.filter((c) => [c.nom, c.fonction, c.email, c.telephone].some((v) => v.trim()));
+    const sansNom = remplis.findIndex((c) => !c.nom.trim());
+    if (sansNom >= 0) {
+      setMessage({ ok: false, texte: `Indiquez le nom du contact n° ${valeurs.contacts.indexOf(remplis[sansNom]) + 1} (ou videz sa ligne).` });
+      return;
+    }
     setEnvoi(true);
     setMessage(null);
     try {
-      const corps = JSON.stringify({ ...valeurs, contacts: valeurs.contacts.filter((c) => c.nom.trim()) });
+      const corps = JSON.stringify({ ...valeurs, contacts: remplis });
       const resultat = nouvelle
         ? await api<EntrepriseDetail>("/entreprises", { method: "POST", body: corps })
         : await api<EntrepriseDetail>(`/entreprises/${entrepriseId}`, { method: "PUT", body: corps });
       setDetail(resultat);
       setValeurs(versFormulaire(resultat));
       setOriginal(JSON.stringify(versFormulaire(resultat)));
+      if (nouvelle) {
+        naviguer(`/entreprises/${resultat.id}`, { replace: true, state: { message: "Entreprise ajoutée à l'annuaire." } });
+        return;
+      }
       setMessage({ ok: true, texte: "Fiche enregistrée." });
-      if (nouvelle) naviguer(`/entreprises/${resultat.id}`, { replace: true });
     } catch (probleme) {
       setMessage({ ok: false, texte: probleme instanceof Error ? probleme.message : "Enregistrement impossible." });
     } finally {

@@ -114,6 +114,7 @@ class Envoi(models.Model):
     type_envoi = models.CharField(max_length=10, choices=TypeEnvoi.choices)
     entreprise = models.ForeignKey("entreprises.Entreprise", null=True, blank=True, on_delete=models.SET_NULL, related_name="envois")
     dossier = models.ForeignKey(DossierDCE, null=True, blank=True, on_delete=models.SET_NULL, related_name="envois")
+    lots = models.ManyToManyField("projets.LotProjet", blank=True, related_name="+")
     destinataires = models.CharField(max_length=1000)
     objet = models.CharField(max_length=255)
     message = models.TextField()
