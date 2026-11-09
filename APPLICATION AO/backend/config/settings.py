@@ -60,6 +60,7 @@ INSTALLED_APPS = [
     "entreprises",
     "dce",
     "offres",
+    "ged",
 ]
 
 MIDDLEWARE = [
@@ -194,6 +195,27 @@ if env("EMAIL_BACKEND"):
     EMAIL_FILE_PATH = env("EMAIL_FILE_PATH", str(MEDIA_ROOT / "courriels"))
 EMAIL_ACTIF = bool(EMAIL_HOST or env("EMAIL_BACKEND"))
 EMAIL_PIECE_JOINTE_MAX_MO = int(env("EMAIL_PIECE_JOINTE_MAX_MO") or "20")
+
+# Cache partagé entre les processus (limitation des tentatives de code d'accès à la GED).
+if env("REDIS_URL"):
+    CACHES = {"default": {"BACKEND": "django.core.cache.backends.redis.RedisCache", "LOCATION": env("REDIS_URL").rsplit("/", 1)[0] + "/1"}}
+
+# GED de chantier : adresses utilisées dans les courriels. URL_APPLICATION : adresse du cabinet
+# (réseau local) ; GED_URL_PUBLIQUE : adresse Internet donnée aux entreprises (https://ged.cabinet.fr).
+URL_APPLICATION = (env("URL_APPLICATION") or f"http://localhost:{env('APP_PORT', '8080')}").strip()
+GED_URL_PUBLIQUE = (env("GED_URL_PUBLIQUE") or "").strip()
+# Dossier des archives de fin de chantier (monté depuis le PC ou le serveur du cabinet).
+DOSSIER_ARCHIVES = Path(env("DOSSIER_ARCHIVES", str(MEDIA_ROOT / "archives")))
+# L'adresse publique de la GED est acceptée par Django sans réglage supplémentaire.
+if GED_URL_PUBLIQUE:
+    from urllib.parse import urlsplit
+
+    _publique = urlsplit(GED_URL_PUBLIQUE)
+    if _publique.hostname and _publique.hostname not in ALLOWED_HOSTS:
+        ALLOWED_HOSTS.append(_publique.hostname)
+    _origine = f"{_publique.scheme}://{_publique.netloc}"
+    if _publique.scheme and _origine not in CSRF_TRUSTED_ORIGINS:
+        CSRF_TRUSTED_ORIGINS.append(_origine)
 
 # Assistant IA local (administrateur) : Ollama pour le texte, Whisper et Piper pour la voix.
 # Tout tourne sur le poste ou le serveur du cabinet ; seuls les modèles sont téléchargés.
