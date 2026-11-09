@@ -35,8 +35,11 @@ export default function Intervenants({ etat, surMaj, surInvitations }: Propriete
   const clos = espace.statut === "CLOS";
   const [ajout, setAjout] = useState(false);
   const [erreur, setErreur] = useState<string | null>(null);
+  const [envoi, setEnvoi] = useState(false);
 
   async function ajouterSuggestion(suggestion: EtatGed["suggestions"][number]) {
+    if (envoi) return; // double clic : un seul intervenant créé
+    setEnvoi(true);
     setErreur(null);
     try {
       const resultat = await api<{ invitations: Invitation[] }>(`/ged/espaces/${espace.id}/intervenants`, {
@@ -53,6 +56,8 @@ export default function Intervenants({ etat, surMaj, surInvitations }: Propriete
       surMaj();
     } catch (p) {
       setErreur(messageErreur(p, "Ajout impossible."));
+    } finally {
+      setEnvoi(false);
     }
   }
 
@@ -79,7 +84,7 @@ export default function Intervenants({ etat, surMaj, surInvitations }: Propriete
                     · lots {s.lots.map((l) => l.code).join(", ")} · {s.personnes.length ? s.personnes.map((p) => p.email || p.nom).join(", ") : "aucun contact"}
                   </span>
                 </span>
-                <button type="button" onClick={() => void ajouterSuggestion(s)} className={CLASSE_BOUTON}>
+                <button type="button" onClick={() => void ajouterSuggestion(s)} disabled={envoi} className={CLASSE_BOUTON}>
                   <UserPlus aria-hidden="true" className="size-4" />
                   Donner accès
                 </button>
@@ -175,9 +180,12 @@ function FormulaireIntervenant({
   const [titulaire, setTitulaire] = useState<number | "">("");
   const [personnes, setPersonnes] = useState<Personne[]>([{ nom: "", email: "" }]);
   const [erreur, setErreur] = useState<string | null>(null);
+  const [envoi, setEnvoi] = useState(false);
 
   async function enregistrer(evenement: FormEvent) {
     evenement.preventDefault();
+    if (envoi) return;
+    setEnvoi(true);
     setErreur(null);
     try {
       const resultat = await api<{ invitations: Invitation[] }>(`/ged/espaces/${espaceId}/intervenants`, {
@@ -185,14 +193,17 @@ function FormulaireIntervenant({
         body: JSON.stringify({
           nom,
           profil,
-          lot_ids: lotIds,
-          sous_traitant_de: titulaire || null,
+          // Champs masqués pour ce rôle : non envoyés.
+          lot_ids: profil === "ENTREPRISE" || profil === "MOE_EXTERNE" ? lotIds : [],
+          sous_traitant_de: profil === "ENTREPRISE" ? titulaire || null : null,
           personnes: personnes.filter((p) => p.nom.trim() || p.email.trim()).map((p) => ({ nom: p.nom.trim() || nom, email: p.email.trim() })),
         }),
       });
       surAjoute(resultat.invitations);
     } catch (p) {
       setErreur(messageErreur(p, "Ajout impossible."));
+    } finally {
+      setEnvoi(false);
     }
   }
 
@@ -231,7 +242,9 @@ function FormulaireIntervenant({
         )}
       </div>
       {(profil === "ENTREPRISE" || profil === "MOE_EXTERNE") && <ChoixLots id="intervenant-lots" lots={lots} choisis={lotIds} surChangement={setLotIds} />}
-      {titulaire && <p className="text-sm text-attenue">Un sous-traitant ne voit pas les pièces chiffrées du titulaire (OS, avenants, situations…).</p>}
+      {profil === "ENTREPRISE" && titulaire && (
+        <p className="text-sm text-attenue">Un sous-traitant ne voit pas les pièces chiffrées du titulaire (OS, avenants, situations…).</p>
+      )}
       <fieldset className="flex flex-col gap-2">
         <legend className="text-xs font-semibold text-attenue">Personnes (un code d'accès chacune)</legend>
         {personnes.map((p, indice) => (
@@ -280,7 +293,7 @@ function FormulaireIntervenant({
         <button type="button" onClick={surFermer} className={CLASSE_BOUTON}>
           Annuler
         </button>
-        <button type="submit" className={CLASSE_BOUTON_PRINCIPAL}>
+        <button type="submit" disabled={envoi} className={CLASSE_BOUTON_PRINCIPAL}>
           Ajouter et créer les codes
         </button>
       </div>
@@ -308,6 +321,7 @@ function CarteIntervenant({
   const [modifLots, setModifLots] = useState<number[] | null>(null);
   const [personne, setPersonne] = useState<Personne | null>(null);
   const [erreur, setErreur] = useState<string | null>(null);
+  const [envoi, setEnvoi] = useState(false);
   const titulaire = entreprises.find((e) => e.id === i.sous_traitant_de);
 
   async function action(chemin: string, options: RequestInit, defaut: string) {
@@ -322,8 +336,9 @@ function CarteIntervenant({
     }
   }
 
+  /** Renvoie null en cas d'échec (message affiché). */
   async function modifier(champs: Record<string, unknown>) {
-    await action(`/ged/intervenants/${i.id}`, { method: "PATCH", body: JSON.stringify(champs) }, "Modification impossible.");
+    return action(`/ged/intervenants/${i.id}`, { method: "PATCH", body: JSON.stringify(champs) }, "Modification impossible.");
   }
 
   async function nouveauCode(acces: AccesGed, envoyer: boolean) {
@@ -341,15 +356,20 @@ function CarteIntervenant({
 
   async function ajouterPersonne(evenement: FormEvent) {
     evenement.preventDefault();
-    if (!personne) return;
-    const resultat = (await action(
-      `/ged/intervenants/${i.id}/acces`,
-      { method: "POST", body: JSON.stringify(personne) },
-      "Ajout impossible.",
-    )) as Invitation | null;
-    if (resultat) {
-      setPersonne(null);
-      surInvitations([resultat]);
+    if (!personne || envoi) return;
+    setEnvoi(true);
+    try {
+      const resultat = (await action(
+        `/ged/intervenants/${i.id}/acces`,
+        { method: "POST", body: JSON.stringify(personne) },
+        "Ajout impossible.",
+      )) as Invitation | null;
+      if (resultat) {
+        setPersonne(null);
+        surInvitations([resultat]);
+      }
+    } finally {
+      setEnvoi(false);
     }
   }
 
@@ -412,8 +432,12 @@ function CarteIntervenant({
             <button
               type="button"
               onClick={() => {
-                void modifier({ lot_ids: modifLots }).then(() => setModifLots(null));
+                // Panneau refermé seulement si l'enregistrement a réussi.
+                void modifier({ lot_ids: modifLots }).then((r) => {
+                  if (r !== null) setModifLots(null);
+                });
               }}
+              disabled={i.profil === "ENTREPRISE" && modifLots.length === 0}
               className={CLASSE_BOUTON_PRINCIPAL}
             >
               Enregistrer les lots
@@ -442,7 +466,7 @@ function CarteIntervenant({
               className={CLASSE_CHAMP}
             />
           </Champ>
-          <button type="submit" className={CLASSE_BOUTON_PRINCIPAL}>
+          <button type="submit" disabled={envoi} className={CLASSE_BOUTON_PRINCIPAL}>
             Créer son code
           </button>
         </form>

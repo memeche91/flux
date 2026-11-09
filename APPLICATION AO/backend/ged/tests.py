@@ -17,6 +17,7 @@ from entreprises.models import Contact, Entreprise
 from projets.models import LotProjet, Projet
 from referentiel.models import Lot
 
+from .acces import MESSAGE_REFUS
 from .calendrier import echeance, paques
 from .indices import indice_suivant, normaliser_indice, superieur
 from .models import Acces, Document, EspaceChantier, Evenement, Intervenant, Notification, Version
@@ -131,7 +132,7 @@ class GedTests(TestCase):
         self.assertIn(renvoi["code"], mail.outbox[-1].body)
         self.assertEqual(client_julie.get("/api/ged/portail/documents").status_code, 401)
         erreur = self.json(Client(), "post", "/api/ged/acces", {"code": julie["code"]}, attendu=401)
-        self.assertEqual(erreur["detail"], "Code inconnu ou plus valide : vérifiez la saisie ou demandez votre code à la maîtrise d'œuvre.")
+        self.assertEqual(erreur["detail"], MESSAGE_REFUS)
         self.assertEqual(paul.get("/api/ged/portail/documents").status_code, 200)
         # Désactiver l'intervenant coupe toutes ses personnes ; un espace clos aussi.
         self.json(self.client, "patch", f"/api/ged/intervenants/{durand.pk}", {"actif": False})

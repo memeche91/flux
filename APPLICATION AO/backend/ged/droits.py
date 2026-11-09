@@ -115,10 +115,13 @@ def concerne(acteur: Acteur, document: Document) -> bool:
 
 
 def voit_avis(acteur: Acteur, version: Version) -> bool:
-    """Les avis des co-traitants et du CT restent internes jusqu'au visa de synthèse."""
+    """Les avis des co-traitants et du CT restent internes jusqu'au visa de synthèse.
+
+    Un indice remplacé avant visa ne sera jamais visé : ses avis restent internes.
+    """
     if acteur.maitrise_oeuvre or acteur.profil == Profil.CONTROLEUR_TECHNIQUE:
         return True
-    return version.visa not in (StatutVisa.EN_ATTENTE, StatutVisa.SANS_OBJET)
+    return version.visa not in (StatutVisa.EN_ATTENTE, StatutVisa.SANS_OBJET, StatutVisa.REMPLACE)
 
 
 # --- Écriture -------------------------------------------------------------------------------
@@ -127,7 +130,10 @@ def categories_de_depot(acteur: Acteur) -> set[str]:
     if acteur.maitrise_oeuvre:
         return {c.code for c in CATEGORIES}
     if acteur.profil == Profil.ENTREPRISE:
-        return {c.code for c in CATEGORIES if c.zone == "LOT"} - EMISES_PAR_LA_MOE
+        cats = {c.code for c in CATEGORIES if c.zone == "LOT"} - EMISES_PAR_LA_MOE
+        if not acteur.intervenant.voit_confidentielles:
+            cats -= CONFIDENTIELLES  # sous-traitant : ne dépose pas de pièces chiffrées qu'il ne verrait plus
+        return cats
     return set(CATEGORIES_PAR_PROFIL.get(acteur.profil, set()))
 
 

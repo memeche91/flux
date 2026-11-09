@@ -54,10 +54,11 @@ services:
         condition: service_started
 
   # Tâches de fond et tâches planifiées (--beat) : récapitulatif du matin de la GED, relance des
-  # courriels non partis, purges programmées après archivage.
+  # courriels non partis, purges programmées après archivage. La planification est conservée sur le
+  # volume modeles_voix (survit à « docker compose down ») : une échéance manquée est rattrapée au démarrage.
   worker:
     <<: *backend
-    command: ["celery", "-A", "config", "worker", "--beat", "--schedule=/tmp/planification", "--loglevel=info", "--concurrency=2"]
+    command: ["celery", "-A", "config", "worker", "--beat", "--schedule=/donnees/modeles-ia/planification-celery", "--loglevel=info", "--concurrency=2"]
     depends_on:
       backend:
         condition: service_started

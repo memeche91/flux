@@ -141,7 +141,16 @@ export default function Ged() {
                 surChangement={charger}
               />
             )}
-            {onglet === "intervenants" && <Intervenants etat={{ ...etat, espace }} surMaj={charger} surInvitations={setInvitations} />}
+            {onglet === "intervenants" && (
+              <Intervenants
+                etat={{ ...etat, espace }}
+                surMaj={charger}
+                // Codes affichés une seule fois : les nouveaux s'ajoutent à ceux déjà à l'écran.
+                surInvitations={(nouvelles) =>
+                  setInvitations((actuelles) => [...actuelles.filter((a) => !nouvelles.some((n) => n.acces_id === a.acces_id)), ...nouvelles])
+                }
+              />
+            )}
             {onglet === "journal" && client && (
               <Journal client={client} surOuvrirDocument={(id) => changerParametres({ onglet: null, document: String(id) })} />
             )}
@@ -163,8 +172,8 @@ function AccesInternet({ urlPublique }: { urlPublique: string }) {
   ) : (
     <p className="flex flex-wrap items-center gap-2 rounded-lg border border-bordure bg-surface px-4 py-3 text-sm text-attenue">
       <Lock aria-hidden="true" className="size-4" />
-      GED accessible seulement sur le réseau du cabinet. Pour l'ouvrir aux entreprises sur Internet (gratuitement, avec le nom de domaine du cabinet), relancez
-      installer.ps1 et répondez « O » à la question « Ouvrir la GED aux entreprises sur Internet ».
+      GED accessible seulement sur le réseau du cabinet. Pour l'ouvrir aux entreprises sur Internet (gratuitement, avec le nom de domaine du cabinet), videz la
+      ligne GED_INTERNET= du fichier .env, puis relancez installer.ps1 et répondez « O » à la question « Ouvrir la GED aux entreprises sur Internet ».
     </p>
   );
 }
@@ -418,8 +427,8 @@ function Reglages({ espace, surMaj }: { espace: EspaceGed; surMaj: (etat: EtatGe
           Avancement : {espace.statut_libelle.toLowerCase()}
         </h2>
         <p className="text-sm text-attenue">
-          Après la réception, les entreprises ne déposent plus que le DOE, les éléments du DIUO, les levées de réserves et les photos. L'espace clos est en
-          lecture seule ; préparez ensuite l'archive du projet (onglet « Clôture et archives »).
+          Après la réception, les entreprises ne déposent plus que le DOE, les éléments du DIUO, les levées de réserves et les photos. L'espace clos n'est plus
+          accessible aux intervenants ; préparez ensuite l'archive du projet (onglet « Clôture et archives »).
         </p>
         <div className="flex flex-wrap items-end gap-3">
           <Champ id="reglage-reception" libelle="Date de réception des travaux">
@@ -445,7 +454,10 @@ function Reglages({ espace, surMaj }: { espace: EspaceGed; surMaj: (etat: EtatGe
               <button
                 type="button"
                 onClick={() =>
-                  changerStatut("CLOS", "Clore l'espace ? Plus aucun dépôt ni visa ; les intervenants gardent la consultation tant que leur accès est actif.")
+                  changerStatut(
+                    "CLOS",
+                    "Clore l'espace ? Plus aucun dépôt ni visa, et les intervenants perdent tout accès (consultation comprise) ; rouvrez l'espace pour le leur rendre.",
+                  )
                 }
                 className={CLASSE_BOUTON_PRINCIPAL}
               >

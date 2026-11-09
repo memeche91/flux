@@ -15,7 +15,7 @@ from django.utils import timezone
 from ninja.errors import HttpError
 
 from .calendrier import echeance
-from .categories import PAR_CODE
+from .categories import CONFIDENTIELLES, PAR_CODE
 from .droits import (
     Acteur,
     categorie_valide,
@@ -24,9 +24,10 @@ from .droits import (
     peut_deposer,
     peut_donner_avis,
     peut_viser,
+    peut_voir,
     role_avis,
 )
-from .indices import indice_suivant, indice_valide, normaliser_indice, superieur
+from .indices import cle, indice_suivant, indice_valide, normaliser_indice, superieur
 from .models import (
     AccuseLecture,
     Avis,
@@ -51,6 +52,8 @@ EXTENSIONS = {
     ".zip", ".7z", ".rar", ".msg", ".eml",
 }
 VISAS_EMIS = {StatutVisa.VSO, StatutVisa.VAO, StatutVisa.REF, StatutVisa.HM}
+# Le Commun est lu par tous : une pièce chiffrée (OS, avenant, devis, situation, DC4) n'y a pas sa place.
+MESSAGE_CONFIDENTIELLE_COMMUN = "Une pièce confidentielle (OS, avenant, devis, situation, sous-traitance) se classe dans le lot concerné, pas dans le Commun."
 
 
 # --- Journal ---------------------------------------------------------------------------------
@@ -136,8 +139,14 @@ def _diffusion(acteur: Acteur, categorie: str, demandee: str | None, precedente:
 def _creer_version(acteur: Acteur, document: Document, fichier, indice: str, objet: str, diffusion: str, date_indice=None) -> Version:
     maintenant = timezone.now()
     somme = _empreinte(fichier)
-    deja = Version.objects.filter(document__espace=document.espace, empreinte=somme).select_related("document").first()
+    # Doublon cherché dans le même lot, la même zone et la même catégorie (le document lui-même compris) :
+    # une même fiche fabricant reste déposable par un autre lot, ou en DOE après la FT.
+    deja = Version.objects.filter(
+        document__espace=document.espace, document__zone=document.zone, document__lot=document.lot, document__categorie=document.categorie, empreinte=somme,
+    ).select_related("document__espace", "document__lot").first()
     if deja is not None:
+        if not peut_voir(acteur, deja.document):
+            raise HttpError(409, "Ce fichier est déjà présent dans l'espace : contactez la maîtrise d'œuvre.")
         raise HttpError(409, f"Ce fichier a déjà été déposé le {timezone.localtime(deja.deposee_le):%d/%m/%Y} ({deja.document.reference} indice {deja.indice}).")
     version = Version(
         document=document, indice=indice, date_indice=date_indice, nom_original=(fichier.name or "document")[:255], taille=fichier.size,
@@ -183,6 +192,8 @@ def deposer(acteur: Acteur, espace: EspaceChantier, *, zone: str, lot, categorie
     verifier_actif(espace)
     if not categorie_valide(categorie):
         raise HttpError(400, "Catégorie inconnue.")
+    if zone == Zone.COMMUN and categorie in CONFIDENTIELLES:
+        raise HttpError(400, MESSAGE_CONFIDENTIELLE_COMMUN)
     if zone == Zone.LOT and lot is None:
         raise HttpError(400, "Indiquez le lot du document.")
     if zone != Zone.LOT:
@@ -190,6 +201,8 @@ def deposer(acteur: Acteur, espace: EspaceChantier, *, zone: str, lot, categorie
     if not peut_deposer(acteur, espace, zone, lot.pk if lot else None, categorie):
         raise HttpError(403, "Vous ne pouvez pas déposer ce type de document à cet endroit.")
     verifier_fichier(fichier, espace)
+    for source in sources or ():
+        verifier_fichier(source, espace)  # avant toute écriture : pas de fichier orphelin si une source est refusée
     _verifier_reference_pdf(acteur, categorie, fichier)
     titre = (titre or Path(fichier.name or "document").stem).strip()[:255]
     indice = _verifier_indice(normaliser_indice(indice or "") or "A")
@@ -228,18 +241,24 @@ def nouvel_indice(acteur: Acteur, document: Document, *, fichier, indice: str = 
     if not peut_ajouter_indice(acteur, document):
         raise HttpError(403, "Vous ne pouvez pas ajouter d'indice à ce document.")
     verifier_fichier(fichier, document.espace)
+    for source in sources or ():
+        verifier_fichier(source, document.espace)  # avant toute écriture : pas de fichier orphelin si une source est refusée
     _verifier_reference_pdf(acteur, document.categorie, fichier)
     with transaction.atomic():
-        document = Document.objects.select_for_update(of=("self",)).select_related("espace__projet", "lot").get(pk=document.pk)  # indices distincts
-        precedente = derniere_version(document)
-        indice = _verifier_indice(normaliser_indice(indice) or indice_suivant(precedente.indice if precedente else None))
+        # FOR NO KEY UPDATE : sérialise les indices d'un même document sans bloquer les contrôles de clé
+        # étrangère (FOR KEY SHARE) d'un visa en cours, ce qui évite l'interblocage sous PostgreSQL.
+        document = Document.objects.select_for_update(of=("self",), no_key=True).select_related("espace__projet", "lot").get(pk=document.pk)  # indices distincts
+        precedente = derniere_version(document)  # dernier dépôt : diffusion reprise
+        # « Jamais en arrière » : par rapport au plus haut indice, pas au dernier dépôt (un indice forcé peut être inférieur).
+        plus_haut = max(document.versions.all(), key=lambda v: cle(v.indice), default=None)
+        indice = _verifier_indice(normaliser_indice(indice) or indice_suivant(plus_haut.indice if plus_haut else None))
         if document.versions.filter(indice=indice).exists():
             raise HttpError(400, f"L'indice {indice} existe déjà pour ce document.")
-        if precedente is not None and not superieur(indice, precedente.indice):
+        if plus_haut is not None and not superieur(indice, plus_haut.indice):
             if not (acteur.cabinet and forcer.strip()):
-                raise HttpError(400, f"L'indice doit suivre l'indice {precedente.indice} (par exemple {indice_suivant(precedente.indice)}).")
+                raise HttpError(400, f"L'indice doit suivre l'indice {plus_haut.indice} (par exemple {indice_suivant(plus_haut.indice)}).")
         version = _creer_version(acteur, document, fichier, indice, objet, _diffusion(acteur, document.categorie, diffusion, precedente), date_indice)
-        if precedente is not None and not superieur(indice, precedente.indice):
+        if plus_haut is not None and not superieur(indice, plus_haut.indice):
             # Indice hors séquence accepté par le cabinet seulement, motif journalisé.
             version.indice_force = forcer.strip()[:300]
             version.save(update_fields=["indice_force"])
@@ -287,9 +306,13 @@ def viser(acteur: Acteur, version: Version, *, statut: str, commentaire: str = "
         verifier_fichier(fichier, document.espace)
     with transaction.atomic():
         version = Version.objects.select_for_update(of=("self",)).select_related("document__espace__projet", "document__lot").get(pk=version.pk)
+        if version.visa != StatutVisa.EN_ATTENTE:
+            # Visé ou remplacé entre l'ouverture du formulaire et l'envoi : le premier visa fait foi.
+            raise HttpError(409, "Cet indice a déjà été visé ou remplacé : rechargez la page.")
         version.visa, version.visa_commentaire = statut, (commentaire or "").strip()[:4000]
         version.vise_par_nom, version.vise_le = acteur.nom[:255], timezone.now()
         version.nouvel_indice_attendu = True if statut == StatutVisa.REF else (statut == StatutVisa.VAO if nouvel_indice_attendu is None else nouvel_indice_attendu)
+        contenu = fiche_visa_pdf(version)  # avant toute suppression : un échec ne fait rien perdre
         if fichier is not None:
             if version.visa_fichier:
                 version.visa_fichier.delete(save=False)
@@ -297,7 +320,7 @@ def viser(acteur: Acteur, version: Version, *, statut: str, commentaire: str = "
             version.visa_fichier.save(fichier.name or "visa", fichier, save=False)
         if version.fiche_visa:
             version.fiche_visa.delete(save=False)
-        version.fiche_visa.save(f"Fiche de visa {document.reference} indice {version.indice}.pdf", ContentFile(fiche_visa_pdf(version)), save=False)
+        version.fiche_visa.save(f"Fiche de visa {document.reference} indice {version.indice}.pdf", ContentFile(contenu), save=False)
         version.save()
         libelle = StatutVisa(statut).label
         journaliser(document.espace, TypeEvenement.VISA, f"{document.reference} indice {version.indice} : {libelle}" + (f" – {version.visa_commentaire[:300]}" if version.visa_commentaire else ""), acteur, document=document, version=version, notifier=True)

@@ -18,11 +18,11 @@ from projets.models import Projet
 
 from . import vues
 from .acces import adresse_ip, navigateur, nouveau_code
-from .categories import PAR_CODE
+from .categories import CONFIDENTIELLES, PAR_CODE
 from .droits import acteur_cabinet
-from .models import Acces, Document, EspaceChantier, Frequence, Intervenant, Profil, StatutEspace, TypeEvenement
+from .models import Acces, Document, EspaceChantier, Frequence, Intervenant, Profil, StatutEspace, TypeEvenement, Zone
 from .serialisation import acces_out, document_out, droits_out, intervenant_out, referentiels
-from .services import annuler, journaliser, retablir
+from .services import MESSAGE_CONFIDENTIELLE_COMMUN, annuler, journaliser, retablir
 
 router = Router(tags=["GED de chantier"])
 
@@ -294,20 +294,21 @@ def _intervenant(intervenant_id: int) -> Intervenant:
 def modifier_intervenant(request, intervenant_id: int, donnees: ModificationIntervenant):
     intervenant = _intervenant(intervenant_id)
     champs = donnees.model_dump(exclude_unset=True)
-    for champ in ("nom", "profil", "actif", "voit_confidentielles"):
-        if champs.get(champ) is not None:
-            setattr(intervenant, champ, champs[champ].strip() if champ == "nom" else champs[champ])
-    if champs.get("lot_ids") is not None:
-        lots = list(intervenant.espace.projet.lots.filter(pk__in=champs["lot_ids"]))
-        if len(lots) != len(set(champs["lot_ids"])):
-            raise HttpError(400, "Lot inconnu pour ce chantier.")
-        intervenant.lots.set(lots)
-    if intervenant.profil == Profil.ENTREPRISE and not intervenant.lots.exists():
-        raise HttpError(400, "Choisissez au moins un lot pour une entreprise.")
-    intervenant.save()
-    if {"actif", "lot_ids", "profil"} & champs.keys():
-        etat_acces = "désactivé" if not intervenant.actif else "modifié"
-        journaliser(intervenant.espace, TypeEvenement.ACCES, f"Accès de {intervenant.nom} {etat_acces}", _acteur(request))
+    with transaction.atomic():  # un refus (aucun lot) ne doit pas laisser les lots effacés
+        for champ in ("nom", "profil", "actif", "voit_confidentielles"):
+            if champs.get(champ) is not None:
+                setattr(intervenant, champ, champs[champ].strip() if champ == "nom" else champs[champ])
+        if champs.get("lot_ids") is not None:
+            lots = list(intervenant.espace.projet.lots.filter(pk__in=champs["lot_ids"]))
+            if len(lots) != len(set(champs["lot_ids"])):
+                raise HttpError(400, "Lot inconnu pour ce chantier.")
+            intervenant.lots.set(lots)
+        if intervenant.profil == Profil.ENTREPRISE and not intervenant.lots.exists():
+            raise HttpError(400, "Choisissez au moins un lot pour une entreprise.")
+        intervenant.save()
+        if {"actif", "lot_ids", "profil"} & champs.keys():
+            etat_acces = "désactivé" if not intervenant.actif else "modifié"
+            journaliser(intervenant.espace, TypeEvenement.ACCES, f"Accès de {intervenant.nom} {etat_acces}", _acteur(request))
     return intervenant_out(Intervenant.objects.prefetch_related("lots", "acces").get(pk=intervenant.pk))
 
 
@@ -437,6 +438,8 @@ def modifier_document(request, espace_id: int, document_id: int, donnees: Modifi
         if (valeur or champ == "reference_emetteur" and champ in champs) and valeur != getattr(document, champ):
             if champ == "categorie" and valeur not in PAR_CODE:
                 raise HttpError(400, "Catégorie inconnue.")
+            if champ == "categorie" and document.zone == Zone.COMMUN and valeur in CONFIDENTIELLES:
+                raise HttpError(400, MESSAGE_CONFIDENTIELLE_COMMUN)
             if champ == "reference" and Document.objects.filter(espace=espace, reference=valeur).exclude(pk=document.pk).exists():
                 raise HttpError(409, f"La référence « {valeur} » existe déjà dans cet espace.")
             setattr(document, champ, valeur)

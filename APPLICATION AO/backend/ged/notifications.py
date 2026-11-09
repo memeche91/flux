@@ -2,15 +2,16 @@
 
 - Nouveautés : un message groupé par destinataire. Une entreprise n'est prévenue que pour le
   Commun et ses lots (jamais un document d'un autre lot, de la zone MOE ou un avis interne) ;
-  les intervenants en « récapitulatif quotidien » les reçoivent le lendemain matin.
+  les intervenants en « récapitulatif quotidien » les reçoivent le matin ouvré suivant.
 - Récépissé de dépôt : envoyé à l'intervenant qui dépose (date, empreinte, échéance de visa).
-- Récapitulatif quotidien : nouveautés de la veille, visas dus et en retard (MOE), ordres de
-  service non lus (relance).
+- Récapitulatif quotidien : nouveautés depuis le précédent récapitulatif (week-end compris le
+  lundi), visas dus et en retard (MOE), ordres de service et avenants non lus (relance).
 Chaque envoi est enregistré (Notification) : preuve de diffusion.
 """
 from __future__ import annotations
 
 import datetime
+import logging
 from collections import defaultdict
 
 from django.conf import settings
@@ -27,12 +28,14 @@ from .models import (
     Evenement,
     Frequence,
     Notification,
+    Profil,
     StatutVisa,
     TypeEvenement,
     Version,
     Zone,
 )
 
+logger = logging.getLogger(__name__)
 EVENEMENTS_INTERNES = {TypeEvenement.AVIS, TypeEvenement.LECTURE}  # pour la maîtrise d'œuvre seulement
 MESSAGES_PAR_MINUTE = 20  # Microsoft 365 en accepte 30
 
@@ -133,7 +136,7 @@ def messages_nouveautes(espace: EspaceChantier, evenements: list[Evenement], fre
         else:
             sujet = f"{len(liste)} nouveautés" if len(liste) > 1 else liste[0].get_type_display().lower()
         objet = f"[{projet.nom}] {prefixe}{sujet}"
-        lignes = [f"{'Nouveautés des dernières 24 heures' if quotidien else 'Nouveautés'} sur l'espace documentaire du chantier « {projet.nom} » :", "", *[ligne_evenement(e) for e in liste]]
+        lignes = [f"{'Nouveautés depuis le précédent récapitulatif' if quotidien else 'Nouveautés'} sur l'espace documentaire du chantier « {projet.nom} » :", "", *[ligne_evenement(e) for e in liste]]
         documents = {e.document_id for e in liste if e.document_id}
         resultat.append((_message(projet, adresse, objet, lignes, moe, documents.pop() if len(documents) == 1 else None), liste, qui[adresse]))
     return resultat
@@ -155,6 +158,8 @@ def envoyer(paquets: list[tuple[EmailMessage, list[Evenement], Acces | None]]) -
                 envoyes += connexion.send_messages([message])
             except Exception as exc:  # noqa: BLE001 - un destinataire refusé ne bloque pas les autres
                 erreur = f"{exc.__class__.__name__} : {exc}"[:300]
+                if not evenements:  # relance du matin : pas de Notification pour en garder la trace
+                    logger.warning("Courriel « %s » à %s non envoyé : %s", message.subject, message.to[0], erreur)
             Notification.objects.bulk_create([
                 Notification(evenement=e, adresse=message.to[0], acces=acces, envoyee_le=None if erreur else maintenant, erreur=erreur)
                 for e in evenements
@@ -202,8 +207,9 @@ def messages_quotidiens(espace: EspaceChantier) -> list[EmailMessage]:
         for adresse in espace.liste_emails_moe():
             messages.append(_message(projet, adresse, f"[{projet.nom}] Visas à rendre", lignes, True))
     lus = set(AccuseLecture.objects.filter(version__document__espace=espace).values_list("version_id", "intervenant_id"))
-    for intervenant in espace.intervenants.filter(actif=True, profil="ENTREPRISE").prefetch_related("lots", "acces"):
-        adresses = [a.email for a in intervenant.acces.all() if a.actif and a.email]
+    # Seuls ceux qui voient les pièces chiffrées peuvent accuser lecture (pas un sous-traitant DC4).
+    for intervenant in espace.intervenants.filter(actif=True, profil=Profil.ENTREPRISE, voit_confidentielles=True).prefetch_related("lots", "acces"):
+        adresses = [a.email for a in intervenant.acces.all() if a.actif and a.email and a.frequence != Frequence.AUCUNE]
         if not adresses:
             continue
         lots = set(intervenant.lots.values_list("pk", flat=True))

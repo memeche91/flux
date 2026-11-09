@@ -14,7 +14,9 @@ L'archive « Archive <projet> - <date>.zip » est écrite dans le dossier d'arch
 Elle n'est « prête » qu'après vérification : relecture complète du .zip et contrôle du SHA-256
 de chaque indice de la GED. La purge ne supprime que les fichiers (le projet, les prix reçus,
 l'historique de l'annuaire et le registre de la GED restent) ; elle est programmée à 30 jours,
-annulable, et exige que l'archive ait été téléchargée ou copiée hors du PC.
+annulable, et exige que l'archive ait été téléchargée ou copiée hors du PC. Elle est refusée
+(et annulée si elle était programmée) quand un fichier a été déposé ou modifié depuis l'archive,
+ou quand une archive vérifiée plus récente existe.
 """
 from __future__ import annotations
 
@@ -31,6 +33,7 @@ from pathlib import Path
 from celery import shared_task
 from django.conf import settings
 from django.db import transaction
+from django.db.models import Q
 from django.utils import timezone
 
 from dce.assemblage import nom_lot, nom_sur
@@ -42,6 +45,8 @@ from .serialisation import EN_VIGUEUR, LIBELLES_STATUTS, statuts_des_versions
 logger = logging.getLogger(__name__)
 LONGUEUR_CHEMIN_MAX = 150
 DELAI_PURGE = datetime.timedelta(days=30)
+DUREE_MAX_PREPARATION = datetime.timedelta(hours=4)  # au-delà, la tâche a été tuée : archive interrompue
+INTERROMPUE = "Préparation interrompue (arrêt du PC ou de l'application) : relancez l'archive."
 
 
 @dataclass
@@ -153,7 +158,10 @@ def _dossier_document(document: Document) -> str:
 def _nom_version(document: Document, version: Version, longueur: int) -> str:
     extension = Path(version.nom_original).suffix.lower()
     visa = f"_{version.visa}" if version.visa in ("VSO", "VAO", "REF", "HM") else ""
-    return f"{_court(f'{document.reference}_{version.indice}{visa}_{document.titre}', longueur)}{extension}"
+    # Référence, indice et visa toujours entiers (noms distincts) : seul le titre est raccourci.
+    prefixe = nom_sur(f"{document.reference}_{version.indice}{visa}", 60)
+    reste = max(0, longueur - len(prefixe) - 1)
+    return f"{prefixe}{f'_{_court(document.titre, reste)}' if reste >= 4 else ''}{extension}"
 
 
 def _plan_ged(projet: Projet, longueur: int) -> tuple[list[Entree], list[dict]]:
@@ -172,14 +180,14 @@ def _plan_ged(projet: Projet, longueur: int) -> tuple[list[Entree], list[dict]]:
             nom = _nom_version(document, v, longueur)
             chemin = f"{dossier}/{nom}"
             source = _chemin(v.fichier)
+            entree = None
             if source is not None and source.exists():
-                entrees.append(Entree(chemin, source=source, empreinte=v.empreinte))
-            else:
-                chemin = ""
+                entree = Entree(chemin, source=source, empreinte=v.empreinte)
+                entrees.append(entree)
             for champ, suffixe in ((v.fiche_visa, "fiche de visa.pdf"), (v.visa_fichier, f"annote{Path(v.visa_nom_original).suffix.lower()}")):
                 annexe = _chemin(champ)
                 if annexe is not None and annexe.exists():
-                    entrees.append(Entree(f"{dossier}/{Path(nom).stem[:longueur - 10]} - {suffixe}", source=annexe))
+                    entrees.append(Entree(f"{dossier}/{Path(nom).stem} - {suffixe}", source=annexe))
             for s in v.sources.all():
                 fichier_source = _chemin(s.fichier)
                 if fichier_source is not None and fichier_source.exists():
@@ -187,8 +195,9 @@ def _plan_ged(projet: Projet, longueur: int) -> tuple[list[Entree], list[dict]]:
             for a in v.avis.all():
                 fichier_avis = _chemin(a.fichier)
                 if fichier_avis is not None and fichier_avis.exists():
-                    entrees.append(Entree(f"{dossier}/{Path(nom).stem[:longueur - 12]} - avis {a.role}{Path(a.nom_original).suffix.lower()}", source=fichier_avis))
-            registre.append({"document": document, "version": v, "statut": statuts[v.pk], "chemin": chemin})
+                    entrees.append(Entree(f"{dossier}/{Path(nom).stem} - avis {a.role}{Path(a.nom_original).suffix.lower()}", source=fichier_avis))
+            # L'entrée (et non son chemin) : le chemin est lu après la numérotation des doublons.
+            registre.append({"document": document, "version": v, "statut": statuts[v.pk], "entree": entree})
     return entrees, registre
 
 
@@ -208,15 +217,19 @@ def _registre_xlsx(projet: Projet, registre: list[dict]) -> bytes:
         cellule.font = Font(bold=True)
     for ligne in registre:
         d, v = ligne["document"], ligne["version"]
+        chemin = ligne["entree"].chemin if ligne["entree"] is not None else ""
         feuille.append([
             d.get_zone_display(), d.lot.code if d.lot else "", d.get_categorie_display(), d.reference, d.reference_emetteur, d.titre, v.indice,
             timezone.localtime(v.deposee_le).strftime("%d/%m/%Y %H:%M"), v.deposee_par_nom, v.objet, v.get_visa_display() if v.visa else "",
             timezone.localtime(v.vise_le).strftime("%d/%m/%Y") if v.vise_le else "", v.visa_commentaire,
-            "Annulé" if d.annule else LIBELLES_STATUTS[ligne["statut"]], ligne["chemin"] or "(fichier absent)",
+            "Annulé" if d.annule else LIBELLES_STATUTS[ligne["statut"]], chemin or "(fichier absent)",
         ])
-        if ligne["chemin"]:
+        for cellule in feuille[feuille.max_row]:
+            if cellule.data_type == "f":
+                cellule.data_type = "s"  # « =… » saisi par un intervenant : texte, jamais une formule
+        if chemin:
             cellule = feuille.cell(feuille.max_row, 15)
-            cellule.hyperlink = "../" + ligne["chemin"]  # le registre est dans « 04 GED »
+            cellule.hyperlink = "../" + chemin  # le registre est dans « 04 GED »
             cellule.font = Font(color="1F4E8C", underline="single")
     for colonne, largeur in zip("ABCDEFGHIJKLMNO", (12, 6, 26, 15, 16, 40, 7, 16, 24, 30, 22, 11, 40, 16, 60)):
         feuille.column_dimensions[colonne].width = largeur
@@ -321,7 +334,10 @@ def produire(archive: ProjetArchive) -> None:
     if espace is not None and espace.date_reception:
         archive.date_reception = espace.date_reception
     debut_conservation = archive.date_reception or timezone.localdate()
-    archive.conserver_jusqu_au = debut_conservation.replace(year=debut_conservation.year + 10)
+    try:
+        archive.conserver_jusqu_au = debut_conservation.replace(year=debut_conservation.year + 10)
+    except ValueError:  # 29 février
+        archive.conserver_jusqu_au = debut_conservation.replace(year=debut_conservation.year + 10, day=28)
     taille = taille_projet(projet)
     if espace_libre_archives() < 1.2 * taille + 50 * 1024 * 1024:
         raise ValueError("espace libre insuffisant dans le dossier d'archives")
@@ -356,7 +372,7 @@ def produire(archive: ProjetArchive) -> None:
     archive.save()
 
 
-@shared_task(time_limit=4 * 60 * 60, soft_time_limit=4 * 60 * 60 - 60)
+@shared_task(time_limit=int(DUREE_MAX_PREPARATION.total_seconds()), soft_time_limit=int(DUREE_MAX_PREPARATION.total_seconds()) - 60)
 def produire_archive(archive_id: int) -> None:
     archive = ProjetArchive.objects.select_related("projet").filter(pk=archive_id, statut=StatutArchive.EN_COURS).first()
     if archive is None or archive.projet is None:
@@ -372,7 +388,43 @@ def chemin_archive(archive: ProjetArchive) -> Path:
     return Path(settings.DOSSIER_ARCHIVES) / archive.nom_fichier
 
 
+def liberer_archives_interrompues(age_minimum: datetime.timedelta | None = None) -> None:
+    """Archives restées « en préparation » alors que leur tâche est perdue (worker arrêté ou tué) :
+    passées en erreur, et leur .zip.partiel effacé. Sans âge minimum : toutes (démarrage du worker)."""
+    archives = ProjetArchive.objects.filter(statut=StatutArchive.EN_COURS)
+    limite = timezone.now() - age_minimum if age_minimum is not None else None
+    if limite is not None:
+        archives = archives.filter(cree_le__lt=limite)
+    archives.update(statut=StatutArchive.ERREUR, message=INTERROMPUE)
+    for partiel in Path(settings.DOSSIER_ARCHIVES).glob("*.zip.partiel"):
+        try:
+            # Une archive en cours écrit sans cesse son .zip.partiel : seul un fichier ancien est abandonné.
+            if limite is None or partiel.stat().st_mtime < limite.timestamp():
+                partiel.unlink(missing_ok=True)
+        except OSError:
+            logger.warning("Fichier %s non supprimé", partiel, exc_info=True)
+
+
 # --- Purge ---------------------------------------------------------------------------------------------
+
+def motif_refus_purge(archive: ProjetArchive) -> str:
+    """Purge refusée si un fichier a été ajouté ou modifié depuis l'archive (il n'est dans aucun .zip)
+    ou si une archive vérifiée plus récente existe ; renvoie le motif, ou "" si la purge est possible."""
+    from dce.models import DossierDCE, PieceJointe
+    from offres.models import Offre
+
+    projet, depuis = archive.projet, archive.cree_le
+    if ProjetArchive.objects.filter(projet=projet, statut=StatutArchive.VERIFIEE, cree_le__gt=depuis).exists():
+        return "Une archive plus récente existe : programmez la purge depuis celle-ci."
+    nouveau = (
+        Version.objects.filter(document__espace__projet=projet).filter(Q(deposee_le__gt=depuis) | Q(vise_le__gt=depuis)).exists()
+        or AvisVersion.objects.filter(version__document__espace__projet=projet, date__gt=depuis).exists()
+        or Offre.objects.filter(projet=projet, modifie_le__gt=depuis).exists()
+        or PieceJointe.objects.filter(projet=projet, ajoute_le__gt=depuis).exists()
+        or DossierDCE.objects.filter(projet=projet, cree_le__gt=depuis).exists()
+    )
+    return "Nouveaux documents depuis l'archive : refaites une archive avant de purger." if nouveau else ""
+
 
 def purger(archive: ProjetArchive) -> int:
     """Supprime les fichiers du projet (pas ses données) ; renvoie le nombre d'octets libérés."""
@@ -381,6 +433,13 @@ def purger(archive: ProjetArchive) -> int:
 
     projet = archive.projet
     if projet is None:
+        return 0
+    motif = motif_refus_purge(archive)
+    if motif:
+        # Purge annulée : les documents récents seraient perdus (ou l'archive n'est pas la dernière).
+        ProjetArchive.objects.filter(pk=archive.pk).update(purge_prevue_le=None, message=motif)
+        archive.purge_prevue_le, archive.message = None, motif
+        logger.warning("Purge de l'archive %s refusée : %s", archive.pk, motif)
         return 0
     octets = taille_projet(projet)
     noms: list[tuple] = []

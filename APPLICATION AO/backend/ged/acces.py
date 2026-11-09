@@ -6,9 +6,10 @@
   sessions ouvertes avec lui ; les collègues, qui ont leur propre code, ne sont pas touchés.
 - La session dure 8 heures (30 jours si la personne fait mémoriser l'appareil), durée absolue,
   et elle est revérifiée à chaque requête : accès et intervenant actifs, code inchangé, espace actif.
-- Un code juste est toujours accepté. Les essais erronés ralentissent la réponse et, au-delà
-  d'un seuil, la maîtrise d'œuvre est alertée ; une adresse IP n'est bloquée que si elle est
-  fiable (transmise par Caddy depuis l'adresse publique).
+- Un code juste est toujours accepté. Les essais erronés sont comptés (jamais d'attente dans la
+  requête, qui occuperait un fil du serveur) et, au-delà d'un seuil, la maîtrise d'œuvre est
+  alertée ; une adresse IP n'est bloquée que si elle est fiable (transmise par Caddy depuis
+  l'adresse publique).
 """
 from __future__ import annotations
 
@@ -17,7 +18,6 @@ import hmac
 import logging
 import re
 import secrets
-import time
 
 from django.conf import settings
 from django.core.cache import cache
@@ -36,7 +36,7 @@ DUREE_MEMORISEE = 30 * 24 * 60 * 60
 ECHECS_PAR_IP = 10
 FENETRE = 15 * 60
 SEUIL_ALERTE = 50  # essais erronés par heure, toutes adresses confondues
-MESSAGE_REFUS = "Code inconnu ou plus valide : vérifiez la saisie ou demandez votre code à la maîtrise d'œuvre."
+MESSAGE_REFUS = "Code inconnu ou plus valide, ou espace du chantier clos : vérifiez la saisie ou demandez votre code à la maîtrise d'œuvre."
 ESPACES_ACTIFS = [StatutEspace.OUVERT, StatutEspace.RECEPTION]
 
 
@@ -108,13 +108,12 @@ def ip_bloquee(request) -> bool:
 def noter_echec(request) -> None:
     ip = adresse_ip(request)
     logger.warning("Code GED erroné depuis %s (%s)", ip, navigateur(request))
-    echecs_ip = _incrementer(_cle(ip), FENETRE)
+    _incrementer(_cle(ip), FENETRE)
     total = _incrementer("ged:echecs:total", 3600)
     if total >= SEUIL_ALERTE and cache.add("ged:alerte-envoyee", 1, 3600):
         from .tasks import alerter_essais
 
-        alerter_essais.delay(total)
-    time.sleep(min(2.0, 0.25 * echecs_ip) if not settings.TESTS else 0)  # ralentit les essais en rafale
+        alerter_essais.delay(total, settings.GED_IP_FIABLE)  # le worker ne connaît pas GED_IP_FIABLE
 
 
 # --- Session --------------------------------------------------------------------------------------

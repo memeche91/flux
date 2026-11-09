@@ -174,7 +174,9 @@ export default function Explorateur({ client, droits, referentiels, documentOuve
     ...(compteurs.a_viser || vue === "a_viser" ? [{ vue: "a_viser" as Vue, libelle: "À viser", nombre: compteurs.a_viser }] : []),
     ...(compteurs.retard || vue === "retard" ? [{ vue: "retard" as Vue, libelle: "Visas en retard", nombre: compteurs.retard, alerte: true }] : []),
     ...(compteurs.avis || vue === "avis" ? [{ vue: "avis" as Vue, libelle: "Avis à donner", nombre: compteurs.avis }] : []),
-    ...(compteurs.a_reprendre || vue === "a_reprendre" ? [{ vue: "a_reprendre" as Vue, libelle: "À reprendre (nouvel indice)", nombre: compteurs.a_reprendre, alerte: true }] : []),
+    ...(compteurs.a_reprendre || vue === "a_reprendre"
+      ? [{ vue: "a_reprendre" as Vue, libelle: "À reprendre (nouvel indice)", nombre: compteurs.a_reprendre, alerte: true }]
+      : []),
     ...(compteurs.en_attente || vue === "en_attente" ? [{ vue: "en_attente" as Vue, libelle: "En attente de visa", nombre: compteurs.en_attente }] : []),
     ...(compteurs.a_lire || vue === "a_lire" ? [{ vue: "a_lire" as Vue, libelle: "À lire (accusé demandé)", nombre: compteurs.a_lire, alerte: true }] : []),
   ];
@@ -193,6 +195,8 @@ export default function Explorateur({ client, droits, referentiels, documentOuve
   ];
   const categoriesPresentes = referentiels.categories.filter((c) => (documents ?? []).some((d) => d.categorie === c.code));
   const lotVue = vue.startsWith("lot:") ? lotsParId.get(Number(vue.slice(4))) : undefined;
+  // Pas de bouton « Déposer » sans catégorie permise (CT, OPC après la réception).
+  const peutDeposer = droits.zones_depot.length > 0 && droits.categories_depot.length > 0;
 
   return (
     <div className="flex flex-col gap-4">
@@ -211,7 +215,7 @@ export default function Explorateur({ client, droits, referentiels, documentOuve
 
       <div className="grid gap-5 lg:grid-cols-[250px_minmax(0,1fr)]">
         <nav aria-label="Classement des documents" className="flex flex-col gap-4">
-          {droits.zones_depot.length > 0 && !depot && (
+          {peutDeposer && !depot && (
             <button type="button" onClick={() => setDepot(true)} className={`${CLASSE_BOUTON_PRINCIPAL} justify-center`}>
               <Upload aria-hidden="true" className="size-4" />
               Déposer des documents
@@ -280,7 +284,7 @@ export default function Explorateur({ client, droits, referentiels, documentOuve
           ) : visibles.length === 0 ? (
             <p className="rounded-xl border border-bordure bg-surface px-5 py-6 text-attenue">
               {documents.length === 0
-                ? droits.zones_depot.length > 0
+                ? peutDeposer
                   ? "Aucun document pour l'instant : déposez le premier."
                   : "Aucun document pour l'instant. Vous serez prévenu par courriel dès qu'un document sera déposé."
                 : "Aucun document ne correspond à ce classement ou à cette recherche."}
@@ -414,7 +418,7 @@ function LigneDocument({ document: d, ouvert, surBascule, client, droits, refere
             )}
           </span>
         </button>
-        {enVigueur && !ouvert && !d.annule && (
+        {enVigueur && !enVigueur.fichier_archive && !ouvert && !d.annule && (
           <a
             href={client.urlVersion(enVigueur.id, "fichier")}
             target="_blank"

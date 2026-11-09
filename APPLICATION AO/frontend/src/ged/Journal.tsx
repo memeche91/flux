@@ -2,8 +2,9 @@
  * téléchargements, adresses IP et envoi des notifications). */
 import { useCallback, useEffect, useState } from "react";
 
+import { BoutonAfficherPlus } from "../components/Filtres";
 import type { ClientGed } from "./client";
-import { CLASSE_BOUTON, formaterDateHeure, messageErreur } from "./outils";
+import { formaterDateHeure, messageErreur } from "./outils";
 import type { EvenementGed } from "./types";
 
 const PAR_PAGE = 50;
@@ -12,18 +13,24 @@ export default function Journal({ client, surOuvrirDocument }: { client: ClientG
   const [evenements, setEvenements] = useState<EvenementGed[]>([]);
   const [total, setTotal] = useState<number | null>(null);
   const [page, setPage] = useState(1);
+  const [chargement, setChargement] = useState(false);
   const [erreur, setErreur] = useState<string | null>(null);
 
   const charger = useCallback(
     (numero: number) => {
+      setChargement(true);
       client
         .journal(numero)
         .then((resultat) => {
-          setEvenements((actuels) => (numero === 1 ? resultat.resultats : [...actuels, ...resultat.resultats]));
+          // Sans doublon : de nouveaux événements décalent les pages entre deux chargements.
+          setEvenements((actuels) =>
+            numero === 1 ? resultat.resultats : [...actuels, ...resultat.resultats.filter((n) => !actuels.some((x) => x.id === n.id))],
+          );
           setTotal(resultat.total);
           setPage(numero);
         })
-        .catch((p: unknown) => setErreur(messageErreur(p, "Journal indisponible.")));
+        .catch((p: unknown) => setErreur(messageErreur(p, "Journal indisponible.")))
+        .finally(() => setChargement(false));
     },
     [client],
   );
@@ -90,11 +97,7 @@ export default function Journal({ client, surOuvrirDocument }: { client: ClientG
           </tbody>
         </table>
       </div>
-      {evenements.length < total && (
-        <button type="button" onClick={() => charger(page + 1)} className={`${CLASSE_BOUTON} self-center`}>
-          Afficher plus ({total - evenements.length} restants)
-        </button>
-      )}
+      <BoutonAfficherPlus reste={total - evenements.length} chargement={chargement} surClic={() => charger(page + 1)} />
       <p className="text-xs text-attenue">{PAR_PAGE} événements par page · journal conservé avec l'archive du chantier.</p>
     </div>
   );

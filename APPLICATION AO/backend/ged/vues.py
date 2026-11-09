@@ -164,8 +164,15 @@ def registre_xlsx(espace: EspaceChantier, acteur: Acteur) -> HttpResponse:
         versions = sorted(document.versions.all(), key=lambda v: (v.deposee_le, v.pk), reverse=True)
         statuts = statuts_des_versions(versions)
         for v in versions:
-            fin = timezone.localdate(v.vise_le) if v.vise_le else aujourd_hui
-            retard = (fin - v.echeance_visa).days if v.echeance_visa and fin > v.echeance_visa else ""
+            # Retard : jusqu'au visa, ou jusqu'à aujourd'hui pour un indice qui attend encore son visa
+            # (jamais pour un indice remplacé avant visa ni pour un document annulé).
+            if v.vise_le:
+                fin = timezone.localdate(v.vise_le)
+            elif v.visa == StatutVisa.EN_ATTENTE and not document.annule:
+                fin = aujourd_hui
+            else:
+                fin = None
+            retard = (fin - v.echeance_visa).days if fin and v.echeance_visa and fin > v.echeance_visa else ""
             feuille.append([
                 document.get_zone_display(), document.lot.code if document.lot else "", document.get_categorie_display(), document.reference,
                 document.reference_emetteur, document.titre, v.indice, timezone.localtime(v.deposee_le).strftime("%d/%m/%Y %H:%M"), v.deposee_par_nom,
@@ -173,8 +180,10 @@ def registre_xlsx(espace: EspaceChantier, acteur: Acteur) -> HttpResponse:
                 v.get_visa_display() if v.visa else "", timezone.localtime(v.vise_le).strftime("%d/%m/%Y") if v.vise_le else "", retard,
                 v.visa_commentaire, "Annulé" if document.annule else LIBELLES_STATUTS[statuts[v.pk]],
             ])
-            if statuts[v.pk] == EN_VIGUEUR:
-                for cellule in feuille[feuille.max_row]:
+            for cellule in feuille[feuille.max_row]:
+                if cellule.data_type == "f":
+                    cellule.data_type = "s"  # texte saisi (« =… ») : écrit tel quel, jamais en formule Excel
+                if statuts[v.pk] == EN_VIGUEUR:
                     cellule.font = Font(bold=True)
     for colonne, largeur in zip("ABCDEFGHIJKLMNOPQ", (12, 6, 26, 15, 16, 40, 7, 16, 24, 32, 16, 12, 22, 11, 9, 40, 11)):
         feuille.column_dimensions[colonne].width = largeur

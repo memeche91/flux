@@ -210,7 +210,8 @@ if env("REDIS_URL"):
     CACHES = {"default": {"BACKEND": "django.core.cache.backends.redis.RedisCache", "LOCATION": env("REDIS_URL").rsplit("/", 1)[0] + "/1"}}
 
 # GED de chantier : adresses utilisées dans les courriels. URL_APPLICATION : adresse du cabinet
-# (réseau local) ; GED_URL_PUBLIQUE : adresse Internet donnée aux entreprises (https://ged.cabinet.fr).
+# (réseau local) ; GED_URL_PUBLIQUE : adresse Internet racine, sans chemin (https://ged.cabinet.fr),
+# vide quand la GED n'est pas ouverte sur Internet ; les entreprises ouvrent cette adresse + /ged.
 URL_APPLICATION = (env("URL_APPLICATION") or f"http://localhost:{env('APP_PORT', '8080')}").strip()
 GED_URL_PUBLIQUE = (env("GED_URL_PUBLIQUE") or "").strip()
 # Adresse IP des visiteurs fiable (transmise par Caddy depuis l'adresse publique, tunnel ou IP fixe

@@ -4,6 +4,7 @@ import { HardHat, LogOut, Mail } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
 import { BrowserRouter, Navigate, Route, Routes, useNavigate, useParams } from "react-router";
 
+import { ErreurApi } from "../api/client";
 import { CLASSE_CHAMP } from "../components/Filtres";
 import { apiPortail, clientPortail, EVENEMENT_PORTAIL_EXPIRE, jetonCsrfPortail } from "../ged/client";
 import Explorateur from "../ged/Explorateur";
@@ -32,16 +33,30 @@ function formaterCode(saisie: string): string {
   return propre.match(/.{1,4}/g)?.join("-") ?? "";
 }
 
+/** Code du lien d'invitation « …/ged#code=XXXX », s'il y en a un. */
+function codeDuLien(): string {
+  const trouve = window.location.hash.match(/code=([A-Za-z0-9-]+)/);
+  return trouve ? formaterCode(trouve[1]) : "";
+}
+
 function Session() {
+  // Le lien d'invitation prime sur une session déjà ouverte sur l'appareil (poste de chantier
+  // partagé) : la personne valide elle-même son code, ce qui ferme la session précédente.
+  const [codeInvitation, setCodeInvitation] = useState(codeDuLien);
   const [espace, setEspace] = useState<EspacePortail | null>(null);
-  const [verification, setVerification] = useState(true);
+  const [verification, setVerification] = useState(!codeInvitation);
   const [expiree, setExpiree] = useState(false);
 
   useEffect(() => {
-    apiPortail<EspacePortail>("/ged/portail/espace")
-      .then(setEspace)
-      .catch(() => setEspace(null))
-      .finally(() => setVerification(false));
+    if (codeInvitation) {
+      // Code retiré de l'adresse (historique, captures d'écran).
+      window.history.replaceState(null, "", window.location.pathname + window.location.search);
+    } else {
+      apiPortail<EspacePortail>("/ged/portail/espace")
+        .then(setEspace)
+        .catch(() => setEspace(null))
+        .finally(() => setVerification(false));
+    }
     const surExpiration = () => {
       setEspace((actuel) => {
         if (actuel) setExpiree(true);
@@ -56,9 +71,11 @@ function Session() {
   if (!espace)
     return (
       <Connexion
+        codeInitial={codeInvitation}
         expiree={expiree}
         surConnecte={(e) => {
           setExpiree(false);
+          setCodeInvitation("");
           setEspace(e);
         }}
       />
@@ -66,21 +83,11 @@ function Session() {
   return <Espace espace={espace} surMaj={setEspace} surDeconnecte={() => setEspace(null)} />;
 }
 
-function Connexion({ expiree, surConnecte }: { expiree: boolean; surConnecte: (espace: EspacePortail) => void }) {
-  const [code, setCode] = useState("");
+function Connexion({ codeInitial, expiree, surConnecte }: { codeInitial: string; expiree: boolean; surConnecte: (espace: EspacePortail) => void }) {
+  const [code, setCode] = useState(codeInitial);
   const [memoriser, setMemoriser] = useState(false);
   const [erreur, setErreur] = useState<string | null>(null);
   const [envoi, setEnvoi] = useState(false);
-
-  // Lien d'invitation « …/ged#code=XXXX » : le code est prérempli puis retiré de l'adresse
-  // (historique, captures d'écran) ; la personne valide elle-même.
-  useEffect(() => {
-    const trouve = window.location.hash.match(/code=([A-Za-z0-9-]+)/);
-    if (trouve) {
-      setCode(formaterCode(trouve[1]));
-      window.history.replaceState(null, "", window.location.pathname + window.location.search);
-    }
-  }, []);
 
   async function valider(evenement: FormEvent) {
     evenement.preventDefault();
@@ -157,15 +164,24 @@ function Espace({ espace, surMaj, surDeconnecte }: { espace: EspacePortail; surM
   const [onglet, setOnglet] = useState<OngletPortail>("documents");
   const [preferences, setPreferences] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  const [erreurDeconnexion, setErreurDeconnexion] = useState<string | null>(null);
   const documentOuvert = documentId ? Number(documentId) : null;
 
   const ouvrir = useCallback((id: number | null) => naviguer(id === null ? "/ged" : `/ged/document/${id}`, { replace: true }), [naviguer]);
 
   async function deconnexion() {
+    setErreurDeconnexion(null);
     try {
       await apiPortail("/ged/portail/deconnexion", { method: "POST" });
-    } finally {
       surDeconnecte();
+    } catch (p) {
+      if (p instanceof ErreurApi && p.statut === 401) {
+        surDeconnecte(); // session déjà terminée
+        return;
+      }
+      // Session encore ouverte sur le serveur : l'écran de connexion n'est pas affiché (poste partagé).
+      if (p instanceof ErreurApi && p.statut === 403) void jetonCsrfPortail(true).catch(() => undefined); // jeton renouvelé pour le nouvel essai
+      setErreurDeconnexion("Déconnexion impossible : réessayez.");
     }
   }
 
@@ -208,6 +224,11 @@ function Espace({ espace, surMaj, surDeconnecte }: { espace: EspacePortail; surM
       </header>
 
       <main className="mx-auto flex max-w-[1280px] flex-col gap-5 px-4 py-6 sm:px-8">
+        {erreurDeconnexion && (
+          <p role="alert" className="rounded-lg border border-danger/40 bg-danger/10 px-3 py-2 text-danger">
+            {erreurDeconnexion}
+          </p>
+        )}
         {preferences && (
           <section aria-labelledby="titre-preferences" className="flex flex-col gap-3 rounded-xl border border-bordure bg-surface p-4">
             <h2 id="titre-preferences" className="font-semibold">
@@ -238,11 +259,9 @@ function Espace({ espace, surMaj, surDeconnecte }: { espace: EspacePortail; surM
           </section>
         )}
 
-        {espace.statut_espace !== "OUVERT" && (
+        {espace.statut_espace === "RECEPTION" && (
           <p className="rounded-lg border border-accent/40 bg-accent/10 px-4 py-3 text-sm">
-            {espace.statut_espace === "RECEPTION"
-              ? "Chantier réceptionné : seuls le DOE, les éléments du DIUO, les levées de réserves et les photos sont encore attendus."
-              : "Espace clos : consultation seulement."}
+            Chantier réceptionné : seuls le DOE, les éléments du DIUO, les levées de réserves et les photos sont encore attendus.
           </p>
         )}
         {espace.message_accueil && <p className="whitespace-pre-line text-attenue">{espace.message_accueil}</p>}

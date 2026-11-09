@@ -52,7 +52,7 @@ L'installateur :
 | Arrêter l'application | `docker compose down` dans le dossier |
 | Redémarrer / mettre à jour | Relancer `installer.ps1` (données conservées) |
 | Voir les journaux en cas de problème | `docker compose logs -f backend worker` |
-| Ouvrir la GED aux entreprises sur Internet | Relancer `installer.ps1` (question « Ouvrir la GED aux entreprises sur Internet ») |
+| Ouvrir la GED aux entreprises sur Internet | Vider la ligne `GED_INTERNET=` du fichier `.env`, puis relancer `installer.ps1` et répondre **O** à la question « Ouvrir la GED aux entreprises sur Internet » |
 
 ### Où sont mes données ?
 
@@ -186,17 +186,17 @@ Bouton **Ouvrir la GED** sur la page du projet, une fois les marchés notifiés.
 3. **Indices** : A, B, C… (ou 0, 1, 2), jamais en arrière ; l'indice à utiliser est toujours signalé « **À utiliser** », les anciens sont conservés et téléchargés avec la mention `PERIME_`. Dépôt de plusieurs fichiers en une fois : l'indice et le n° de plan sont lus dans le nom (« EXE-08-003_C.pdf »), le DWG de même nom est joint comme fichier source, et un document déjà présent reçoit un nouvel indice.
 4. **Visas** : les documents d'exécution d'une entreprise partent automatiquement « pour visa », avec une échéance (15 jours par défaut, jours ouvrés). Le BET, le contrôleur technique et le CSPS donnent leur avis ; la maîtrise d'œuvre émet le visa de synthèse (VSO, VAO, refusé, hors mission), avec document annoté et **fiche de visa PDF**. Un indice refusé est marqué « ne pas exécuter ». OS et avenants demandent un **accusé de lecture**.
 5. **Notifications** : courriel à chaque nouveauté, regroupé (10 minutes) et limité aux personnes concernées ; chacun choisit « à chaque nouveauté », « récapitulatif quotidien » (7 h, jours ouvrés) ou « aucun ». Récépissé de dépôt à l'entreprise. Journal complet (dépôts, visas, téléchargements, connexions) et **registre des documents** Excel.
-6. **Réception puis clôture** : après la réception, les entreprises ne déposent plus que DOE, DIUO, réserves et photos ; l'espace clos passe en lecture seule.
+6. **Réception puis clôture** : après la réception, les entreprises ne déposent plus que DOE, DIUO, réserves et photos ; l'espace clos n'est plus accessible aux intervenants.
 7. **Archive et purge** : **Préparer l'archive complète** produit un .zip vérifié (pièces écrites, DCE, offres et rapport ACT, GED classée par lot avec indices antérieurs, visas et sources, registre Excel avec liens, journal, « Lisez-moi »), enregistré dans le dossier d'archives. Après téléchargement ou copie confirmée sur le serveur du cabinet, **la purge des fichiers** est programmée à 30 jours (annulable) : les données (lots, prix, offres) restent pour vos prochaines estimations. La suppression complète d'un projet est réservée à l'administrateur.
 
 #### Ouvrir la GED aux entreprises sur Internet (gratuit)
 
-Les entreprises se connectent depuis le chantier sur une adresse du domaine du cabinet, par exemple `https://ged.cabinet.fr/ged`. Relancez `installer.ps1` et répondez **O** à la question « Ouvrir la GED aux entreprises sur Internet », puis choisissez :
+Les entreprises se connectent depuis le chantier sur une adresse du domaine du cabinet, par exemple `https://ged.cabinet.fr/ged`. Videz la ligne `GED_INTERNET=` du fichier `.env`, puis relancez `installer.ps1` et répondez **O** à la question « Ouvrir la GED aux entreprises sur Internet ». Choisissez ensuite :
 
 - **1 – Adresse IP fixe de la box (recommandé)** : chez le gestionnaire de votre nom de domaine, créez un enregistrement **A** `ged.cabinet.fr` vers l'adresse IP de la box (l'installateur l'affiche) ; dans la box, redirigez le **port TCP 443** vers le PC (l'installateur affiche l'adresse du PC à indiquer). Le certificat HTTPS est obtenu et renouvelé automatiquement (Let's Encrypt, gratuit). Le port 80 reste fermé.
 - **2 – Cloudflare Tunnel** (box sans IP fixe ou sans redirection de port) : nom de domaine géré par Cloudflare (offre gratuite), tunnel créé dans *Zero Trust > Networks > Tunnels*, nom public `ged.cabinet.fr` dirigé vers `http://web:8081`, jeton collé dans l'installateur. Aucun port ouvert ; 100 Mo maximum par fichier.
 
-Seul le portail des intervenants est accessible depuis Internet : il tourne dans un service séparé (`ged`) qui ne connaît ni l'administration ni les outils du cabinet. Le PC doit rester allumé (l'installateur propose de désactiver la mise en veille sur secteur). Testez depuis un téléphone en 4G, Wi-Fi coupé. Si Windows demande l'autorisation réseau pour Docker, acceptez pour les réseaux privés. Pour refermer l'accès : `GED_INTERNET=aucun` dans `.env`, puis relancez `installer.ps1`.
+Seul le portail des intervenants est accessible depuis Internet : il tourne dans un service séparé (`ged`) qui ne connaît ni l'administration ni les outils du cabinet. Le PC doit rester allumé (l'installateur propose de désactiver la mise en veille sur secteur). Docker Desktop ne démarre qu'à l'ouverture d'une session Windows : après un redémarrage (mises à jour), ouvrez une session, ou réglez les heures d'activité de Windows Update. Testez depuis un téléphone en 4G, Wi-Fi coupé. Si Windows demande l'autorisation réseau pour Docker, acceptez pour les réseaux privés. Pour refermer l'accès : `GED_INTERNET=aucun` dans `.env`, puis relancez `installer.ps1`.
 
 Pour que les liens des courriels de la GED fonctionnent depuis les autres postes du cabinet, renseignez `URL_APPLICATION` dans `.env` (par exemple `http://192.168.1.20:8080`).
 

@@ -32,6 +32,8 @@ interface Proprietes {
 
 export default function FicheDocument({ document: d, client, droits, referentiels, surMaj }: Proprietes) {
   const [formulaire, setFormulaire] = useState<"indice" | "modifier" | null>(null);
+  // Envoi d'un indice en cours : le formulaire ne peut pas être refermé (l'envoi n'est pas annulable).
+  const [envoiIndice, setEnvoiIndice] = useState(false);
   const [erreur, setErreur] = useState<string | null>(null);
   const clos = droits.statut_espace === "CLOS";
   const categorie = referentiels.categories.find((c) => c.code === d.categorie);
@@ -87,14 +89,24 @@ export default function FicheDocument({ document: d, client, droits, referentiel
         </dl>
         <div className="flex flex-wrap gap-2">
           {d.peut_ajouter_indice && !d.annule && !clos && (
-            <button type="button" onClick={() => setFormulaire(formulaire === "indice" ? null : "indice")} className={CLASSE_BOUTON_PRINCIPAL}>
+            <button
+              type="button"
+              onClick={() => setFormulaire(formulaire === "indice" ? null : "indice")}
+              disabled={envoiIndice}
+              className={CLASSE_BOUTON_PRINCIPAL}
+            >
               <Upload aria-hidden="true" className="size-4" />
               Nouvel indice
             </button>
           )}
           {client.modifierDocument && !clos && (
             <>
-              <button type="button" onClick={() => setFormulaire(formulaire === "modifier" ? null : "modifier")} className={CLASSE_BOUTON}>
+              <button
+                type="button"
+                onClick={() => setFormulaire(formulaire === "modifier" ? null : "modifier")}
+                disabled={envoiIndice}
+                className={CLASSE_BOUTON}
+              >
                 <PenLine aria-hidden="true" className="size-4" />
                 Modifier
               </button>
@@ -119,7 +131,15 @@ export default function FicheDocument({ document: d, client, droits, referentiel
         </p>
       )}
       {formulaire === "indice" && (
-        <FormulaireIndice document={d} client={client} droits={droits} referentiels={referentiels} surMaj={surMaj} surFermer={() => setFormulaire(null)} />
+        <FormulaireIndice
+          document={d}
+          client={client}
+          droits={droits}
+          referentiels={referentiels}
+          surMaj={surMaj}
+          surEnvoi={setEnvoiIndice}
+          surFermer={() => setFormulaire(null)}
+        />
       )}
       {formulaire === "modifier" && (
         <FormulaireModification document={d} client={client} referentiels={referentiels} surMaj={surMaj} surFermer={() => setFormulaire(null)} />
@@ -138,6 +158,7 @@ export default function FicheDocument({ document: d, client, droits, referentiel
 function CarteVersion({ version: v, document: d, client, droits, referentiels, surMaj }: { version: VersionGed } & Proprietes) {
   const [erreur, setErreur] = useState<string | null>(null);
   const [lecture, setLecture] = useState(false);
+  const [avisTransmis, setAvisTransmis] = useState(false);
   const clos = droits.statut_espace === "CLOS";
 
   async function accuser() {
@@ -275,7 +296,14 @@ function CarteVersion({ version: v, document: d, client, droits, referentiels, s
       {droits.peut_viser && client.viser && v.visa === "EN_ATTENTE" && !d.annule && !clos && (
         <FormulaireVisa version={v} document={d} client={client} referentiels={referentiels} surMaj={surMaj} />
       )}
-      {v.peut_donner_avis && !clos && <FormulaireAvis version={v} client={client} referentiels={referentiels} surMaj={surMaj} />}
+      {avisTransmis && (
+        <p role="status" className="text-sm text-succes">
+          Avis transmis à la maîtrise d'œuvre.
+        </p>
+      )}
+      {v.peut_donner_avis && !clos && (
+        <FormulaireAvis version={v} client={client} referentiels={referentiels} surMaj={surMaj} surTransmis={() => setAvisTransmis(true)} />
+      )}
     </li>
   );
 }
@@ -301,8 +329,9 @@ function FormulaireIndice({
   droits,
   referentiels,
   surMaj,
+  surEnvoi,
   surFermer,
-}: { surFermer: () => void } & Omit<Proprietes, "document"> & { document: DocumentGed }) {
+}: { surEnvoi: (enCours: boolean) => void; surFermer: () => void } & Omit<Proprietes, "document"> & { document: DocumentGed }) {
   const precedent = d.versions[0]?.indice;
   const categorie = referentiels.categories.find((c) => c.code === d.categorie);
   const pdfExige = !droits.choix_diffusion && Boolean(categorie?.visa);
@@ -336,12 +365,15 @@ function FormulaireIndice({
     donnees.append("depot", identifiantDepot());
     setErreur(null);
     setProgression(0);
+    surEnvoi(true);
     try {
       surMaj(await client.ajouterIndice(d.id, donnees, setProgression));
       surFermer();
     } catch (p) {
       setErreur(messageErreur(p, "Dépôt impossible."));
       setProgression(null);
+    } finally {
+      surEnvoi(false);
     }
   }
 
@@ -428,7 +460,7 @@ function FormulaireIndice({
         </p>
       )}
       <div className="flex flex-wrap justify-end gap-2">
-        <button type="button" onClick={surFermer} className={CLASSE_BOUTON}>
+        <button type="button" onClick={surFermer} disabled={progression !== null} className={CLASSE_BOUTON}>
           Annuler
         </button>
         <button type="submit" disabled={!fichier || progression !== null} className={CLASSE_BOUTON_PRINCIPAL}>
@@ -491,11 +523,14 @@ function FormulaireModification({
         </Champ>
         <Champ id={`modif-cat-${d.id}`} libelle="Catégorie" large>
           <select id={`modif-cat-${d.id}`} value={categorie} onChange={(e) => setCategorie(e.target.value)} className={CLASSE_CHAMP}>
-            {referentiels.categories.map((c) => (
-              <option key={c.code} value={c.code}>
-                {c.libelle}
-              </option>
-            ))}
+            {referentiels.categories
+              // Pièce confidentielle (OS, avenants, devis, situations, DC4) : jamais dans le Commun.
+              .filter((c) => d.zone !== "COMMUN" || !c.confidentielle || c.code === d.categorie)
+              .map((c) => (
+                <option key={c.code} value={c.code}>
+                  {c.libelle}
+                </option>
+              ))}
           </select>
         </Champ>
       </div>
@@ -627,15 +662,18 @@ function FormulaireAvis({
   client,
   referentiels,
   surMaj,
+  surTransmis,
 }: {
   version: VersionGed;
   client: ClientGed;
   referentiels: Referentiels;
   surMaj: (d: DocumentGed) => void;
+  surTransmis: () => void;
 }) {
   const [avis, setAvis] = useState("");
   const [observations, setObservations] = useState("");
   const [fichier, setFichier] = useState<File | null>(null);
+  const [cleFichier, setCleFichier] = useState(0);
   const [envoi, setEnvoi] = useState(false);
   const [erreur, setErreur] = useState<string | null>(null);
 
@@ -650,6 +688,12 @@ function FormulaireAvis({
     setErreur(null);
     try {
       surMaj(await client.donnerAvis(v.id, donnees));
+      // Formulaire vidé : un second envoi créerait un second avis.
+      setAvis("");
+      setObservations("");
+      setFichier(null);
+      setCleFichier((c) => c + 1);
+      surTransmis();
     } catch (p) {
       setErreur(messageErreur(p, "Avis impossible."));
     } finally {
@@ -672,7 +716,13 @@ function FormulaireAvis({
           </select>
         </Champ>
         <Champ id={`avis-fichier-${v.id}`} libelle="Document joint (facultatif)" large>
-          <input id={`avis-fichier-${v.id}`} type="file" onChange={(e) => setFichier(e.target.files?.[0] ?? null)} className={`${CLASSE_CHAMP} py-2`} />
+          <input
+            key={cleFichier}
+            id={`avis-fichier-${v.id}`}
+            type="file"
+            onChange={(e) => setFichier(e.target.files?.[0] ?? null)}
+            className={`${CLASSE_CHAMP} py-2`}
+          />
         </Champ>
       </div>
       <Champ id={`avis-obs-${v.id}`} libelle="Observations" large>

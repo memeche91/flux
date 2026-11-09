@@ -2,7 +2,7 @@
  * fichiers sources (DWG…) rattachés au PDF de même nom, nouvel indice proposé quand le document
  * existe déjà. Les courriels de l'envoi sont regroupés. */
 import { CheckCircle2, Loader2, Paperclip, Trash2, Upload, X } from "lucide-react";
-import { useEffect, useMemo, useRef, useState, type DragEvent, type FormEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent, type FormEvent } from "react";
 
 import { CLASSE_CHAMP, Champ } from "../components/Filtres";
 import { formaterTaille } from "../lib/format";
@@ -25,6 +25,8 @@ interface Ligne {
   sources: File[];
   /** 0 = nouveau document ; sinon, document dont on dépose un nouvel indice. */
   documentId: number;
+  /** Cible choisie à la main : elle n'est plus recalculée quand le classement change. */
+  cibleManuelle: boolean;
   titre: string;
   referenceEmetteur: string;
   indice: string;
@@ -59,7 +61,10 @@ export default function Depot({ client, droits, referentiels, documents, zoneIni
   const [lotId, setLotId] = useState<number | "">(
     lotInitial && droits.lots_depot.some((l) => l.id === lotInitial) ? lotInitial : droits.lots_depot.length === 1 ? droits.lots_depot[0].id : "",
   );
-  const categoriesZone = referentiels.categories.filter((c) => droits.categories_depot.includes(c.code) && (zone === "MOE" || c.zone === zone));
+  // Catégories proposées dans la zone, ou permises ailleurs que dans leur zone habituelle (CSPS : DIUO dans le Commun).
+  const categoriesZone = referentiels.categories.filter(
+    (c) => droits.categories_depot.includes(c.code) && (zone === "MOE" || c.zone === zone || !zones.includes(c.zone as ZoneGed)),
+  );
   const [categorie, setCategorie] = useState("");
   const categorieChoisie = categoriesZone.find((c) => c.code === categorie);
   const [diffusion, setDiffusion] = useState<Diffusion | "">("");
@@ -79,27 +84,35 @@ export default function Depot({ client, droits, referentiels, documents, zoneIni
     [documents, zone, lotId, categorie],
   );
 
-  // Classement changé : un nouvel indice ne vise plus qu'un document de ce classement.
+  const rapprocher = useCallback(
+    (referenceEmetteur: string, titre: string): DocumentGed | undefined => {
+      const ref = cleComparaison(referenceEmetteur);
+      const tit = cleComparaison(titre);
+      return existants.find(
+        (d) =>
+          (ref && cleComparaison(d.reference_emetteur) === ref) || (ref && cleComparaison(d.reference) === ref) || (tit && cleComparaison(d.titre) === tit),
+      );
+    },
+    [existants],
+  );
+
+  // Classement changé (lot, catégorie choisis après l'ajout des fichiers) : le document existant
+  // est recherché de nouveau ; un choix fait à la main est gardé s'il est encore de ce classement.
   useEffect(() => {
     setLignes((actuelles) =>
-      actuelles.some((l) => l.documentId && !existants.some((d) => d.id === l.documentId))
-        ? actuelles.map((l) => (l.documentId && l.etat !== "fait" && !existants.some((d) => d.id === l.documentId) ? { ...l, documentId: 0 } : l))
-        : actuelles,
+      actuelles.map((l) => {
+        if (l.etat === "fait" || l.etat === "envoi") return l;
+        if (l.cibleManuelle && (!l.documentId || existants.some((d) => d.id === l.documentId))) return l;
+        const documentId = rapprocher(l.referenceEmetteur, l.titre)?.id ?? 0;
+        return documentId === l.documentId && !l.cibleManuelle ? l : { ...l, documentId, cibleManuelle: false };
+      }),
     );
-  }, [existants]);
+  }, [existants, rapprocher]);
 
   function choisirCategorie(code: string) {
     setCategorie(code);
     const choisie = referentiels.categories.find((c) => c.code === code);
     setDiffusion(!code ? "" : choisie?.visa ? "VISA" : code === "PLA" ? "BPE" : "INFO");
-  }
-
-  function rapprocher(referenceEmetteur: string, titre: string): DocumentGed | undefined {
-    const ref = cleComparaison(referenceEmetteur);
-    const tit = cleComparaison(titre);
-    return existants.find(
-      (d) => (ref && cleComparaison(d.reference_emetteur) === ref) || (ref && cleComparaison(d.reference) === ref) || (tit && cleComparaison(d.titre) === tit),
-    );
   }
 
   function ajouterFichiers(fichiers: File[]) {
@@ -113,6 +126,7 @@ export default function Depot({ client, droits, referentiels, documents, zoneIni
         fichier: principal,
         sources,
         documentId: existant?.id ?? 0,
+        cibleManuelle: false,
         titre: analyse.titre,
         referenceEmetteur: analyse.referenceEmetteur,
         indice: analyse.indice,
@@ -333,7 +347,7 @@ export default function Depot({ client, droits, referentiels, documents, zoneIni
                       <select
                         id={`depot-action-${ligne.cle}`}
                         value={ligne.documentId}
-                        onChange={(e) => maj(ligne.cle, { documentId: Number(e.target.value) })}
+                        onChange={(e) => maj(ligne.cle, { documentId: Number(e.target.value), cibleManuelle: true })}
                         className={CLASSE_CHAMP}
                       >
                         <option value={0}>Nouveau document</option>

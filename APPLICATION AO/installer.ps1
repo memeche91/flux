@@ -129,12 +129,12 @@ if ($modeGed -in @("ip", "tunnel")) {
     Write-Host "(Pour la fermer : mettez GED_INTERNET=aucun dans .env puis relancez ce script.)"
 } elseif ($modeGed -eq "aucun") {
     Write-Host "GED réservée au réseau du cabinet."
-    Write-Host "(Pour l'ouvrir aux entreprises : videz la ligne GED_INTERNET= dans .env puis relancez ce script.)"
+    Write-Host "(Pour l'ouvrir aux entreprises : videz la ligne GED_INTERNET= du fichier .env, puis relancez ce script et répondez O.)"
 } else {
     Write-Host "Sans cette option, la GED n'est accessible que sur le réseau du cabinet."
     Write-Host "Avec elle, les entreprises s'y connectent depuis le chantier avec leur code d'accès."
     $reponse = Read-Host "Ouvrir la GED aux entreprises sur Internet ? (O/N, N par défaut)"
-    $contenuEnv = Definir-Variable $contenuEnv "GED_INTERNET" "aucun"
+    # « aucun » n'est écrit qu'en cas de refus : après un essai raté, la question revient.
     if ($reponse -match '^\s*[oO]') {
         Write-Host ""
         Write-Host "Deux solutions gratuites :"
@@ -175,11 +175,8 @@ if ($modeGed -in @("ip", "tunnel")) {
                 Write-Host "  port externe TCP 443  ->  $ipPc, port $portPc" -ForegroundColor Cyan
                 Write-Host "  et, si possible, réservez l'adresse $ipPc à ce PC (bail DHCP permanent)." -ForegroundColor Cyan
                 Write-Host "  Le port 80 n'a pas besoin d'être ouvert."
-                if ((Read-Host "Empêcher la mise en veille de ce PC lorsqu'il est branché (la GED reste joignable) ? (O/N)") -match '^\s*[oO]') {
-                    powercfg /change standby-timeout-ac 0
-                    powercfg /change hibernate-timeout-ac 0
-                    Write-Host "Mise en veille désactivée sur secteur."
-                }
+            } else {
+                Write-Host "La GED reste réservée au réseau du cabinet. Relancez le script quand le nom pointera vers la box." -ForegroundColor Yellow
             }
         } elseif ($choix -eq "2") {
             Write-Host ""
@@ -193,14 +190,26 @@ if ($modeGed -in @("ip", "tunnel")) {
                 $contenuEnv = Definir-Variable $contenuEnv "GED_INTERNET" "tunnel"
                 $modeGed = "tunnel"
             } else {
-                Write-Host "Jeton non reconnu : la GED reste réservée au réseau du cabinet." -ForegroundColor Yellow
+                Write-Host "Jeton non reconnu : la GED reste réservée au réseau du cabinet. Relancez le script pour réessayer." -ForegroundColor Yellow
             }
         } else {
-            Write-Host "Choix non reconnu : la GED reste réservée au réseau du cabinet." -ForegroundColor Yellow
+            Write-Host "Choix non reconnu : la GED reste réservée au réseau du cabinet. Relancez le script pour réessayer." -ForegroundColor Yellow
         }
+        # IP fixe ou tunnel : le PC doit rester joignable.
+        if ($modeGed -in @("ip", "tunnel")) {
+            if ((Read-Host "Empêcher la mise en veille de ce PC lorsqu'il est branché (la GED reste joignable) ? (O/N)") -match '^\s*[oO]') {
+                powercfg /change standby-timeout-ac 0
+                powercfg /change hibernate-timeout-ac 0
+                Write-Host "Mise en veille désactivée sur secteur."
+            }
+        }
+    } else {
+        $contenuEnv = Definir-Variable $contenuEnv "GED_INTERNET" "aucun"
     }
 }
 if ($modeGed -notin @("ip", "tunnel")) { $modeGed = "" }
+# GED refermée : plus d'adresse Internet dans les courriels ni à l'écran (redemandée à la réouverture).
+if (-not $modeGed) { $contenuEnv = Definir-Variable $contenuEnv "GED_URL_PUBLIQUE" "" }
 
 $fichiers = Fichiers-Compose $gpu $modeGed
 if ($fichiers -eq "docker-compose.yml") {

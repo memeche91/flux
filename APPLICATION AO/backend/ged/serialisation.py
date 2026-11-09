@@ -147,6 +147,8 @@ def droits_out(acteur: Acteur, espace: EspaceChantier) -> dict:
         c for c in categories_de_depot(acteur)
         if acteur.cabinet or espace.statut != StatutEspace.RECEPTION or c in APRES_RECEPTION  # après réception : DOE, DIUO, réserves
     ) if zones else []
+    if not categories:
+        zones = []  # aucune catégorie permise (CT, OPC après la réception) : pas de bouton « Déposer »
     return {
         "zones_visibles": [Zone.COMMUN, Zone.LOT] + ([Zone.MOE] if acteur.maitrise_oeuvre else []),
         "lots": [lot_court(l) for l in lots_visibles],

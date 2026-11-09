@@ -1,6 +1,8 @@
 """API de clôture : archives du projet, téléchargement, copie confirmée, purge programmée."""
 from __future__ import annotations
 
+import logging
+
 from django.conf import settings
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
@@ -10,9 +12,20 @@ from ninja.errors import HttpError
 from projets.fichiers import reponse_fichier_sure
 from projets.models import Projet
 
-from .archivage import DELAI_PURGE, bilan_projet, chemin_archive, espace_libre_archives, produire_archive, purger
+from .archivage import (
+    DELAI_PURGE,
+    DUREE_MAX_PREPARATION,
+    bilan_projet,
+    chemin_archive,
+    espace_libre_archives,
+    liberer_archives_interrompues,
+    motif_refus_purge,
+    produire_archive,
+    purger,
+)
 from .models import ProjetArchive, StatutArchive
 
+logger = logging.getLogger(__name__)
 router = Router(tags=["Clôture et archives"])
 
 
@@ -35,6 +48,7 @@ def archive_out(a: ProjetArchive) -> dict:
 @router.get("/projets/{projet_id}/archives")
 def etat(request, projet_id: int):
     projet = get_object_or_404(Projet, pk=projet_id)
+    liberer_archives_interrompues(DUREE_MAX_PREPARATION)  # sinon l'écran attend sans fin
     try:
         libre = espace_libre_archives()
     except OSError:
@@ -51,10 +65,21 @@ def archiver(request, projet_id: int):
     from django.db import transaction
 
     projet = get_object_or_404(Projet, pk=projet_id)
+    # Archive « en préparation » depuis plus longtemps que la tâche ne peut durer : elle a été interrompue.
+    liberer_archives_interrompues(DUREE_MAX_PREPARATION)
     if ProjetArchive.objects.filter(projet=projet, statut=StatutArchive.EN_COURS).exists():
         raise HttpError(409, "Une archive est déjà en préparation.")
     archive = ProjetArchive.objects.create(projet=projet, nom_projet=projet.nom, numero_projet=projet.numero, demandee_par=request.auth)
-    transaction.on_commit(lambda: produire_archive.delay(archive.pk))
+
+    def lancer():
+        try:
+            produire_archive.delay(archive.pk)
+        except Exception:  # noqa: BLE001 - service de tâches injoignable : l'archive ne reste pas bloquée
+            logger.exception("Archive %s non mise en file", archive.pk)
+            ProjetArchive.objects.filter(pk=archive.pk, statut=StatutArchive.EN_COURS).update(
+                statut=StatutArchive.ERREUR, message="Préparation impossible (service de tâches indisponible) : relancez l'archive.")
+
+    transaction.on_commit(lancer)
     return 201, archive_out(archive)
 
 
@@ -107,6 +132,9 @@ def programmer_purge(request, archive_id: int, donnees: PurgeIn):
         raise HttpError(400, "Il faut d'abord une archive vérifiée, présente dans le dossier d'archives.")
     if not (archive.telechargee_le or archive.copie_confirmee_le):
         raise HttpError(400, "Téléchargez l'archive ou confirmez que vous l'avez copiée hors de ce PC avant de purger les fichiers.")
+    motif = motif_refus_purge(archive)
+    if motif:
+        raise HttpError(409, motif)
     if donnees.maintenant:
         if not request.auth.est_administrateur:
             raise HttpError(403, "Seul un administrateur peut purger sans le délai de 30 jours.")
@@ -128,6 +156,7 @@ def annuler_purge(request, archive_id: int):
 @router.delete("/archives/{archive_id}", response={204: None})
 def supprimer(request, archive_id: int):
     """Supprime l'archive de l'application et du dossier d'archives (à faire après l'avoir copiée ailleurs)."""
+    liberer_archives_interrompues(DUREE_MAX_PREPARATION)
     archive = _archive(archive_id)
     if archive.statut == StatutArchive.EN_COURS:
         raise HttpError(409, "Archive en préparation.")
