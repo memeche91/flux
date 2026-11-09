@@ -194,6 +194,9 @@ def remplacer_champs(html: str, champs: dict[str, Champ]) -> str:
         if not champ.renseigne:
             return _a_completer(champ.libelle)
         if champ.bloc:
+            avant = correspondance.string[: correspondance.start()]
+            if avant.rfind("<p") <= avant.rfind("</p>"):
+                return champ.valeur  # déjà hors paragraphe
             coupe = True
             return f"{_AVANT_BLOC}</p>{champ.valeur}<p {_APRES_BLOC}>"
         return champ.valeur
