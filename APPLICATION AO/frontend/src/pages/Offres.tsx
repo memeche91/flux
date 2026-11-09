@@ -19,16 +19,8 @@ import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type
 import { Link, useParams, useSearchParams } from "react-router";
 
 import { api, televerser } from "../api/client";
-import type {
-  ComparatifLot,
-  EntrepriseResume,
-  EtatOffres,
-  LotAnalyse,
-  MethodePrix,
-  OffreAnalyse,
-  Projet,
-  StatutLectureOffre,
-} from "../api/types";
+import { JUSTIFICATIONS_PRIX } from "../api/types";
+import type { ComparatifLot, EntrepriseResume, EtatOffres, LotAnalyse, MethodePrix, OffreAnalyse, Projet, StatutLectureOffre } from "../api/types";
 import EnTetePage from "../components/EnTetePage";
 import { CLASSE_CHAMP, Champ } from "../components/Filtres";
 import { formaterDate, formaterEuros, formaterQuantite, pluriel } from "../lib/format";
@@ -45,15 +37,28 @@ const STYLE_STATUT: Record<StatutLectureOffre, string> = {
   MANUELLE: "border-bordure-forte bg-surface-2 text-attenue",
 };
 
-/** « 12 500,50 » → 12500.5 ; vide → null ; illisible → NaN. */
-function lireMontant(texte: string): number | null {
-  const propre = texte.replace(/[\s  €]/g, "").replace(",", ".");
+/** « 12 500,50 » → 12500.5 ; vide → null ; illisible → NaN. Moins-value (« −1 500 ») si `negatif`. */
+function lireMontant(texte: string, negatif = false): number | null {
+  const propre = texte
+    .replace(/[\s\u00a0\u202f€]/g, "")
+    .replace("\u2212", "-")
+    .replace(",", ".");
   if (!propre) return null;
-  return /^\d+(\.\d{0,2})?$/.test(propre) ? Number(propre) : Number.NaN;
+  return (negatif ? /^-?\d+(\.\d{0,2})?$/ : /^\d+(\.\d{0,2})?$/).test(propre) ? Number(propre) : Number.NaN;
 }
 
+const aujourdhui = () => {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+};
+
 function formaterSaisie(valeur: number | null): string {
-  return valeur == null ? "" : valeur.toLocaleString("fr-FR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  return valeur == null
+    ? ""
+    : valeur.toLocaleString("fr-FR", {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
+      });
 }
 
 function formaterNote(valeur: number | null | undefined): string {
@@ -165,7 +170,14 @@ export default function Offres() {
               <>
                 <Comparatif key={`comparatif-${lot.id}`} lot={lot} surLot={majLot} />
                 <Notation key={`notation-${lot.id}`} lot={lot} projetId={projet.id} surLot={majLot} />
-                <Attribution key={`attribution-${lot.id}`} lot={lot} projetId={projet.id} tauxTva={etat.taux_tva} surLot={majLot} />
+                <Attribution
+                  key={`attribution-${lot.id}`}
+                  lot={lot}
+                  projetId={projet.id}
+                  tauxTva={etat.taux_tva}
+                  marchePublic={etat.type_marche === "PUBLIC"}
+                  surLot={majLot}
+                />
               </>
             )}
           </div>
@@ -248,6 +260,7 @@ function OffresRecues({ lot, surLot, recharger }: { lot: LotAnalyse; surLot: (lo
   const [montant, setMontant] = useState("");
   const [variante, setVariante] = useState(false);
   const [libelleVariante, setLibelleVariante] = useState("");
+  const [recueLe, setRecueLe] = useState(aujourdhui);
   const [progression, setProgression] = useState<number | null>(null);
   const [erreur, setErreur] = useState<string | null>(null);
   const [survol, setSurvol] = useState(false);
@@ -277,6 +290,7 @@ function OffresRecues({ lot, surLot, recharger }: { lot: LotAnalyse; surLot: (lo
     else if (valeur != null) donnees.append("montant_base", String(valeur));
     donnees.append("variante", String(variante));
     if (variante) donnees.append("libelle_variante", libelleVariante);
+    if (recueLe) donnees.append("recue_le", recueLe);
     setProgression(0);
     try {
       await televerser(`/lots-projet/${lot.id}/offres`, donnees, setProgression);
@@ -319,6 +333,9 @@ function OffresRecues({ lot, surLot, recharger }: { lot: LotAnalyse; surLot: (lo
                 ))}
               </optgroup>
             </select>
+          </Champ>
+          <Champ id="offre-recue-le" libelle="Reçue le">
+            <input id="offre-recue-le" type="date" value={recueLe} onChange={(e) => setRecueLe(e.target.value)} className={CLASSE_CHAMP} />
           </Champ>
           <Champ id="offre-montant" libelle="Montant HT (sans document)">
             <input
@@ -393,7 +410,9 @@ function OffresRecues({ lot, surLot, recharger }: { lot: LotAnalyse; surLot: (lo
           </div>
         </div>
         {dejaRemise && !variante && (
-          <p className="text-sm text-accent">Cette entreprise a déjà remis une offre pour ce lot : cochez « Variante » ou modifiez l'offre existante ci-dessous.</p>
+          <p className="text-sm text-accent">
+            Cette entreprise a déjà remis une offre pour ce lot : cochez « Variante » ou modifiez l'offre existante ci-dessous.
+          </p>
         )}
         {erreur && (
           <p role="alert" className="text-sm text-danger">
@@ -427,19 +446,24 @@ function ChampMontant({
   valeur,
   surEnregistrer,
   indication,
+  negatif = false,
 }: {
   id: string;
   libelle: string;
   valeur: number | null;
   surEnregistrer: (valeur: number | null) => Promise<void>;
   indication?: string;
+  negatif?: boolean;
 }) {
   const [texte, setTexte] = useState(formaterSaisie(valeur));
   const [invalide, setInvalide] = useState(false);
-  useEffect(() => setTexte(formaterSaisie(valeur)), [valeur]);
+  useEffect(() => {
+    setTexte(formaterSaisie(valeur));
+    setInvalide(false);
+  }, [valeur]);
 
   async function valider() {
-    const lu = lireMontant(texte);
+    const lu = lireMontant(texte, negatif);
     if (lu != null && Number.isNaN(lu)) {
       setInvalide(true);
       return;
@@ -460,7 +484,7 @@ function ChampMontant({
         autoComplete="off"
         value={texte}
         aria-invalid={invalide}
-        aria-describedby={indication ? `${id}-aide` : undefined}
+        aria-describedby={indication || invalide ? `${id}-aide` : undefined}
         onChange={(e) => setTexte(e.target.value)}
         onBlur={() => void valider()}
         onKeyDown={(e) => {
@@ -470,7 +494,7 @@ function ChampMontant({
       />
       {(indication || invalide) && (
         <span id={`${id}-aide`} className={`text-xs ${invalide ? "text-danger" : "text-attenue"}`}>
-          {invalide ? "Montant invalide (ex. 12 500,00)." : indication}
+          {invalide ? (negatif ? "Montant invalide (ex. 12 500,00 ou −1 500,00 pour une moins-value)." : "Montant invalide (ex. 12 500,00).") : indication}
         </span>
       )}
     </Champ>
@@ -481,14 +505,21 @@ function CarteOffre({ offre, lot, surLot, recharger }: { offre: OffreAnalyse; lo
   const [erreur, setErreur] = useState<string | null>(null);
   const [motif, setMotif] = useState(offre.motif_ecart);
   const [delai, setDelai] = useState(offre.delai_propose);
+  const [appreciation, setAppreciation] = useState(offre.motif_justification);
   useEffect(() => setMotif(offre.motif_ecart), [offre.motif_ecart]);
   useEffect(() => setDelai(offre.delai_propose), [offre.delai_propose]);
+  useEffect(() => setAppreciation(offre.motif_justification), [offre.motif_justification]);
 
   const modifier = useCallback(
     async (donnees: Record<string, unknown>) => {
       setErreur(null);
       try {
-        surLot(await api<LotAnalyse>(`/offres/${offre.id}`, { method: "PATCH", body: JSON.stringify(donnees) }));
+        surLot(
+          await api<LotAnalyse>(`/offres/${offre.id}`, {
+            method: "PATCH",
+            body: JSON.stringify(donnees),
+          }),
+        );
       } catch (probleme) {
         setErreur(message(probleme, "Enregistrement impossible."));
       }
@@ -517,7 +548,15 @@ function CarteOffre({ offre, lot, surLot, recharger }: { offre: OffreAnalyse; lo
   }
 
   const enCours = offre.statut_lecture === "EN_COURS";
-  const IconeStatut = enCours ? Loader2 : offre.statut_lecture === "LUE" ? CheckCircle2 : offre.statut_lecture === "MANUELLE" ? FileText : offre.statut_lecture === "NON_LUE" ? XCircle : AlertTriangle;
+  const IconeStatut = enCours
+    ? Loader2
+    : offre.statut_lecture === "LUE"
+      ? CheckCircle2
+      : offre.statut_lecture === "MANUELLE"
+        ? FileText
+        : offre.statut_lecture === "NON_LUE"
+          ? XCircle
+          : AlertTriangle;
   const ecartTotaux =
     offre.montant_base_declare != null && offre.montant_base_calcule != null && Math.abs(offre.montant_base_declare - offre.montant_base_calcule) > 1;
 
@@ -529,8 +568,10 @@ function CarteOffre({ offre, lot, surLot, recharger }: { offre: OffreAnalyse; lo
             {offre.nom}
           </Link>
           <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-attenue">
-            <span>Reçue le {formaterDate(offre.recue_le)}</span>
-            {offre.nom_original && <span className="max-w-64 truncate">· {offre.nom_original}</span>}
+            {offre.nom_original && <span className="max-w-64 truncate">{offre.nom_original}</span>}
+            {offre.hors_delai && <span className="font-semibold text-danger">Reçue après la date limite</span>}
+            {offre.motif_non_classee && !offre.ecartee && <span className="text-accent">Non classée : {offre.motif_non_classee}</span>}
+            {offre.variante_sans_base && <span className="text-accent">Variante sans offre de base</span>}
           </div>
         </div>
         <span className={`inline-flex min-h-7 items-center gap-1.5 rounded-full border px-2.5 text-xs font-semibold ${STYLE_STATUT[offre.statut_lecture]}`}>
@@ -551,7 +592,7 @@ function CarteOffre({ offre, lot, surLot, recharger }: { offre: OffreAnalyse; lo
             </a>
           )}
           {offre.a_un_fichier && (
-            <button type="button" onClick={() => void relire()} disabled={enCours} className={CLASSE_BOUTON_SECONDAIRE} aria-label={`Relire le document de ${offre.nom}`}>
+            <button type="button" onClick={() => void relire()} className={CLASSE_BOUTON_SECONDAIRE} aria-label={`Relire le document de ${offre.nom}`}>
               <RefreshCw aria-hidden="true" className="size-4" />
               Relire
             </button>
@@ -577,14 +618,20 @@ function CarteOffre({ offre, lot, surLot, recharger }: { offre: OffreAnalyse; lo
       </div>
 
       {offre.message_lecture && !enCours && <p className="text-sm text-attenue">{offre.message_lecture}</p>}
-      {enCours && <p className="text-sm text-info">Lecture du document… Un PDF scanné peut demander une minute.</p>}
+      {enCours && (
+        <p className="text-sm text-info">
+          Lecture du document… Un PDF scanné peut demander une minute. Si rien ne se passe, cliquez sur « Relire » ou saisissez le montant.
+        </p>
+      )}
 
       <div className="flex flex-wrap items-start gap-3">
         <ChampMontant
           id={`offre-${offre.id}-base`}
           libelle="Solution de base HT"
           valeur={offre.montant_base}
-          indication={ecartTotaux ? `Total déclaré ${formaterEuros(offre.montant_base_declare)} · lignes ${formaterEuros(offre.montant_base_calcule)}` : undefined}
+          indication={
+            ecartTotaux ? `Total déclaré ${formaterEuros(offre.montant_base_declare)} · lignes ${formaterEuros(offre.montant_base_calcule)}` : undefined
+          }
           surEnregistrer={(v) => modifier({ montant_base: v })}
         />
         {lot.options.map((option) => (
@@ -592,10 +639,21 @@ function CarteOffre({ offre, lot, surLot, recharger }: { offre: OffreAnalyse; lo
             key={option.id}
             id={`offre-${offre.id}-option-${option.id}`}
             libelle={`${option.nom} HT`}
+            negatif
             valeur={offre.montants_options[String(option.id)] ?? null}
             surEnregistrer={(v) => modifier({ montants_options: { [option.id]: v } })}
           />
         ))}
+        <Champ id={`offre-${offre.id}-recue`} libelle="Reçue le">
+          <input
+            id={`offre-${offre.id}-recue`}
+            type="date"
+            value={offre.recue_le}
+            aria-invalid={offre.hors_delai}
+            onChange={(e) => e.target.value && void modifier({ recue_le: e.target.value })}
+            className={`${CLASSE_CHAMP} ${offre.hors_delai ? "border-danger" : ""}`}
+          />
+        </Champ>
         <Champ id={`offre-${offre.id}-delai`} libelle="Délai proposé">
           <input
             id={`offre-${offre.id}-delai`}
@@ -608,6 +666,42 @@ function CarteOffre({ offre, lot, surLot, recharger }: { offre: OffreAnalyse; lo
           />
         </Champ>
       </div>
+      {(offre.anormalement_basse || offre.justification_prix) && (
+        <fieldset className="flex min-w-0 flex-col gap-2 rounded-lg border border-danger/30 bg-danger/5 p-3">
+          <legend className="px-1 text-xs font-semibold text-danger">Prix paraissant anormalement bas : justifications de l'entreprise</legend>
+          <p className="text-xs text-attenue">
+            Demandez par écrit des précisions sur la composition du prix, puis enregistrez votre appréciation : l'offre ne peut être proposée que si les
+            justifications sont jugées satisfaisantes ; sinon elle est rejetée.
+          </p>
+          <div className="flex flex-wrap items-end gap-3">
+            <Champ id={`offre-${offre.id}-justification`} libelle="Suite donnée">
+              <select
+                id={`offre-${offre.id}-justification`}
+                value={offre.justification_prix}
+                onChange={(e) => void modifier({ justification_prix: e.target.value })}
+                className={CLASSE_CHAMP}
+              >
+                {Object.entries(JUSTIFICATIONS_PRIX).map(([code, libelle]) => (
+                  <option key={code} value={code}>
+                    {libelle}
+                  </option>
+                ))}
+              </select>
+            </Champ>
+            <Champ id={`offre-${offre.id}-appreciation`} libelle="Appréciation (reprise dans le rapport)" large>
+              <input
+                id={`offre-${offre.id}-appreciation`}
+                value={appreciation}
+                maxLength={4000}
+                placeholder="ex. Sous-détail cohérent, matériel déjà en stock"
+                onChange={(e) => setAppreciation(e.target.value)}
+                onBlur={() => appreciation !== offre.motif_justification && void modifier({ motif_justification: appreciation })}
+                className={CLASSE_CHAMP}
+              />
+            </Champ>
+          </div>
+        </fieldset>
+      )}
       {offre.ecartee && (
         <Champ id={`offre-${offre.id}-motif`} libelle="Motif de l'écart (repris dans le rapport)" large>
           <input
@@ -641,7 +735,11 @@ function Comparatif({ lot, surLot }: { lot: LotAnalyse; surLot: (lot: LotAnalyse
   useEffect(() => {
     let actif = true;
     api<ComparatifLot>(`/lots-projet/${lot.id}/comparatif`)
-      .then((c) => actif && setDonnees(c))
+      .then((c) => {
+        if (!actif) return;
+        setDonnees(c);
+        setErreur(null);
+      })
       .catch((p: unknown) => actif && setErreur(message(p, "Comparatif indisponible.")));
     return () => {
       actif = false;
@@ -650,10 +748,18 @@ function Comparatif({ lot, surLot }: { lot: LotAnalyse; surLot: (lot: LotAnalyse
 
   async function basculerOption(optionId: number, retenue: boolean) {
     const options = retenue ? [...lot.analyse.options_retenues, optionId] : lot.analyse.options_retenues.filter((o) => o !== optionId);
+    const avant = lot;
+    setErreur(null);
     surLot({ ...lot, analyse: { ...lot.analyse, options_retenues: options } }); // case cochée sans attendre le serveur
     try {
-      surLot(await api<LotAnalyse>(`/lots-projet/${lot.id}/analyse`, { method: "PATCH", body: JSON.stringify({ options_retenues: options }) }));
+      surLot(
+        await api<LotAnalyse>(`/lots-projet/${lot.id}/analyse`, {
+          method: "PATCH",
+          body: JSON.stringify({ options_retenues: options }),
+        }),
+      );
     } catch (probleme) {
+      surLot(avant); // case décochée : le serveur n'a rien enregistré
       setErreur(message(probleme, "Enregistrement impossible."));
     }
   }
@@ -667,7 +773,9 @@ function Comparatif({ lot, surLot }: { lot: LotAnalyse; surLot: (lot: LotAnalyse
     <Section id={`comparatif-${lot.id}`} numero={2} titre="Comparatif des prix">
       {lot.options.length > 0 && (
         <fieldset className="flex min-w-0 flex-wrap items-center gap-x-4 gap-y-1">
-          <legend className="mb-1 text-xs font-semibold text-attenue">PSE retenues pour comparer les offres</legend>
+          <legend className="mb-1 text-xs font-semibold text-attenue">
+            {lot.options.some((o) => o.genre === "VARIANTE") ? "PSE et variantes exigées retenues" : "PSE retenues"} pour comparer les offres
+          </legend>
           {lot.options.map((option) => (
             <label key={option.id} className="flex min-h-10 items-center gap-2 text-sm">
               <input
@@ -710,7 +818,11 @@ function Comparatif({ lot, surLot }: { lot: LotAnalyse; surLot: (lot: LotAnalyse
                   Estimation
                 </th>
                 {offres.map((o) => (
-                  <th key={o.id} scope="col" className={`max-w-40 px-2.5 py-2 text-right font-semibold text-texte ${o.ecartee ? "line-through opacity-60" : ""}`}>
+                  <th
+                    key={o.id}
+                    scope="col"
+                    className={`max-w-40 px-2.5 py-2 text-right font-semibold text-texte ${o.ecartee ? "line-through opacity-60" : ""}`}
+                  >
                     {o.nom}
                   </th>
                 ))}
@@ -724,7 +836,8 @@ function Comparatif({ lot, surLot }: { lot: LotAnalyse; surLot: (lot: LotAnalyse
             <tfoot className="border-t-2 border-bordure-forte">
               <tr className="bg-accent/8 font-semibold">
                 <th scope="row" colSpan={4} className="px-2.5 py-2 text-left">
-                  Prix comparé HT{lot.analyse.options_retenues.length ? " (base + PSE retenues)" : ""}
+                  Prix comparé HT
+                  {lot.analyse.options_retenues.length ? " (base + PSE retenues)" : ""}
                 </th>
                 <td className="px-2.5 py-2 text-right tabular-nums">{formaterEuros(estimationComparee)}</td>
                 {offres.map((o) => (
@@ -739,7 +852,10 @@ function Comparatif({ lot, surLot }: { lot: LotAnalyse; surLot: (lot: LotAnalyse
                   Écart à l'estimation
                 </th>
                 {offres.map((o) => (
-                  <td key={o.id} className={`px-2.5 py-1.5 text-right tabular-nums ${o.ecart_estimation != null && o.ecart_estimation > 0 ? "text-danger" : ""}`}>
+                  <td
+                    key={o.id}
+                    className={`px-2.5 py-1.5 text-right tabular-nums ${o.ecart_estimation != null && o.ecart_estimation > 0 ? "text-danger" : ""}`}
+                  >
                     {formaterEcart(o.ecart_estimation)}
                   </td>
                 ))}
@@ -781,8 +897,8 @@ function Comparatif({ lot, surLot }: { lot: LotAnalyse; surLot: (lot: LotAnalyse
         </details>
       )}
       <p className="text-xs text-attenue">
-        <span className="text-succes">Vert</span> : prix le plus bas de la ligne · <span className="text-danger">rouge</span> : le plus élevé · « — » : ouvrage non chiffré ou
-        non retrouvé dans l'offre.
+        <span className="text-succes">Vert</span> : prix le plus bas de la ligne (offres écartées exclues) · <span className="text-danger">rouge</span> : le
+        plus élevé · « — » : ouvrage non chiffré ou non retrouvé dans l'offre.
       </p>
     </Section>
   );
@@ -832,7 +948,16 @@ function ChapitreComparatif({
         </th>
       </tr>
       {chapitre.lignes.map((ligne) => {
-        const plusieurs = ligne.minimum != null && ligne.maximum != null && ligne.minimum !== ligne.maximum;
+        // Prix le plus bas et le plus élevé parmi les offres non écartées.
+        const montants = offres
+          .filter((o) => !o.ecartee)
+          .flatMap((o) => {
+            const m = ligne.offres[String(o.id)]?.montant;
+            return m == null ? [] : [m];
+          });
+        const minimum = montants.length ? Math.min(...montants) : null;
+        const maximum = montants.length ? Math.max(...montants) : null;
+        const plusieurs = minimum != null && maximum != null && minimum !== maximum;
         return (
           <tr key={ligne.poste_id} className="border-t border-bordure/60 align-top">
             <td className="px-2.5 py-1.5 text-xs text-attenue tabular-nums">{ligne.numero}</td>
@@ -846,10 +971,12 @@ function ChapitreComparatif({
             {offres.map((o) => {
               const prix = ligne.offres[String(o.id)];
               const montant = prix?.montant ?? null;
-              const couleur = plusieurs && montant === ligne.minimum ? "text-succes" : plusieurs && montant === ligne.maximum ? "text-danger" : "";
+              const extreme = !o.ecartee && plusieurs ? (montant === minimum ? "bas" : montant === maximum ? "haut" : null) : null;
+              const couleur = extreme === "bas" ? "text-succes" : extreme === "haut" ? "text-danger" : "";
               return (
                 <td key={o.id} className={`px-2.5 py-1.5 text-right tabular-nums ${couleur} ${o.ecartee ? "opacity-50" : ""}`}>
                   {formaterEuros(montant)}
+                  {extreme && <span className="sr-only">{extreme === "bas" ? " (prix le plus bas)" : " (prix le plus élevé)"}</span>}
                   {prix?.pu != null && <span className="block text-xs text-attenue">PU {formaterEuros(prix.pu)}</span>}
                   {prix?.quantite != null && ligne.quantite != null && prix.quantite !== ligne.quantite && (
                     <span className="block text-xs text-accent">Qté {formaterQuantite(prix.quantite)}</span>
@@ -870,18 +997,21 @@ function Notation({ lot, projetId, surLot }: { lot: LotAnalyse; projetId: number
   const [erreur, setErreur] = useState<string | null>(null);
   const [commentaires, setCommentaires] = useState<Set<number>>(new Set());
   const { analyse, criteres } = lot;
-  const notees = lot.offres
-    .filter((o) => !o.ecartee && !o.incomplete && o.prix != null && o.prix > 0)
-    .sort((a, b) => (a.rang ?? 999) - (b.rang ?? 999));
-  const sansPrix = lot.offres.filter((o) => !o.ecartee && (o.montant_base == null || o.montant_base <= 0));
-  const incompletes = lot.offres.filter((o) => !o.ecartee && o.montant_base != null && o.montant_base > 0 && o.incomplete);
+  // Offres comparables (le serveur indique pourquoi les autres ne sont pas classées).
+  const notees = lot.offres.filter((o) => !o.motif_non_classee).sort((a, b) => (a.rang ?? 999) - (b.rang ?? 999));
+  const nonClassees = lot.offres.filter((o) => o.motif_non_classee && !o.ecartee);
   const ecartees = lot.offres.filter((o) => o.ecartee);
   const sommePonderations = criteres.reduce((s, c) => s + c.ponderation, 0);
 
   async function parametrer(donnees: Record<string, unknown>) {
     setErreur(null);
     try {
-      surLot(await api<LotAnalyse>(`/lots-projet/${lot.id}/analyse`, { method: "PATCH", body: JSON.stringify(donnees) }));
+      surLot(
+        await api<LotAnalyse>(`/lots-projet/${lot.id}/analyse`, {
+          method: "PATCH",
+          body: JSON.stringify(donnees),
+        }),
+      );
     } catch (probleme) {
       setErreur(message(probleme, "Enregistrement impossible."));
     }
@@ -894,7 +1024,15 @@ function Notation({ lot, projetId, surLot }: { lot: LotAnalyse; projetId: number
       surLot(
         await api<LotAnalyse>(`/offres/${offre.id}`, {
           method: "PATCH",
-          body: JSON.stringify({ notes: { [critere]: { note: actuelle.note, commentaire: actuelle.commentaire, ...saisie } } }),
+          body: JSON.stringify({
+            notes: {
+              [critere]: {
+                note: actuelle.note,
+                commentaire: actuelle.commentaire,
+                ...saisie,
+              },
+            },
+          }),
         }),
       );
     } catch (probleme) {
@@ -904,7 +1042,12 @@ function Notation({ lot, projetId, surLot }: { lot: LotAnalyse; projetId: number
 
   async function commenter(offre: OffreAnalyse, commentaire: string) {
     try {
-      surLot(await api<LotAnalyse>(`/offres/${offre.id}`, { method: "PATCH", body: JSON.stringify({ commentaire }) }));
+      surLot(
+        await api<LotAnalyse>(`/offres/${offre.id}`, {
+          method: "PATCH",
+          body: JSON.stringify({ commentaire }),
+        }),
+      );
     } catch (probleme) {
       setErreur(message(probleme, "Commentaire non enregistré."));
     }
@@ -958,13 +1101,16 @@ function Notation({ lot, projetId, surLot }: { lot: LotAnalyse; projetId: number
       </div>
       {criteres.length === 0 ? (
         <p className="rounded-lg border border-accent/40 bg-accent/8 px-3 py-2 text-sm">
-          Aucun critère de jugement : renseignez-les dans les <Link to={`/projets/${projetId}`}>paramètres de la consultation</Link> (ils figurent aussi dans le RC).
+          Aucun critère de jugement : renseignez-les dans les <Link to={`/projets/${projetId}`}>paramètres de la consultation</Link> (ils figurent aussi dans le
+          RC).
         </p>
       ) : (
         <p className="text-sm text-attenue">
           Critères du RC : {criteres.map((c) => `${c.libelle} ${c.ponderation.toLocaleString("fr-FR")} %`).join(" · ")}.
           {!criteres.some((c) => c.prix) && " Aucun critère « Prix » : la note de prix n'est pas calculée."}
-          {sommePonderations !== 100 && <span className="text-accent"> La somme des pondérations fait {sommePonderations.toLocaleString("fr-FR")} % au lieu de 100 %.</span>}
+          {sommePonderations !== 100 && (
+            <span className="text-accent"> La somme des pondérations fait {sommePonderations.toLocaleString("fr-FR")} % au lieu de 100 %.</span>
+          )}
         </p>
       )}
       {erreur && (
@@ -1016,28 +1162,44 @@ function Notation({ lot, projetId, surLot }: { lot: LotAnalyse; projetId: number
           </table>
         </div>
       )}
-      {sansPrix.length > 0 && (
-        <p className="text-sm text-accent">Sans montant, donc non classée(s) : {sansPrix.map((o) => o.nom).join(", ")}. Saisissez le montant dans « Offres reçues ».</p>
-      )}
-      {incompletes.length > 0 && (
-        <p className="text-sm text-accent">
-          PSE retenue non chiffrée, offre non classée : {incompletes.map((o) => o.nom).join(", ")}. Saisissez le montant de la PSE dans « Offres reçues » (après
-          demande de précision à l'entreprise) ou écartez l'offre.
-        </p>
+      {nonClassees.length > 0 && (
+        <ul className="flex flex-col gap-1 text-sm text-accent">
+          {nonClassees.map((o) => (
+            <li key={o.id}>
+              {o.nom} : non classée ({o.motif_non_classee}).
+              {o.motif_non_classee === "montant non saisi" && " Saisissez le montant dans « Offres reçues »."}
+              {o.motif_non_classee === "PSE retenue non chiffrée" &&
+                " Saisissez le montant de la PSE dans « Offres reçues » (après demande de précision à l'entreprise) ou écartez l'offre."}
+            </li>
+          ))}
+        </ul>
       )}
       {ecartees.length > 0 && (
-        <p className="text-sm text-attenue">
-          Écartée(s) : {ecartees.map((o) => `${o.nom}${o.motif_ecart ? ` (${o.motif_ecart})` : ""}`).join(" ; ")}.
-        </p>
+        <p className="text-sm text-attenue">Écartée(s) : {ecartees.map((o) => `${o.nom}${o.motif_ecart ? ` (${o.motif_ecart})` : ""}`).join(" ; ")}.</p>
       )}
     </Section>
   );
 }
 
-function ChampNote({ id, libelle, valeur, bareme, surEnregistrer }: { id: string; libelle: string; valeur: number | null; bareme: number; surEnregistrer: (v: number | null) => void }) {
+function ChampNote({
+  id,
+  libelle,
+  valeur,
+  bareme,
+  surEnregistrer,
+}: {
+  id: string;
+  libelle: string;
+  valeur: number | null;
+  bareme: number;
+  surEnregistrer: (v: number | null) => void;
+}) {
   const [texte, setTexte] = useState(valeur == null ? "" : String(valeur).replace(".", ","));
   const [invalide, setInvalide] = useState(false);
-  useEffect(() => setTexte(valeur == null ? "" : String(valeur).replace(".", ",")), [valeur]);
+  useEffect(() => {
+    setTexte(valeur == null ? "" : String(valeur).replace(".", ","));
+    setInvalide(false);
+  }, [valeur]);
   function valider() {
     const propre = texte.trim().replace(",", ".");
     const note = propre === "" ? null : Number(propre);
@@ -1049,22 +1211,29 @@ function ChampNote({ id, libelle, valeur, bareme, surEnregistrer }: { id: string
     if (note !== valeur) surEnregistrer(note);
   }
   return (
-    <input
-      id={id}
-      aria-label={libelle}
-      aria-invalid={invalide}
-      title={invalide ? `Note entre 0 et ${bareme}` : undefined}
-      inputMode="decimal"
-      autoComplete="off"
-      value={texte}
-      placeholder="—"
-      onChange={(e) => setTexte(e.target.value)}
-      onBlur={valider}
-      onKeyDown={(e) => {
-        if (e.key === "Enter") (e.target as HTMLInputElement).blur();
-      }}
-      className={`min-h-10 w-16 rounded-lg border bg-fond px-2 text-center tabular-nums text-texte ${invalide ? "border-danger" : "border-bordure-forte"}`}
-    />
+    <span className="inline-flex flex-col items-center gap-0.5">
+      <input
+        id={id}
+        aria-label={libelle}
+        aria-invalid={invalide}
+        aria-describedby={invalide ? `${id}-aide` : undefined}
+        inputMode="decimal"
+        autoComplete="off"
+        value={texte}
+        placeholder="—"
+        onChange={(e) => setTexte(e.target.value)}
+        onBlur={valider}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+        }}
+        className={`min-h-10 w-16 rounded-lg border bg-fond px-2 text-center tabular-nums text-texte ${invalide ? "border-danger" : "border-bordure-forte"}`}
+      />
+      {invalide && (
+        <span id={`${id}-aide`} role="alert" className="text-[11px] whitespace-nowrap text-danger">
+          Note de 0 à {bareme}
+        </span>
+      )}
+    </span>
   );
 }
 
@@ -1187,37 +1356,77 @@ function ZoneCommentaire({ id, libelle, valeur, surEnregistrer }: { id: string; 
 
 // --- 4. Proposition d'attribution -------------------------------------------------------
 
-function Attribution({ lot, projetId, tauxTva, surLot }: { lot: LotAnalyse; projetId: number; tauxTva: number; surLot: (lot: LotAnalyse) => void }) {
+function Attribution({
+  lot,
+  projetId,
+  tauxTva,
+  marchePublic,
+  surLot,
+}: {
+  lot: LotAnalyse;
+  projetId: number;
+  tauxTva: number;
+  marchePublic: boolean;
+  surLot: (lot: LotAnalyse) => void;
+}) {
   const { analyse } = lot;
   const [observations, setObservations] = useState(analyse.observations);
-  const [resultat, setResultat] = useState<{ ok: boolean; texte: string } | null>(null);
+  const [resultat, setResultat] = useState<{
+    ok: boolean;
+    texte: string;
+  } | null>(null);
   const [envoi, setEnvoi] = useState(false);
   useEffect(() => setObservations(analyse.observations), [analyse.observations]);
 
   const classees = useMemo(() => lot.offres.filter((o) => o.rang != null).sort((a, b) => (a.rang ?? 0) - (b.rang ?? 0)), [lot.offres]);
   const premiere = classees[0] ?? null;
-  const proposee = lot.offres.find((o) => o.id === analyse.attributaire_id) ?? premiere;
+  // Seule une offre classée peut être proposée (règle du serveur, `proposee_id`).
+  const proposee = classees.find((o) => o.id === analyse.proposee_id) ?? premiere;
+  const choixValide = analyse.attributaire_id != null && classees.some((o) => o.id === analyse.attributaire_id);
+  const choixPerime = lot.offres.find((o) => analyse.choix_perime && o.id === analyse.attributaire_id) ?? null;
   const horsClassement = proposee != null && premiere != null && proposee.id !== premiere.id;
+  const prixAJustifier = Boolean(proposee?.anormalement_basse && proposee.justification_prix !== "ACCEPTEE");
 
   async function parametrer(donnees: Record<string, unknown>) {
     setResultat(null);
     try {
-      surLot(await api<LotAnalyse>(`/lots-projet/${lot.id}/analyse`, { method: "PATCH", body: JSON.stringify(donnees) }));
+      surLot(
+        await api<LotAnalyse>(`/lots-projet/${lot.id}/analyse`, {
+          method: "PATCH",
+          body: JSON.stringify(donnees),
+        }),
+      );
     } catch (probleme) {
-      setResultat({ ok: false, texte: message(probleme, "Enregistrement impossible.") });
+      setResultat({
+        ok: false,
+        texte: message(probleme, "Enregistrement impossible."),
+      });
     }
   }
 
   async function valider() {
     if (!proposee) return;
-    if (!window.confirm(`Proposer ${proposee.nom} pour le lot ${lot.code} ? Dans l'annuaire, l'entreprise passera à « Retenue » et les autres à « Non retenue ».`)) return;
+    if (
+      !window.confirm(`Proposer ${proposee.nom} pour le lot ${lot.code} ? Dans l'annuaire, l'entreprise passera à « Retenue » et les autres à « Non retenue ».`)
+    )
+      return;
     setEnvoi(true);
     setResultat(null);
     try {
-      surLot(await api<LotAnalyse>(`/lots-projet/${lot.id}/analyse/valider`, { method: "POST" }));
-      setResultat({ ok: true, texte: "Proposition validée : statuts des entreprises mis à jour dans l'annuaire." });
+      surLot(
+        await api<LotAnalyse>(`/lots-projet/${lot.id}/analyse/valider`, {
+          method: "POST",
+        }),
+      );
+      setResultat({
+        ok: true,
+        texte: "Proposition validée : statuts des entreprises mis à jour dans l'annuaire.",
+      });
     } catch (probleme) {
-      setResultat({ ok: false, texte: message(probleme, "Validation impossible.") });
+      setResultat({
+        ok: false,
+        texte: message(probleme, "Validation impossible."),
+      });
     } finally {
       setEnvoi(false);
     }
@@ -1255,8 +1464,12 @@ function Attribution({ lot, projetId, tauxTva, surLot }: { lot: LotAnalyse; proj
             <Champ id={`attributaire-${lot.id}`} libelle="Offre proposée" large>
               <select
                 id={`attributaire-${lot.id}`}
-                value={analyse.attributaire_id ?? ""}
-                onChange={(e) => void parametrer({ attributaire_id: e.target.value ? Number(e.target.value) : null })}
+                value={choixValide ? String(analyse.attributaire_id) : ""}
+                onChange={(e) =>
+                  void parametrer({
+                    attributaire_id: e.target.value ? Number(e.target.value) : null,
+                  })
+                }
                 className={CLASSE_CHAMP}
               >
                 <option value="">Offre la mieux classée ({premiere.nom})</option>
@@ -1267,7 +1480,7 @@ function Attribution({ lot, projetId, tauxTva, surLot }: { lot: LotAnalyse; proj
                 ))}
               </select>
             </Champ>
-            <dl className="grid flex-[2_1_320px] grid-cols-3 gap-2 text-sm">
+            <dl className="grid flex-[2_1_320px] grid-cols-1 gap-2 text-sm sm:grid-cols-3">
               {[
                 ["Montant HT", montant],
                 [`TVA ${tauxTva.toLocaleString("fr-FR")} %`, montant == null ? null : Math.round(montant * tauxTva) / 100],
@@ -1280,14 +1493,20 @@ function Attribution({ lot, projetId, tauxTva, surLot }: { lot: LotAnalyse; proj
               ))}
             </dl>
           </div>
-          {horsClassement && <p className="text-sm text-accent">L'offre proposée n'est pas la mieux classée : justifiez ce choix dans les observations.</p>}
-          {proposee?.anormalement_basse && (
-            <p className="text-sm text-danger">
-              Offre possiblement anormalement basse : demandez des précisions écrites à l'entreprise avant de la retenir (articles R2152-3 et suivants du code de la commande
-              publique).
+          {choixPerime && (
+            <p role="alert" className="text-sm text-danger">
+              L'offre choisie ({choixPerime.nom}) n'est plus classée ({choixPerime.motif_non_classee || "notation incomplète"}) : la mieux classée est proposée
+              à la place. Choisissez l'offre à proposer avant de valider.
             </p>
           )}
-          {proposee?.incomplete && <p className="text-sm text-accent">Une PSE retenue n'est pas chiffrée dans cette offre.</p>}
+          {horsClassement && <p className="text-sm text-accent">L'offre proposée n'est pas la mieux classée : justifiez ce choix dans les observations.</p>}
+          {prixAJustifier && (
+            <p className="text-sm text-danger">
+              Le prix de cette offre paraît anormalement bas : demandez des précisions écrites à l'entreprise
+              {marchePublic ? " (articles R2152-3 à R2152-5 du code de la commande publique)" : ""}, puis enregistrez votre appréciation dans sa fiche (« Offres
+              reçues ») avant de valider.
+            </p>
+          )}
           <div className="flex flex-col gap-1.5">
             <label htmlFor={`observations-${lot.id}`} className="text-xs font-semibold text-attenue">
               Observations (reprises dans le rapport)
@@ -1312,7 +1531,7 @@ function Attribution({ lot, projetId, tauxTva, surLot }: { lot: LotAnalyse; proj
             <button
               type="button"
               onClick={() => void valider()}
-              disabled={envoi || !proposee}
+              disabled={envoi || !proposee || Boolean(choixPerime) || prixAJustifier}
               className="flex min-h-11 items-center gap-2 rounded-lg bg-accent px-4.5 font-bold text-sur-accent hover:bg-accent-clair disabled:opacity-50"
             >
               <CheckCircle2 aria-hidden="true" className="size-4" />

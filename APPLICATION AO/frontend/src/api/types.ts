@@ -364,8 +364,21 @@ export interface EtatAssistant {
     embedding: string;
     embedding_installe: boolean;
   };
-  voix: { transcription: string; transcription_installee: boolean; synthese: string; synthese_installee: boolean };
-  index: { passages: number; a_jour: number; en_cours: boolean; total: number; faits: number; message: string; fin: string | null };
+  voix: {
+    transcription: string;
+    transcription_installee: boolean;
+    synthese: string;
+    synthese_installee: boolean;
+  };
+  index: {
+    passages: number;
+    a_jour: number;
+    en_cours: boolean;
+    total: number;
+    faits: number;
+    message: string;
+    fin: string | null;
+  };
 }
 
 export type EvenementAssistant =
@@ -536,6 +549,14 @@ export interface EtatDCE {
 
 export type StatutLectureOffre = "EN_COURS" | "LUE" | "A_VERIFIER" | "NON_LUE" | "MANUELLE";
 export type MethodePrix = "PROPORTIONNELLE" | "LINEAIRE";
+export type JustificationPrix = "" | "DEMANDEE" | "ACCEPTEE" | "REJETEE";
+
+export const JUSTIFICATIONS_PRIX: Record<JustificationPrix, string> = {
+  "": "Pas encore de demande de précisions",
+  DEMANDEE: "Précisions demandées à l'entreprise",
+  ACCEPTEE: "Justifications jugées satisfaisantes",
+  REJETEE: "Justifications insuffisantes : offre rejetée",
+};
 
 export interface NoteCritere {
   note: number | null;
@@ -550,6 +571,7 @@ export interface OffreAnalyse {
   variante: boolean;
   libelle_variante: string;
   recue_le: string;
+  hors_delai: boolean;
   nom_original: string;
   a_un_fichier: boolean;
   statut_lecture: StatutLectureOffre;
@@ -564,6 +586,8 @@ export interface OffreAnalyse {
   ecartee: boolean;
   motif_ecart: string;
   notes: Record<string, NoteCritere>;
+  justification_prix: JustificationPrix;
+  motif_justification: string;
   prix: number | null;
   incomplete: boolean;
   anormalement_basse: boolean;
@@ -573,6 +597,8 @@ export interface OffreAnalyse {
   total: number | null;
   rang: number | null;
   notation_complete: boolean;
+  motif_non_classee: string;
+  variante_sans_base: boolean;
 }
 
 export interface CritereAnalyse {
@@ -585,9 +611,16 @@ export interface LotAnalyse {
   id: number;
   code: string;
   intitule: string;
-  options: { id: number; nom: string; libelle: string }[];
+  options: {
+    id: number;
+    nom: string;
+    libelle: string;
+    genre: "PSE" | "VARIANTE";
+  }[];
   estimation_base: number | null;
   estimation_options: Record<string, number | null>;
+  variantes_autorisees: boolean;
+  date_limite: string | null;
   analyse: {
     methode_prix: MethodePrix;
     bareme: number;
@@ -596,10 +629,16 @@ export interface LotAnalyse {
     attributaire_id: number | null;
     observations: string;
     validee_le: string | null;
+    proposee_id: number | null;
+    choix_perime: boolean;
   };
   criteres: CritereAnalyse[];
   offres: OffreAnalyse[];
-  consultees_sans_offre: { entreprise_id: number; entreprise: string; statut: StatutConsultation }[];
+  consultees_sans_offre: {
+    entreprise_id: number;
+    entreprise: string;
+    statut: StatutConsultation;
+  }[];
 }
 
 export interface EtatOffres {
