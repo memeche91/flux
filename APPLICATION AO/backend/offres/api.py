@@ -255,9 +255,17 @@ def parametres(request, lot_id: int, donnees: ParametresAnalyse):
     lot = _lot_projet(lot_id)
     analyse = analyse_du_lot(lot)
     champs = donnees.model_dump(exclude_unset=True)
+    ancien_bareme = analyse.bareme
     for champ in ("methode_prix", "bareme", "seuil_anormal", "observations"):
         if champs.get(champ) is not None:
             setattr(analyse, champ, champs[champ])
+    if analyse.bareme != ancien_bareme:
+        # Notes déjà saisies converties dans le nouveau barème (8/10 devient 16/20).
+        for offre in Offre.objects.filter(lot=lot):
+            for saisie in offre.notes.values():
+                if isinstance(saisie, dict) and saisie.get("note") not in (None, ""):
+                    saisie["note"] = round(float(saisie["note"]) * analyse.bareme / ancien_bareme, 2)
+            offre.save(update_fields=["notes"])
     if "attributaire_id" in champs:
         analyse.attributaire = get_object_or_404(Offre, pk=champs["attributaire_id"], lot=lot) if champs["attributaire_id"] else None
     analyse.save()

@@ -218,6 +218,14 @@ class OffresTests(TestCase):
         # Linéaire : 10 × (1 − (17 000 − 12 000) / 12 000) = 5,83
         self.assertEqual(offres["Menuiseries Durand"]["notes_calculees"]["Prix"], 5.83)
         self.json("patch", f"/api/lots-projet/{self.lot.pk}/analyse", {"bareme": 0}, attendu=422)
+        etat = self.json("patch", f"/api/lots-projet/{self.lot.pk}/analyse", {"bareme": 20})
+        offres = self.par_entreprise(etat)
+        self.assertEqual(offres["Alu Martin"]["notes"]["Valeur technique"]["note"], 18)  # 9/10 → 18/20
+        self.assertEqual(offres["Alu Martin"]["notes"]["Valeur technique"]["commentaire"], "Mémoire technique détaillé")
+        self.assertEqual(offres["Menuiseries Durand"]["notes_calculees"]["Prix"], 11.67)
+        total_sur_20 = offres["Alu Martin"]["total"]
+        self.json("patch", f"/api/lots-projet/{self.lot.pk}/analyse", {"bareme": 10})
+        self.assertAlmostEqual(self.par_entreprise(self.etat())["Alu Martin"]["total"], total_sur_20, delta=0.05)  # arrondi de la note de prix
 
         # Offre écartée : ni notée ni classée.
         etat = self.json("patch", f"/api/offres/{ids['Petit Fermetures']}", {"ecartee": True, "motif_ecart": "Offre irrégulière : DPGF non signée"})
