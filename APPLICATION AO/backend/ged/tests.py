@@ -339,3 +339,16 @@ class GedTests(TestCase):
             self.projet.delete()
         self.assertFalse(chemin.exists())
         self.assertFalse(Evenement.objects.exists())
+
+
+@override_settings(MEDIA_ROOT=DOSSIER_TEST, GED_DISQUE_LIBRE_MIN_GO=0, ROOT_URLCONF="config.urls_ged")
+class ProcessusPublicTests(TestCase):
+    """Le processus public ne sert que le portail : ni API du cabinet, ni administration."""
+
+    def test_seules_les_routes_du_portail(self):
+        client = Client()
+        for chemin in ("/api/projets", "/api/auth/csrf", "/admin/", "/api/", "/api/docs", "/api/openapi.json", "/api/ged/espaces/1/documents"):
+            self.assertEqual(client.get(chemin).status_code, 404, chemin)
+        self.assertEqual(client.get("/api/ged/portail/csrf").status_code, 200)
+        self.assertEqual(client.get("/api/ged/portail/documents").status_code, 401)
+        self.assertEqual(client.post("/api/ged/acces", json.dumps({"code": "AAAA-BBBB-CCCC"}), content_type="application/json").status_code, 401)

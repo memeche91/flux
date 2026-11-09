@@ -23,7 +23,35 @@ from .models import Frequence, TypeEvenement
 from .serialisation import droits_out, lot_court, referentiels
 from .services import journaliser
 
-router = Router(tags=["GED – portail des intervenants"], auth=session_intervenant)
+class Routes:
+    """Routes enregistrées une fois, montées sur deux API : celle du cabinet (réseau local) et celle
+    du processus public de la GED (adresse Internet), qui ne sert que ces routes."""
+
+    def __init__(self):
+        self.liste = []
+
+    def _ajouter(self, methode):
+        def decorateur_chemin(chemin, **options):
+            def decorateur(vue):
+                self.liste.append((methode, chemin, options, vue))
+                return vue
+            return decorateur
+        return decorateur_chemin
+
+    def __getattr__(self, methode):
+        if methode in ("get", "post", "patch", "delete", "put"):
+            return self._ajouter(methode)
+        raise AttributeError(methode)
+
+
+routes = Routes()
+
+
+def construire_router() -> Router:
+    router = Router(tags=["GED – portail des intervenants"], auth=session_intervenant)
+    for methode, chemin, options, vue in routes.liste:
+        getattr(router, methode)(chemin, **options)(vue)
+    return router
 
 
 class CodeAcces(Schema):
@@ -61,13 +89,13 @@ def _espace_out(acces, acteur) -> dict:
     }
 
 
-@router.get("/ged/portail/csrf", auth=None)
+@routes.get("/ged/portail/csrf", auth=None)
 def jeton_csrf(request):
     """Jeton CSRF du portail (le cookie peut porter un autre nom sur l'adresse publique)."""
     return {"csrftoken": get_token(request)}
 
 
-@router.post("/ged/acces", auth=None)
+@routes.post("/ged/acces", auth=None)
 def acces(request, donnees: CodeAcces):
     if check_csrf(request) is not None:
         raise HttpError(403, "Session expirée : rechargez la page puis saisissez de nouveau votre code.")
@@ -83,7 +111,7 @@ def acces(request, donnees: CodeAcces):
     return _espace_out(acces_trouve, acteur)
 
 
-@router.post("/ged/portail/deconnexion", auth=None, response={204: None})
+@routes.post("/ged/portail/deconnexion", auth=None, response={204: None})
 def deconnexion(request):
     if check_csrf(request) is not None:
         raise HttpError(403, "Session expirée.")
@@ -91,7 +119,7 @@ def deconnexion(request):
     return 204, None
 
 
-@router.patch("/ged/portail/preferences")
+@routes.patch("/ged/portail/preferences")
 def preferences(request, donnees: Preferences):
     acces_courant = request.auth
     acces_courant.frequence = donnees.frequence
@@ -99,17 +127,17 @@ def preferences(request, donnees: Preferences):
     return _espace_out(acces_courant, _acteur(request))
 
 
-@router.get("/ged/portail/espace")
+@routes.get("/ged/portail/espace")
 def espace(request):
     return _espace_out(request.auth, _acteur(request))
 
 
-@router.get("/ged/portail/documents")
+@routes.get("/ged/portail/documents")
 def documents(request):
     return vues.lister(_espace(request), _acteur(request))
 
 
-@router.post("/ged/portail/documents", response={201: dict})
+@routes.post("/ged/portail/documents", response={201: dict})
 def deposer(
     request, fichier: File[UploadedFile], zone: Form[str], categorie: Form[str], lot_id: Form[int | None] = None,
     titre: Form[str] = "", reference: Form[str] = "", reference_emetteur: Form[str] = "", indice: Form[str] = "", objet: Form[str] = "",
@@ -121,7 +149,7 @@ def deposer(
                                         diffusion=diffusion, date_indice=date_indice, sources=sources, depot=depot)
 
 
-@router.post("/ged/portail/documents/{document_id}/versions", response={201: dict})
+@routes.post("/ged/portail/documents/{document_id}/versions", response={201: dict})
 def ajouter_indice(request, document_id: int, fichier: File[UploadedFile], indice: Form[str] = "", objet: Form[str] = "",
                    diffusion: Form[str] = "", date_indice: Form[datetime.date | None] = None, depot: Form[str] = "",
                    sources: File[list[UploadedFile]] = None, forcer: Form[str] = ""):
@@ -129,37 +157,40 @@ def ajouter_indice(request, document_id: int, fichier: File[UploadedFile], indic
                                               diffusion=diffusion, date_indice=date_indice, sources=sources, depot=depot)
 
 
-@router.post("/ged/portail/versions/{version_id}/avis")
+@routes.post("/ged/portail/versions/{version_id}/avis")
 def donner_avis(request, version_id: int, avis: Form[str], observations: Form[str] = "", fichier: File[UploadedFile | None] = None):
     return vues.avis_formulaire(_acteur(request), _espace(request), version_id, avis=avis, observations=observations, fichier=fichier)
 
 
-@router.post("/ged/portail/versions/{version_id}/lecture")
+@routes.post("/ged/portail/versions/{version_id}/lecture")
 def accuser_lecture(request, version_id: int):
     return vues.accuser_lecture_vue(_acteur(request), _espace(request), version_id)
 
 
-@router.get("/ged/portail/versions/{version_id}/{quoi}")
+@routes.get("/ged/portail/versions/{version_id}/{quoi}")
 def fichier(request, version_id: int, quoi: Literal["fichier", "annote", "fiche"]):
     return vues.telecharger(_acteur(request), _espace(request), version_id, quoi=quoi)
 
 
-@router.get("/ged/portail/sources/{source_id}")
+@routes.get("/ged/portail/sources/{source_id}")
 def fichier_source(request, source_id: int):
     return vues.telecharger_source(_acteur(request), _espace(request), source_id)
 
 
-@router.get("/ged/portail/avis/{avis_id}/fichier")
+@routes.get("/ged/portail/avis/{avis_id}/fichier")
 def fichier_avis(request, avis_id: int):
     return vues.telecharger_avis(_acteur(request), _espace(request), avis_id)
 
 
-@router.get("/ged/portail/journal")
+@routes.get("/ged/portail/journal")
 def journal(request, page: int = 1):
     return vues.journal(_espace(request), _acteur(request), page)
 
 
-@router.get("/ged/portail/registre.xlsx")
+@routes.get("/ged/portail/registre.xlsx")
 def registre(request):
     return vues.registre_xlsx(_espace(request), _acteur(request))
 
+
+
+router = construire_router()
