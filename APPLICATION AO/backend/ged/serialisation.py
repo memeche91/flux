@@ -74,7 +74,7 @@ def version_out(v: Version, document: Document, acteur: Acteur, statut: str) -> 
         "nouvel_indice_attendu": v.nouvel_indice_attendu, "nom_telechargement": nom_telechargement(document, v, statut),
         "indice_force": v.indice_force, "fichier_archive": not v.fichier,
         "sources": [{"id": s.pk, "nom_original": s.nom_original, "taille": s.taille} for s in v.sources.all()],
-        "avis": [], "peut_donner_avis": peut_donner_avis(acteur, v) and espace.statut != StatutEspace.CLOS,
+        "avis": [], "peut_donner_avis": not acteur.cabinet and peut_donner_avis(acteur, v) and espace.statut != StatutEspace.CLOS,  # le cabinet vise
         "lecture_requise": document.categorie in LECTURE_REQUISE and document.zone == Zone.LOT, "accuses": [], "lu_le": None,
         "peut_accuser_lecture": peut_accuser_lecture(acteur, v),
     }
