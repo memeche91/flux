@@ -70,7 +70,7 @@ def lire_nombre(valeur) -> Decimal | None:
         except InvalidOperation:
             return None
     else:
-        texte = str(valeur).strip().lower()
+        texte = str(valeur).strip().lower().replace("\u2212", "-")  # signe moins typographique
         for parasite in (" ", "\xa0", " ", "€", "eur", "ht", "ttc"):
             texte = texte.replace(parasite, "")
         if not texte or not re.fullmatch(r"-?[\d.,]*\d[\d.,]*", texte):

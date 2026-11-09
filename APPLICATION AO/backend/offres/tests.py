@@ -303,3 +303,193 @@ class OffresTests(TestCase):
             self.durand.delete()
         self.json("delete", f"/api/offres/{cree['id']}", attendu=204)
         self.assertFalse(chemin.exists())
+
+
+ENTETE = ["N°", "Désignation", "U", "Qté", "PU HT", "Montant HT"]
+
+
+@override_settings(MEDIA_ROOT=DOSSIER_TEST)
+class LectureOffresTests(TestCase):
+    """Scénarios de lecture relevés en revue : forfaits, remises, totaux TTC, autres lots, numéros décalés…"""
+
+    def setUp(self):
+        self.projet = Projet.objects.create(nom="Collège", type_marche="PUBLIC")
+        self.lot = LotProjet.objects.create(projet=self.projet, lot=Lot.objects.get(code="08"), code="08", intitule="Menuiseries extérieures", ordre=1)
+        self.pse = OptionLot.objects.create(lot=self.lot, genre=GenreOption.PSE, numero=1, libelle="Volets roulants")
+        Poste.objects.create(lot=self.lot, ordre=10, genre=GenrePoste.CHAPITRE, titre="Menuiseries")
+        self.fenetre = Poste.objects.create(lot=self.lot, ordre=20, titre=FENETRE, unite="u", quantite=Decimal("10"), prix_unitaire=Decimal("800"))
+        self.porte = Poste.objects.create(lot=self.lot, ordre=30, titre=PORTE, unite="u", quantite=Decimal("4"), prix_unitaire=Decimal("1200"))
+        self.volets = Poste.objects.create(lot=self.lot, ordre=40, titre=VOLETS, unite="u", quantite=Decimal("14"), prix_unitaire=Decimal("450"), option=self.pse)
+
+    def lire(self, *feuilles):
+        from .lecture import lire_offre
+
+        classeur = Workbook()
+        classeur.remove(classeur.active)
+        for titre, lignes in feuilles:
+            feuille = classeur.create_sheet(titre)
+            feuille.append(ENTETE)
+            for ligne in lignes:
+                feuille.append(list(ligne))
+        with tempfile.NamedTemporaryFile(suffix=".xlsx", dir=DOSSIER_TEST, delete=False) as fichier:
+            classeur.save(fichier.name)
+        return lire_offre(Path(fichier.name), self.lot)
+
+    def dpgf(self, *supplements, base=11400, pse=5600, fenetre=("8.1.1", FENETRE, "u", 10, 700, 7000)):
+        return [
+            ("8.1", "Menuiseries"), fenetre, ("8.1.2", PORTE, "u", 4, 1100, 4400),
+            (None, "TOTAL SOLUTION DE BASE HT", None, None, None, base),
+            (None, "PSE N°1 – VOLETS ROULANTS"), ("8.1", "Menuiseries"), ("8.1.3", VOLETS, "u", 14, 400, 5600),
+            *supplements, (None, "TOTAL PSE N°1 – VOLETS ROULANTS HT", None, None, None, pse),
+        ]
+
+    def test_dpgf_conforme(self):
+        from .lecture import bilan
+
+        lecture = self.lire(("DPGF", self.dpgf()))
+        self.assertEqual(bilan(lecture)[0], "LUE", bilan(lecture)[1])
+        self.assertEqual((lecture.base_declare, lecture.options_declares[self.pse.pk]), (Decimal("11400.00"), Decimal("5600.00")))
+
+    def test_forfait_remise_et_total_ht_du_devis(self):
+        from .lecture import bilan
+
+        lignes = [
+            (None, "Fenêtres aluminium 120x135", "u", 10, 750, 7500), (None, PORTE, "u", 4, 1100, 4400),
+            (None, "Volets roulants électriques motorisés", "u", 14, 420, 5880),
+            (None, "Installation de chantier", None, None, None, 1500), (None, "Remise commerciale 5 %", None, None, None, -590),
+            (None, "Total HT", None, None, None, 18690), (None, "TVA 20 %", None, None, None, 3738), (None, "Total TTC", None, None, None, 22428),
+        ]
+        lecture = self.lire(("Devis", lignes))
+        statut, message, retenu = bilan(lecture)
+        self.assertEqual((statut, retenu), ("LUE", Decimal("12810.00")), message)
+        self.assertEqual(lecture.options_calcules[self.pse.pk], Decimal("5880.00"))
+        self.assertEqual(lecture.lignes_hors_dpgf, 2)
+        lignes[5] = (None, "Total HT", None, None, None, 18000)
+        statut, message, _ = bilan(self.lire(("Devis", lignes)))
+        self.assertEqual(statut, "A_VERIFIER")
+        self.assertIn("Total HT déclaré 18 000,00 €", message)
+
+    def test_total_ttc_et_pse_numero_10(self):
+        from .lecture import bilan
+
+        pse10 = OptionLot.objects.create(lot=self.lot, genre=GenreOption.PSE, numero=10, libelle="Brise-soleil")
+        lignes = self.dpgf()
+        lignes[4:4] = [(None, "TVA 20 %", None, None, None, 2280), (None, "TOTAL SOLUTION DE BASE TTC", None, None, None, 13680)]
+        lignes += [(None, "TOTAL PSE N°10 – BRISE-SOLEIL HT", None, None, None, 2000)]
+        lecture = self.lire(("DPGF", lignes))
+        self.assertEqual(lecture.base_declare, Decimal("11400.00"))
+        self.assertEqual((lecture.options_declares[self.pse.pk], lecture.options_declares[pse10.pk]), (Decimal("5600.00"), Decimal("2000.00")))
+        self.assertEqual(bilan(lecture)[0], "LUE", bilan(lecture)[1])  # ni TTC pris pour le HT, ni total de la PSE 10 pour la PSE 1
+
+    def test_classeur_de_plusieurs_lots(self):
+        from .lecture import bilan
+
+        autre = [("9.1", "Plomberie"), ("9.1.1", "Lavabo céramique", "u", 6, 300, 1800), ("9.1.2", "WC suspendu", "u", 4, 1950, 7800),
+                 (None, "TOTAL SOLUTION DE BASE HT", None, None, None, 9600)]
+        lecture = self.lire(("DPGF lot 08", self.dpgf()), ("DPGF lot 09", autre))
+        self.assertEqual(bilan(lecture)[:3:2], ("LUE", Decimal("11400.00")))
+        self.assertEqual(lecture.lignes_hors_dpgf, 0)
+        lecture = self.lire(("DPGF", self.dpgf()), ("Feuil2", autre))  # sans code de lot dans le titre
+        self.assertEqual((lecture.base_declare, lecture.lignes_hors_dpgf), (Decimal("11400.00"), 0))
+
+    def test_numeros_decales_par_un_modificatif(self):
+        from .lecture import bilan
+
+        chassis = Poste.objects.create(lot=self.lot, ordre=15, titre="Châssis fixe 60 x 60", unite="u", quantite=Decimal("2"), prix_unitaire=Decimal("300"))
+        lecture = self.lire(("DPGF", self.dpgf()))  # DPGF de l'indice précédent : 8.1.1 = fenêtre
+        par_poste = {l.poste_id: l for l in lecture.lignes if l.poste_id}
+        self.assertEqual(par_poste[self.fenetre.pk].montant, Decimal("7000"))
+        self.assertEqual(par_poste[self.volets.pk].option_id, self.pse.pk)
+        self.assertNotIn(chassis.pk, par_poste)
+        statut, message, _ = bilan(lecture)
+        self.assertEqual(statut, "A_VERIFIER")
+        self.assertIn("numéro(s) ne correspondant pas", message)
+        self.assertEqual(lecture.base_calcule, Decimal("11400.00"))
+
+    def test_rapprochement_par_designation_au_meilleur_couple(self):
+        from .lecture import bilan
+        from .comparatif import _prix_ouvrage  # noqa: F401
+
+        fenetre_145 = Poste.objects.create(lot=self.lot, ordre=25, titre="Fenêtre aluminium 120 x 145", unite="u", quantite=Decimal("4"), prix_unitaire=Decimal("850"))
+        lignes = [
+            (None, "Fenêtre aluminium 120 x 135 – bâtiment A", "u", 6, 700, 4200),
+            (None, "Fenêtre aluminium 120 x 135 – bâtiment B", "u", 4, 700, 2800),
+            (None, "Fenêtre aluminium 120 x 145", "u", 4, 1485, 5940),
+            (None, "Porte-fenêtre aluminium 215 x 90", "u", 4, 1100, 4400),
+            (None, "Volets roulants électriques", "u", 14, 400, 5600),
+        ]
+        lecture = self.lire(("Devis", lignes))
+        rattachement = {l.designation: l.poste_id for l in lecture.lignes}
+        self.assertEqual(rattachement["Fenêtre aluminium 120 x 145"], fenetre_145.pk)
+        self.assertEqual(rattachement["Porte-fenêtre aluminium 215 x 90"], self.porte.pk)
+        self.assertEqual(rattachement["Fenêtre aluminium 120 x 135 – bâtiment B"], self.fenetre.pk)
+        self.assertEqual(bilan(lecture)[0], "LUE", bilan(lecture)[1])
+
+    def test_ligne_ajoutee_dans_une_pse(self):
+        from .lecture import bilan
+
+        lecture = self.lire(("DPGF", self.dpgf((None, "Commande centralisée des volets", "ens", 1, 900, 900), pse=6500)))
+        self.assertEqual((lecture.base_calcule, lecture.options_calcules[self.pse.pk]), (Decimal("11400.00"), Decimal("6500.00")))
+        self.assertEqual(bilan(lecture)[0], "LUE", bilan(lecture)[1])
+
+    def test_erreur_de_multiplication(self):
+        from .lecture import bilan
+
+        lecture = self.lire(("DPGF", self.dpgf(base=10400, fenetre=("8.1.1", FENETRE, "u", 10, 700, 6000))))
+        statut, message, retenu = bilan(lecture)
+        self.assertEqual((statut, retenu), ("A_VERIFIER", Decimal("10400.00")))
+        self.assertIn("Qté × PU différent du montant sur 1 ligne(s) (8.1.1)", message)
+
+    def test_totaux_mots_entiers_et_suite_de_tableau_pdf(self):
+        from articles.prix import _est_total
+        from bibliotheque.lecture import Tableau
+
+        from .lecture import Lecture, _totaux_declares
+
+        self.assertFalse(_est_total("reportage photographique avant travaux"))
+        self.assertFalse(_est_total("totalite des menuiseries"))
+        self.assertTrue(_est_total("report"))
+        self.assertTrue(_est_total("sous total 8 1"))
+        page1 = Tableau("", [ENTETE, ["8.1.1", FENETRE, "u", "10", "700,00", "7 000,00"]])
+        page2 = Tableau("", [["8.1.2", PORTE, "u", "4", "1 100,00", "4 400,00"], ["", "TOTAL SOLUTION DE BASE HT", "", "", "", "12 500,00"]])
+        lecture = Lecture()
+        _totaux_declares([page1, page2], self.lot, set(), lecture)
+        self.assertEqual(lecture.base_declare, Decimal("12500.00"))
+
+    def test_lecture_concurrente_et_echec_d_enregistrement(self):
+        from unittest import mock
+
+        from .tasks import appliquer_lecture
+
+        entreprise = Entreprise.objects.create(raison_sociale="Durand")
+        classeur = Workbook()
+        classeur.active.append(ENTETE)
+        for ligne in self.dpgf():
+            classeur.active.append(list(ligne))
+        flux = io.BytesIO()
+        classeur.save(flux)
+        offre = Offre(projet=self.projet, lot=self.lot, entreprise=entreprise, statut_lecture=StatutLecture.EN_COURS)
+        offre.fichier.save("dpgf.xlsx", SimpleUploadedFile("dpgf.xlsx", flux.getvalue()))
+        chargee = Offre.objects.get(pk=offre.pk)
+        # Saisies faites pendant la lecture : conservées.
+        Offre.objects.filter(pk=offre.pk).update(commentaire="RAS", delai_propose="4 mois", notes={"Valeur technique": {"note": 8, "commentaire": ""}})
+        appliquer_lecture(chargee)
+        offre.refresh_from_db()
+        self.assertEqual((offre.statut_lecture, offre.commentaire, offre.delai_propose, offre.notes["Valeur technique"]["note"]), ("LUE", "RAS", "4 mois", 8))
+        self.assertEqual(offre.montant_base, Decimal("11400.00"))
+        # Montant saisi à la main pendant une relecture : conservé.
+        Offre.objects.filter(pk=offre.pk).update(statut_lecture=StatutLecture.MANUELLE, montant_base=Decimal("9999"))
+        appliquer_lecture(Offre.objects.get(pk=offre.pk))
+        offre.refresh_from_db()
+        self.assertEqual((offre.statut_lecture, offre.montant_base), ("MANUELLE", Decimal("9999.00")))
+        # Erreur pendant l'enregistrement : l'offre ne reste pas « Lecture en cours ».
+        Offre.objects.filter(pk=offre.pk).update(statut_lecture=StatutLecture.EN_COURS)
+        with mock.patch("offres.tasks.LigneOffre.objects.bulk_create", side_effect=ValueError("NUL")):
+            appliquer_lecture(Offre.objects.get(pk=offre.pk))
+        offre.refresh_from_db()
+        self.assertEqual(offre.statut_lecture, StatutLecture.NON_LUE)
+        # Offre supprimée pendant la lecture : pas recréée.
+        chargee = Offre.objects.get(pk=offre.pk)
+        Offre.objects.filter(pk=offre.pk).delete()
+        appliquer_lecture(chargee)
+        self.assertFalse(Offre.objects.filter(pk=offre.pk).exists())

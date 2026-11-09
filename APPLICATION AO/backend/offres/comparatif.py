@@ -15,10 +15,31 @@ def _nombre(valeur) -> float | None:
     return None if valeur is None else float(valeur)
 
 
+def _prix_ouvrage(lignes) -> dict | None:
+    """Prix d'un ouvrage dans une offre ; un devis peut le détailler sur plusieurs lignes (bâtiments A et B…)."""
+    if not lignes:
+        return None
+    if len(lignes) == 1:
+        l = lignes[0]
+        return {"pu": _nombre(l.prix_unitaire), "montant": _nombre(l.montant), "quantite": _nombre(l.quantite)}
+    montants = [l.montant for l in lignes if l.montant is not None]
+    quantites = [l.quantite for l in lignes]
+    pus = {l.prix_unitaire for l in lignes}
+    return {
+        "pu": _nombre(pus.pop()) if len(pus) == 1 else None,
+        "montant": _nombre(sum(montants, Decimal("0"))) if montants else None,
+        "quantite": _nombre(sum(quantites, Decimal("0"))) if all(q is not None for q in quantites) else None,
+    }
+
+
 def comparatif(lot: LotProjet) -> dict:
     structure = structurer(lot)
     offres = list(Offre.objects.filter(lot=lot).select_related("entreprise").prefetch_related("lignes"))
-    par_offre = {o.pk: {l.poste_id: l for l in o.lignes.all() if l.poste_id} for o in offres}
+    par_offre: dict[int, dict[int, list]] = {}
+    for o in offres:
+        for l in o.lignes.all():
+            if l.poste_id:
+                par_offre.setdefault(o.pk, {}).setdefault(l.poste_id, []).append(l)
     sections = []
     for section in structure.sections_dpgf:
         chapitres = []
@@ -28,8 +49,7 @@ def comparatif(lot: LotProjet) -> dict:
                 poste = element.poste
                 prix = {}
                 for offre in offres:
-                    ligne = par_offre[offre.pk].get(poste.pk)
-                    prix[str(offre.pk)] = None if ligne is None else {"pu": _nombre(ligne.prix_unitaire), "montant": _nombre(ligne.montant), "quantite": _nombre(ligne.quantite)}
+                    prix[str(offre.pk)] = _prix_ouvrage(par_offre.get(offre.pk, {}).get(poste.pk))
                 montants = [p["montant"] for p in prix.values() if p and p["montant"] is not None]
                 lignes.append({
                     "poste_id": poste.pk, "numero": element.numero, "designation": poste.titre, "unite": poste.unite,
