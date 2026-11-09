@@ -374,3 +374,160 @@ export type EvenementAssistant =
   | { type: "texte"; texte: string }
   | { type: "fin"; message_id: number | null }
   | { type: "erreur"; message: string };
+
+// --- Annuaire des entreprises et DCE (étape 2) ---
+
+export interface ContactEntreprise {
+  id?: number | null;
+  nom: string;
+  fonction: string;
+  email: string;
+  telephone: string;
+  principal: boolean;
+}
+
+export interface EntrepriseResume {
+  id: number;
+  raison_sociale: string;
+  ville: string;
+  code_postal: string;
+  telephone: string;
+  email: string;
+  lots: Lot[];
+  specialites: string;
+  actif: boolean;
+  contact_principal: string;
+  nb_consultations: number;
+  assurance_echue: boolean;
+}
+
+export interface ConsultationHistorique {
+  projet_id: number;
+  projet: string;
+  lot: string;
+  statut: StatutConsultation;
+  statut_libelle: string;
+  date: string | null;
+}
+
+export interface EntrepriseDetail {
+  id: number;
+  raison_sociale: string;
+  siret: string;
+  adresse: string;
+  code_postal: string;
+  ville: string;
+  telephone: string;
+  email: string;
+  site_web: string;
+  lots: Lot[];
+  specialites: string;
+  qualifications: string;
+  zone_intervention: string;
+  assureur_decennale: string;
+  echeance_assurance: string | null;
+  notes: string;
+  actif: boolean;
+  contacts: ContactEntreprise[];
+  historique: ConsultationHistorique[];
+}
+
+export interface BilanImportEntreprises {
+  creees: number;
+  mises_a_jour: number;
+  ignorees: string[];
+  colonnes: Record<string, string>;
+}
+
+export type StatutConsultation = "A_CONSULTER" | "CONSULTEE" | "REPONDU" | "EXCUSEE" | "RETENUE" | "NON_RETENUE";
+
+export const STATUTS_CONSULTATION: Record<StatutConsultation, string> = {
+  A_CONSULTER: "À consulter",
+  CONSULTEE: "Consultée",
+  REPONDU: "A remis une offre",
+  EXCUSEE: "S'est excusée",
+  RETENUE: "Retenue",
+  NON_RETENUE: "Non retenue",
+};
+
+export type CategoriePieceJointe = "PLANS" | "ETUDES" | "DIAGNOSTICS" | "SPS" | "AUTRES";
+
+export const CATEGORIES_PIECES_JOINTES: Record<CategoriePieceJointe, string> = {
+  PLANS: "Plans",
+  ETUDES: "Études et rapports",
+  DIAGNOSTICS: "Diagnostics",
+  SPS: "Sécurité et santé (PGC)",
+  AUTRES: "Autres documents",
+};
+
+export interface PointControle {
+  niveau: "OK" | "ALERTE" | "MANQUE";
+  texte: string;
+  lien: string;
+}
+
+export interface PieceJointeDCE {
+  id: number;
+  categorie: CategoriePieceJointe;
+  categorie_libelle: string;
+  lot_id: number | null;
+  lot: string | null;
+  titre: string;
+  nom_original: string;
+  taille: number;
+}
+
+export interface DossierDCE {
+  id: number;
+  indice: string;
+  entreprise: string | null;
+  lots: string[];
+  avec_word: boolean;
+  statut: "EN_COURS" | "PRET" | "ERREUR";
+  message: string;
+  taille: number;
+  nb_fichiers: number;
+  contenu: { chemin: string; taille: number; designation: string }[];
+  cree_le: string;
+}
+
+export interface ConsultationDCE {
+  id: number;
+  lot_id: number;
+  entreprise_id: number;
+  entreprise: string;
+  email: string;
+  statut: StatutConsultation;
+  statut_libelle: string;
+  consultee_le: string | null;
+  commentaire: string;
+}
+
+export interface EnvoiDCE {
+  id: number;
+  type_envoi: "MOA" | "ENTREPRISE";
+  entreprise: string | null;
+  destinataires: string;
+  objet: string;
+  message: string;
+  mode: "EMAIL" | "MANUEL";
+  statut: "PREPARATION" | "A_ENVOYER" | "ENVOYE" | "ERREUR";
+  statut_libelle: string;
+  erreur: string;
+  piece_jointe: boolean;
+  dossier_id: number | null;
+  envoye_le: string | null;
+  cree_le: string;
+}
+
+export interface EtatDCE {
+  type_marche: "PUBLIC" | "PRIVE";
+  indice: string;
+  email_actif: boolean;
+  piece_jointe_max_mo: number;
+  controle: PointControle[];
+  pieces_jointes: PieceJointeDCE[];
+  dossiers: DossierDCE[];
+  consultations: ConsultationDCE[];
+  envois: EnvoiDCE[];
+}

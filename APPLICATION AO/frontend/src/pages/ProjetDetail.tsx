@@ -134,6 +134,24 @@ export default function ProjetDetail() {
 
       <PiecesAdministratives projetId={p.id} typeMarche={p.type_marche} lots={p.lots} />
 
+      <Link
+        to={`/projets/${p.id}/dce`}
+        className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-accent/40 bg-accent/8 px-5 py-4 text-texte no-underline hover:bg-accent/12"
+      >
+        <span className="flex min-w-0 flex-col gap-0.5">
+          <span className="font-titre text-lg font-semibold">Dossier de consultation (DCE)</span>
+          <span className="text-sm text-attenue">
+            {p.type_marche === "PUBLIC"
+              ? "Contrôle, plans à joindre, dossier .zip classé et transmission au maître d'ouvrage."
+              : "Contrôle, plans à joindre, dossier .zip classé et envoi aux entreprises de l'annuaire."}
+          </span>
+        </span>
+        <span className="flex min-h-11 items-center gap-2 rounded-lg bg-accent px-4 font-bold text-sur-accent">
+          Préparer le DCE
+          <ArrowRight aria-hidden="true" className="size-4" />
+        </span>
+      </Link>
+
       <ConsultationFormulaire projetId={p.id} />
 
       <FormulaireProjet projet={p} surEnregistre={projet.recharger} />

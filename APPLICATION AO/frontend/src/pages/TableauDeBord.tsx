@@ -14,7 +14,12 @@ const PARCOURS = [
     detail: "Bibliothèque, articles, prix de référence ; CCTP, DPGF, CCAP, RC et actes d'engagement avec exports Word, PDF, Excel",
     actif: true,
   },
-  { numero: "2", titre: "DCE", detail: "Dossier .zip classé, annuaire des entreprises", actif: false },
+  {
+    numero: "2",
+    titre: "DCE",
+    detail: "Annuaire des entreprises, dossier .zip classé, transmission au maître d'ouvrage ou envoi aux entreprises",
+    actif: true,
+  },
   { numero: "3", titre: "Analyse des offres", detail: "Comparatif, notation pondérée, rapport ACT", actif: false },
   { numero: "4", titre: "GED chantier", detail: "Plans, visas, indices, archivage local", actif: false },
 ];

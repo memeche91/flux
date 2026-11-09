@@ -6,6 +6,9 @@ import RouteProtegee from "./components/RouteProtegee";
 import Articles from "./pages/Articles";
 import Assistant from "./pages/Assistant";
 import Bibliotheque from "./pages/Bibliotheque";
+import DCE from "./pages/DCE";
+import EntrepriseFiche from "./pages/EntrepriseFiche";
+import Entreprises from "./pages/Entreprises";
 import Connexion from "./pages/Connexion";
 import LotEditeur from "./pages/LotEditeur";
 import PieceEditeur from "./pages/PieceEditeur";
@@ -32,6 +35,10 @@ export default function App() {
             <Route path="articles" element={<Articles />} />
             <Route path="prix" element={<Prix />} />
             <Route path="assistant" element={<Assistant />} />
+            <Route path="entreprises" element={<Entreprises />} />
+            <Route path="entreprises/nouvelle" element={<EntrepriseFiche />} />
+            <Route path="entreprises/:entrepriseId" element={<EntrepriseFiche key="fiche" />} />
+            <Route path="projets/:projetId/dce" element={<DCE />} />
             <Route path="projets" element={<Projets />} />
             <Route path="projets/:projetId" element={<ProjetDetail />} />
             <Route path="projets/:projetId/lots/:lotId" element={<LotEditeur />} />
