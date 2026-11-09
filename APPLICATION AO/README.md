@@ -3,7 +3,7 @@
 Application web pour gérer les appels d'offres de A à Z : pièces écrites (CCTP, DPGF, CCAP, RC, AE), DCE, analyse des offres (rapport ACT) et GED de chantier.
 L'application est **100 % gratuite et open source**. Elle tourne sur un poste ou un serveur du cabinet, et aucune donnée n'est envoyée sur Internet.
 
-> **Version actuelle : étape 1.3.** Bibliothèque documentaire, articles et prix de référence (étapes 1.0 et 1.1), rédaction du CCTP et de la DPGF de chaque lot (étape 1.2), et maintenant les **pièces administratives : CCAP, règlement de consultation et un acte d'engagement par lot**, à partir de modèles (marché public ou privé), de vos anciens documents ou d'une page blanche, avec des **champs automatiques** remplis par les paramètres de la consultation et des exports **Word et PDF**.
+> **Version actuelle : étape 1.4.** Bibliothèque, articles et prix (1.0 et 1.1), CCTP et DPGF (1.2), CCAP, RC et actes d'engagement à partir de modèles vérifiés (1.3), et maintenant l'**assistant IA local** de l'administrateur, à l'écrit et à la voix : il répond à partir de vos documents, de vos prix et des modèles vérifiés, sans rien envoyer sur Internet.
 
 ---
 
@@ -36,7 +36,10 @@ L'installateur :
 2. crée le fichier `.env` avec des clés de sécurité aléatoires ;
 3. construit et démarre l'application (5 à 10 minutes la première fois) ;
 4. vous demande de **créer votre compte administrateur** (mot de passe de 12 caractères minimum) ;
-5. ouvre **http://localhost:8080** dans votre navigateur.
+5. télécharge **une seule fois** les modèles gratuits de l'assistant IA (environ 8 Go : comptez 10 à 30 minutes selon la connexion) ;
+6. ouvre **http://localhost:8080** dans votre navigateur.
+
+> Ordinateur de moins de 16 Go de mémoire : l'installateur choisit automatiquement un modèle plus léger. Carte graphique NVIDIA : elle est détectée et utilisée, l'assistant répond alors beaucoup plus vite.
 
 ---
 
@@ -129,6 +132,26 @@ La sauvegarde et l'archivage complet (export du chantier sur le PC ou le serveur
 | DPGF vierge | Excel, PDF | Page de garde avec **cadre réservé à l'entreprise**, quantités, prix à compléter, sous-totaux et totaux en formules, récapitulatif HT / TVA / TTC, emplacement pour cachet et signature |
 | DPGF chiffrée | Excel, PDF | La même DPGF avec vos prix unitaires : estimation du maître d'œuvre |
 
+### Assistant IA (administrateur)
+
+- Page **Assistant** (visible par l'administrateur uniquement) : une conversation à l'écrit ou **au micro**, et les réponses **lues à voix haute** si vous le souhaitez.
+- Il répond à partir de **vos documents** (articles de CCTP, clauses de CCAP, RC et AE), de **vos prix** (médiane, minimum et maximum relevés dans vos DPGF) et des **modèles de pièces vérifiés**. Chaque information est suivie de sa source numérotée, cliquable.
+- Il **rédige dans votre style** (par exemple un article de CCTP à partir de vos anciens articles) et laisse « [à préciser] » plutôt que d'inventer.
+- Consigne stricte : **aucune référence, norme, DTU ou prix inventé**. S'il ne trouve pas la réponse dans vos documents, il le dit et renvoie vers Légifrance.
+- **Projet** : choisissez un projet en haut de la conversation pour qu'il connaisse ses lots, ses estimations et les paramètres de la consultation.
+- **100 % local et gratuit** : moteur [Ollama](https://ollama.com) avec le modèle Qwen 3.5 (9B), recherche par le sens avec BGE-M3, transcription de la voix avec Whisper, voix de synthèse Piper. Seuls les modèles sont téléchargés, une fois ; vos questions et vos documents ne quittent jamais le poste.
+- L'assistant lit vos documents **en arrière-plan** après chaque import (barre de progression sur la page Assistant). La première lecture d'une grosse bibliothèque peut prendre une à deux heures sur un PC sans carte graphique ; l'assistant répond déjà avec ce qui est lu.
+- Temps de réponse indicatifs : 20 à 60 secondes sur un PC récent sans carte graphique, quelques secondes avec une carte NVIDIA.
+
+| Réglage (fichier `.env`) | Valeur par défaut | Rôle |
+|---|---|---|
+| `IA_MODELE` | `qwen3.5:9b` | Modèle de conversation (`qwen3.5:4b` : plus rapide, moins précis) |
+| `IA_MODELE_EMBEDDING` | `bge-m3` | Recherche par le sens dans vos documents |
+| `IA_WHISPER` | `large-v3-turbo` | Transcription de la voix (`small` : plus léger) |
+| `IA_VOIX` | `fr_FR-siwis-medium` | Voix de lecture |
+
+Après un changement de réglage, relancez `installer.ps1` : il télécharge le nouveau modèle.
+
 ### Prix de référence
 
 - Chaque DPGF est lue ligne par ligne : chapitre, désignation, unité, quantité, prix unitaire et montant. Les colonnes sont reconnues automatiquement, et les totaux et la TVA sont ignorés.
@@ -141,7 +164,7 @@ La sauvegarde et l'archivage complet (export du chantier sur le PC ou le serveur
 ```
 APPLICATION AO/
 ├── installer.ps1          Installation / mise à jour Windows
-├── docker-compose.yml     Les 5 services : base, redis, backend, worker, web
+├── docker-compose.yml     Les 6 services : base, redis, backend, worker, ollama, web
 ├── .env.example           Modèle de configuration (copié en .env par l'installateur)
 ├── donnees/               Fichiers importés (non versionnés)
 ├── backend/               Python 3.12 · Django 5.2 · Django Ninja · Celery
@@ -150,20 +173,22 @@ APPLICATION AO/
 │   ├── referentiel/       Nomenclature des lots (modifiable dans Paramétrage)
 │   ├── bibliotheque/      Documents de référence, import, lecture (conversion, OCR)
 │   ├── articles/          Découpage en articles, lignes de prix, normes citées
-│   └── projets/           Projets, lots, PSE, CCTP et DPGF, CCAP / RC / AE, modèles, exports Word / PDF / Excel
+│   ├── projets/           Projets, lots, PSE, CCTP et DPGF, CCAP / RC / AE, modèles, exports Word / PDF / Excel
+│   └── assistant/         Assistant IA local : recherche par le sens, conversations, voix
 └── frontend/              React 19 · TypeScript · Vite · Tailwind CSS
     └── src/
-        ├── pages/         Connexion, Tableau de bord, Projets, éditeur de lot, éditeur de pièce, Documents, Articles, Prix
+        ├── pages/         Connexion, Tableau de bord, Projets, éditeurs de lot et de pièce, Documents, Articles, Prix, Assistant
         ├── components/    En-tête, liste des lots, zone d'import, tableau
         └── api/           Accès à l'API (session + protection CSRF)
 ```
 
 | Service | Rôle |
 |---|---|
-| `base` | PostgreSQL 16 + pgvector (recherche sémantique pour l'IA, plus tard) |
+| `base` | PostgreSQL 16 |
 | `redis` | File d'attente des tâches (Valkey, fork open source de Redis) |
 | `backend` | API Django (gunicorn) |
-| `worker` | Tâches de fond : lecture, conversion, OCR et découpage des documents (puis exports, IA, e-mails) |
+| `worker` | Tâches de fond : lecture, conversion, OCR et découpage des documents, lecture des documents par l'IA |
+| `ollama` | Moteur d'IA local de l'assistant (modèles dans le volume `modeles_ia`) |
 | `web` | Caddy : sert l'interface et relaie l'API |
 
 ## Développement (facultatif)
@@ -179,6 +204,9 @@ DJANGO_DEBUG=1 python manage.py runserver
 # Tests (LibreOffice et Tesseract nécessaires pour les tests de conversion et d'OCR)
 DJANGO_DEBUG=1 python manage.py test
 
+# Assistant IA : télécharger les modèles et indexer la bibliothèque
+docker compose exec backend python manage.py preparer_assistant
+
 # Relancer l'analyse de tous les documents (après une mise à jour)
 docker compose exec backend python manage.py reanalyser_documents
 
@@ -193,7 +221,7 @@ npm install && npm run dev
 - [x] **1.1** Découpage en articles par lot, prix de référence, OCR, conversion des anciens formats
 - [x] **1.2** Rédaction CCTP / DPGF (PSE, variantes), éditeur visuel, exports Word / PDF / Excel
 - [x] **1.3** CCAP, RC, AE à partir de modèles, champs automatiques, paramètres de la consultation
-- [ ] **1.4** Assistant IA local (chat et voix, administrateur uniquement)
+- [x] **1.4** Assistant IA local (chat et voix, administrateur uniquement)
 - [ ] **2** DCE : dossier .zip classé, annuaire des entreprises
 - [ ] **3** Analyse des offres et rapport ACT
 - [ ] **4** GED de chantier, accès entreprises, archivage
