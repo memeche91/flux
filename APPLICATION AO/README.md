@@ -3,7 +3,7 @@
 Application web pour gérer les appels d'offres de A à Z : pièces écrites (CCTP, DPGF, CCAP, RC, AE), DCE, analyse des offres (rapport ACT) et GED de chantier.
 L'application est **100 % gratuite et open source**. Elle tourne sur un poste ou un serveur du cabinet, et aucune donnée n'est envoyée sur Internet.
 
-> **Version actuelle : étape 2.** Pièces écrites et assistant IA local (étape 1), et maintenant le **DCE** : annuaire des entreprises, dossier .zip classé automatiquement, transmission au maître d'ouvrage (marché public) ou envoi à chaque entreprise d'un dossier limité à ses lots (marché privé).
+> **Version actuelle : étape 3.** Pièces écrites et assistant IA local (étape 1), DCE et annuaire des entreprises (étape 2), et maintenant l'**analyse des offres** : lecture des DPGF remplies par les entreprises, comparatif ouvrage par ouvrage, notation pondérée selon le RC, classement et **rapport d'analyse (ACT)** en Word et PDF.
 
 ---
 
@@ -163,6 +163,17 @@ DCE <opération> - Indice A/
 
 **Envoi des courriels** : renseignez la messagerie du cabinet dans `.env` (lignes `EMAIL_…`, voir `.env.example`), puis relancez `installer.ps1`. Sans messagerie, l'application prépare chaque message (bouton **Ouvrir dans ma messagerie**) et vous l'envoyez vous-même. Un dossier de plus de 20 Mo n'est pas joint : transmettez-le par [FranceTransfert](https://francetransfert.numerique.gouv.fr) (gratuit) ou un service équivalent.
 
+### Analyse des offres (rapport ACT)
+
+Bouton **Analyser les offres** sur la page du projet, un onglet par lot :
+
+1. **Offres reçues** : déposez la DPGF remplie par l'entreprise (Excel, PDF même scanné, Word, CSV) ou son devis, ou saisissez simplement le montant. Les prix sont lus en tâche de fond et rapprochés des ouvrages de votre DPGF, par leur numéro (8.2.1) puis par leur désignation. Le **total déclaré** par l'entreprise est comparé à la somme des lignes : en cas d'erreur de calcul, l'offre passe « À vérifier » (le total déclaré est retenu, l'écart est signalé). Variantes à l'initiative de l'entreprise, offres écartées avec leur motif, délai proposé.
+2. **Comparatif des prix** : tableau ouvrage par ouvrage (estimation et chaque offre, prix le plus bas en vert, le plus élevé en rouge), totaux de la solution de base et de chaque PSE, choix des **PSE retenues**, écarts à l'estimation et à la moyenne, **offres anormalement basses** repérées (seuil réglable). Une offre qui ne chiffre pas une PSE retenue n'est pas classée tant qu'elle n'est pas complétée.
+3. **Notation et classement** : critères et pondérations repris des paramètres de la consultation (RC). La note de prix est calculée (méthode proportionnelle ou linéaire, notes sur 5, 10, 20 ou 100) ; vous notez les autres critères avec une justification, reprise dans le rapport.
+4. **Proposition d'attribution** : offre la mieux classée par défaut (ou une autre, avec vos observations), montants HT / TVA / TTC ; la validation met à jour l'annuaire (entreprise retenue, autres non retenues).
+
+**Exports** : rapport ACT d'un lot ou de tous les lots (Word modifiable et PDF, même mise en page que vos pièces écrites, avec récapitulatif général) et comparatif Excel (une feuille par lot).
+
 ### Assistant IA (administrateur)
 
 - Page **Assistant** (visible par l'administrateur uniquement) : une conversation à l'écrit ou **au micro**, et les réponses **lues à voix haute** si vous le souhaitez.
@@ -207,10 +218,11 @@ APPLICATION AO/
 │   ├── projets/           Projets, lots, PSE, CCTP et DPGF, CCAP / RC / AE, modèles, exports Word / PDF / Excel
 │   ├── entreprises/       Annuaire des entreprises (import, historique)
 │   ├── dce/               Dossier de consultation : contrôle, .zip classé, envois
+│   ├── offres/            Analyse des offres : lecture des DPGF remplies, comparatif, notation, rapport ACT
 │   └── assistant/         Assistant IA local : recherche par le sens, conversations, voix
 └── frontend/              React 19 · TypeScript · Vite · Tailwind CSS
     └── src/
-        ├── pages/         Connexion, Tableau de bord, Projets, éditeurs, DCE, Entreprises, Documents, Articles, Prix, Assistant
+        ├── pages/         Connexion, Tableau de bord, Projets, éditeurs, DCE, Analyse des offres, Entreprises, Documents, Articles, Prix, Assistant
         ├── components/    En-tête, liste des lots, zone d'import, tableau
         └── api/           Accès à l'API (session + protection CSRF)
 ```
@@ -220,7 +232,7 @@ APPLICATION AO/
 | `base` | PostgreSQL 16 |
 | `redis` | File d'attente des tâches (Valkey, fork open source de Redis) |
 | `backend` | API Django (gunicorn) |
-| `worker` | Tâches de fond : lecture, conversion, OCR et découpage des documents, lecture des documents par l'IA |
+| `worker` | Tâches de fond : lecture, conversion, OCR et découpage des documents, lecture des offres, lecture des documents par l'IA |
 | `voix` | Voix de l'assistant : transcription (Whisper) et lecture à voix haute (Piper), chargées une seule fois |
 | `ollama` | Moteur d'IA local de l'assistant (modèles dans le volume `modeles_ia`) |
 | `web` | Caddy : sert l'interface et relaie l'API |
@@ -257,5 +269,5 @@ npm install && npm run dev
 - [x] **1.3** CCAP, RC, AE à partir de modèles, champs automatiques, paramètres de la consultation
 - [x] **1.4** Assistant IA local (chat et voix, administrateur uniquement)
 - [x] **2** DCE : dossier .zip classé, annuaire des entreprises, envois public / privé
-- [ ] **3** Analyse des offres et rapport ACT
+- [x] **3** Analyse des offres : lecture des DPGF remplies, comparatif, notation, rapport ACT
 - [ ] **4** GED de chantier, accès entreprises, archivage
