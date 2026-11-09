@@ -1,27 +1,31 @@
 """Rapport d'analyse des offres (mission ACT) : même gabarit que les pièces écrites (Word et PDF)."""
 from __future__ import annotations
 
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 from html import escape
 
-from projets.champs import champs_du_projet
+from django.utils import timezone
+
+from projets.champs import champs_du_projet, consultation_du_projet
 from projets.exports.document import ChapitreDoc, DocumentExport, ElementDoc
 from projets.models import LotProjet, Projet
 
-from .notation import classer, estimation
+from .models import JustificationPrix
+from .notation import classer, estimation, proposition
 
 
 def _euros(valeur) -> str:
     if valeur in (None, ""):
         return "—"
-    return f"{Decimal(str(valeur)):,.2f}".replace(",", " ").replace(".", ",") + " €"
+    montant = Decimal(str(valeur)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)  # arrondi commercial, comme à l'écran
+    return f"{montant:,.2f}".replace(",", " ").replace(".", ",") + " €"
 
 
 def _pourcentage(valeur) -> str:
     if valeur is None:
         return "—"
     signe = "+" if valeur > 0 else ""
-    return f"{signe}{valeur}".replace(".", ",") + " %"
+    return f"{signe}{_nombre(valeur)} %"
 
 
 def _tableau(entetes: list[str], lignes: list[list[str]]) -> str:
@@ -46,11 +50,32 @@ def _note(valeur) -> str:
     return "—" if valeur is None else _nombre(valeur)
 
 
+def _ttc(montant: Decimal, taux: Decimal) -> Decimal:
+    return (montant * (1 + taux / 100)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+
+def _avis_prix_bas(ligne) -> str:
+    """Suite donnée à une offre qui paraît anormalement basse."""
+    o = ligne.offre
+    if o.justification_prix == JustificationPrix.ACCEPTEE:
+        return "prix nettement inférieur aux autres offres ou à l'estimation : justifications demandées et jugées satisfaisantes" + (
+            f" ({escape(o.motif_justification)})" if o.motif_justification else ""
+        )
+    if o.justification_prix == JustificationPrix.REJETEE:
+        return "offre anormalement basse : justifications jugées insuffisantes" + (f" ({escape(o.motif_justification)})" if o.motif_justification else "")
+    if o.justification_prix == JustificationPrix.DEMANDEE:
+        return "<strong>prix paraissant anormalement bas : précisions demandées à l'entreprise</strong>"
+    return "<strong>prix paraissant anormalement bas : précisions à demander à l'entreprise</strong>"
+
+
 def analyse_lot(lot: LotProjet, numero: int) -> tuple[ChapitreDoc, dict]:
     analyse, criteres, lignes = classer(lot)
     reference = estimation(lot)
     retenues = list(analyse.options_retenues.order_by("genre", "numero"))
     options = list(lot.options.all())
+    public = lot.projet.type_marche == "PUBLIC"
+    limite = consultation_du_projet(lot.projet).date_limite_offres
+    limite = timezone.localtime(limite).date() if limite else None
     chapitre = ChapitreDoc(f"lot-{lot.pk}", f"Lot {lot.code} – {lot.intitule}")
     resume = {"lot": lot, "attributaire": None, "montant": None, "estimation": None}
 
@@ -58,7 +83,7 @@ def analyse_lot(lot: LotProjet, numero: int) -> tuple[ChapitreDoc, dict]:
         chapitre.html = _p("Aucune offre n'a été reçue pour ce lot.")
         return chapitre, resume
 
-    # Offres reçues
+    # Offres reçues : observations rédigées par l'économiste (pas les messages techniques de lecture).
     entetes = ["Entreprise", "Reçue le", "Solution de base HT"] + [f"{o.nom_court} HT" for o in options] + ["Observations"]
     contenu = []
     for l in lignes:
@@ -66,10 +91,16 @@ def analyse_lot(lot: LotProjet, numero: int) -> tuple[ChapitreDoc, dict]:
         observations = []
         if o.ecartee:
             observations.append(f"Offre écartée : {escape(o.motif_ecart or 'motif non précisé')}")
-        if o.statut_lecture == "A_VERIFIER" and o.message_lecture:
-            observations.append(escape(o.message_lecture))
+        elif l.motif_non_classee.startswith("variante non autorisée"):
+            observations.append("Variante non autorisée par le règlement de la consultation : non examinée")
+        if limite and o.recue_le > limite:
+            observations.append("Reçue après la date limite de remise des offres")
+        if l.variante_sans_base:
+            observations.append("Variante remise sans offre de base")
         if o.delai_propose:
             observations.append(f"Délai proposé : {escape(o.delai_propose)}")
+        if o.commentaire:
+            observations.append(escape(o.commentaire))
         contenu.append(
             [escape(o.nom), o.recue_le.strftime("%d/%m/%Y"), _euros(o.montant_base)]
             + [_euros(o.montants_options.get(str(opt.pk))) for opt in options]
@@ -84,19 +115,26 @@ def analyse_lot(lot: LotProjet, numero: int) -> tuple[ChapitreDoc, dict]:
     contenu = []
     for l in sorted(lignes, key=lambda x: (x.prix is None, x.prix or 0)):
         remarques = []
-        if l.offre.ecartee:
-            remarques.append("écartée")
-        if l.incomplete:
-            remarques.append("incomplète (PSE retenue non chiffrée) : non classée")
+        if l.motif_non_classee:
+            remarques.append(f"non classée : {escape(l.motif_non_classee)}")
         if l.anormalement_basse:
-            remarques.append(f"<strong>prix anormalement bas à vérifier</strong> (au moins {analyse.seuil_anormal} % sous la moyenne ou l'estimation)")
+            remarques.append(_avis_prix_bas(l))
         contenu.append([escape(l.offre.nom), _euros(l.prix), _pourcentage(l.ecart_estimation), _pourcentage(l.ecart_moyenne), ", ".join(remarques) or "—"])
     texte = (
-        _p(f"Les prix sont comparés sur la {base_comparaison}. Estimation du maître d'œuvre : {_euros(montant_estimation)} HT.")
+        _p(
+            f"Les prix sont comparés sur la {base_comparaison}. Estimation du maître d'œuvre : "
+            + (f"{_euros(montant_estimation)} HT." if montant_estimation else "non établie (DPGF sans prix estimés).")
+        )
         + _tableau(["Entreprise", "Prix comparé HT", "Écart à l'estimation", "Écart à la moyenne", "Observations"], contenu)
     )
-    if any(l.anormalement_basse for l in lignes):
-        texte += _p("Pour toute offre qui paraît anormalement basse, des précisions et justifications sont demandées à l'entreprise avant de la retenir ou de l'écarter.")
+    en_suspens = [l for l in lignes if l.anormalement_basse and l.offre.justification_prix not in (JustificationPrix.ACCEPTEE, JustificationPrix.REJETEE)]
+    if en_suspens:
+        texte += _p(
+            f"Une offre paraît anormalement basse lorsque son prix est inférieur de plus de {analyse.seuil_anormal} % à la moyenne des offres "
+            "ou à l'estimation. L'entreprise est invitée à fournir des précisions et justifications sur le montant de son offre"
+            + (" (articles R2152-3 à R2152-5 du code de la commande publique)" if public else "")
+            + " ; l'offre n'est retenue que si ses justifications sont jugées satisfaisantes."
+        )
     chapitre.elements.append(ElementDoc(f"lot-{lot.pk}-prix", f"{numero}.2 Analyse des prix", texte))
 
     # Analyse technique (critères autres que le prix)
@@ -106,10 +144,11 @@ def analyse_lot(lot: LotProjet, numero: int) -> tuple[ChapitreDoc, dict]:
         for critere in autres:
             contenu = []
             for l in lignes:
-                if l.offre.ecartee:
+                if l.motif_non_classee and not l.rang and (l.offre.ecartee or l.motif_non_classee.startswith("variante")):
                     continue
                 saisie = l.offre.notes.get(critere["libelle"]) or {}
-                contenu.append([escape(l.offre.nom), f"{_note(l.notes.get(critere['libelle']))} / {analyse.bareme}", escape(saisie.get("commentaire") or "—")])
+                note = l.notes.get(critere["libelle"], saisie.get("note"))
+                contenu.append([escape(l.offre.nom), f"{_note(note)} / {analyse.bareme}", escape(saisie.get("commentaire") or "—")])
             texte += f"<p><strong>{escape(critere['libelle'])}</strong> ({_nombre(critere['ponderation'])} %)</p>" + _tableau(["Entreprise", "Note", "Appréciation"], contenu)
         chapitre.elements.append(ElementDoc(f"lot-{lot.pk}-technique", f"{numero}.3 Analyse technique", texte))
 
@@ -127,16 +166,26 @@ def analyse_lot(lot: LotProjet, numero: int) -> tuple[ChapitreDoc, dict]:
             texte += _p("Attention : certaines notes ne sont pas encore saisies ; elles comptent pour zéro dans ce classement.")
         chapitre.elements.append(ElementDoc(f"lot-{lot.pk}-classement", f"{numero}.4 Classement des offres", texte))
 
-    # Proposition
-    attributaire = next((l for l in lignes if analyse.attributaire_id and l.offre.pk == analyse.attributaire_id), None) or (classees[0] if classees else None)
+    # Proposition : seule une offre classée peut être proposée.
+    attributaire, _ = proposition(analyse, lignes)
     if attributaire is not None:
         taux = lot.projet.taux_tva
-        ttc = (attributaire.prix or Decimal("0")) * (1 + taux / 100)
         texte = _p(
             f"Au vu de l'analyse, il est proposé de retenir l'offre de {attributaire.offre.nom} pour un montant de "
-            f"{_euros(attributaire.prix)} HT, soit {_euros(ttc)} TTC (TVA {_nombre(taux)} %)"
-            + (f", PSE retenues comprises ({', '.join(o.nom_court for o in retenues)})." if retenues else ".")
+            f"{_euros(attributaire.prix)} HT, soit {_euros(_ttc(attributaire.prix, taux))} TTC (TVA {_nombre(taux)} %)"
+            + (f", {', '.join(o.nom_court for o in retenues)} comprise(s)." if retenues else ".")
         )
+        if attributaire.rang and attributaire.rang > 1:
+            texte += _p(f"Cette offre est classée {attributaire.rang}e : le choix est motivé dans les observations ci-dessous.")
+        if attributaire.anormalement_basse:
+            if attributaire.offre.justification_prix == JustificationPrix.ACCEPTEE:
+                texte += _p(
+                    "Son prix, nettement inférieur à la moyenne des offres ou à l'estimation, a fait l'objet d'une demande de précisions ; "
+                    "les justifications apportées par l'entreprise ont été jugées satisfaisantes"
+                    + (f" : {attributaire.offre.motif_justification}" if attributaire.offre.motif_justification else ".")
+                )
+            else:
+                texte += f"<p><strong>{escape('Réserve : le prix de cette offre paraît anormalement bas ; elle ne pourra être retenue qu’après examen des justifications demandées à l’entreprise.')}</strong></p>"
         if analyse.observations:
             texte += "".join(_p(p) for p in analyse.observations.split("\n") if p.strip())
         chapitre.elements.append(ElementDoc(f"lot-{lot.pk}-proposition", f"{numero}.5 Proposition d'attribution", texte))
@@ -170,18 +219,23 @@ def document_rapport(projet: Projet, lots: list[LotProjet] | None = None) -> Doc
         resumes.append(resume)
 
     if len(lots) > 1:
-        contenu, total, total_estimation = [], Decimal("0"), Decimal("0")
+        contenu, total, total_estimation, estimation_partielle = [], Decimal("0"), Decimal("0"), False
         for r in resumes:
             ecart = "—"
-            if r["montant"] is not None and r["estimation"]:
-                ecart = _pourcentage(((r["montant"] - r["estimation"]) / r["estimation"] * 100).quantize(Decimal("0.1")))
+            if r["montant"] is not None:
                 total += r["montant"]
-                total_estimation += r["estimation"]
-            contenu.append([f"Lot {r['lot'].code} – {escape(r['lot'].intitule)}", escape(r["attributaire"] or "—"), _euros(r["montant"]), _euros(r["estimation"]), ecart])
+                if r["estimation"]:
+                    ecart = _pourcentage(((r["montant"] - r["estimation"]) / r["estimation"] * 100).quantize(Decimal("0.1")))
+                    total_estimation += r["estimation"]
+                else:
+                    estimation_partielle = True
+            estimation_lot = _euros(r["estimation"]) if r["estimation"] else ("non établie" if r["montant"] is not None else "—")
+            contenu.append([f"Lot {r['lot'].code} – {escape(r['lot'].intitule)}", escape(r["attributaire"] or "—"), _euros(r["montant"]), estimation_lot, ecart])
         taux = projet.taux_tva
         texte = _tableau(["Lot", "Entreprise proposée", "Montant HT", "Estimation HT", "Écart"], contenu) + _p(
-            f"Total des lots attribués : {_euros(total)} HT, soit {_euros(total * (1 + taux / 100))} TTC, "
-            f"pour une estimation de {_euros(total_estimation)} HT."
+            f"Total des lots attribués : {_euros(total)} HT, soit {_euros(_ttc(total, taux))} TTC"
+            + (f", pour une estimation de {_euros(total_estimation)} HT" if total_estimation else "")
+            + (" (estimation non établie pour certains lots)." if estimation_partielle and total_estimation else ".")
         )
         chapitres.append(ChapitreDoc("recapitulatif", "Récapitulatif général", texte))
 

@@ -19,6 +19,15 @@ class StatutLecture(models.TextChoices):
     MANUELLE = "MANUELLE", "Saisie manuelle"
 
 
+class JustificationPrix(models.TextChoices):
+    """Offre paraissant anormalement basse : demande de précisions et décision (art. R2152-3 à R2152-5 du CCP)."""
+
+    AUCUNE = "", "Pas de demande"
+    DEMANDEE = "DEMANDEE", "Précisions demandées"
+    ACCEPTEE = "ACCEPTEE", "Justifications acceptées"
+    REJETEE = "REJETEE", "Justifications rejetées"
+
+
 class Offre(models.Model):
     projet = models.ForeignKey("projets.Projet", on_delete=models.CASCADE, related_name="offres")
     lot = models.ForeignKey("projets.LotProjet", on_delete=models.CASCADE, related_name="offres")
@@ -39,6 +48,8 @@ class Offre(models.Model):
     ecartee = models.BooleanField("offre écartée", default=False)
     motif_ecart = models.CharField(max_length=500, blank=True)
     notes = models.JSONField("notes par critère", default=dict, blank=True)
+    justification_prix = models.CharField(max_length=10, choices=JustificationPrix.choices, default=JustificationPrix.AUCUNE, blank=True)
+    motif_justification = models.TextField("appréciation des justifications de prix", blank=True)
     cree_le = models.DateTimeField(auto_now_add=True)
     modifie_le = models.DateTimeField(auto_now=True)
 

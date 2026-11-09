@@ -53,6 +53,8 @@ class LigneClassement:
     total: Decimal | None = None
     rang: int | None = None
     notation_complete: bool = True
+    motif_non_classee: str = ""
+    variante_sans_base: bool = False
 
 
 def _arrondi(valeur: Decimal, decimales: str = "0.01") -> Decimal:
@@ -82,12 +84,28 @@ def classer(lot: LotProjet) -> tuple[AnalyseLot, list[dict], list[LigneClassemen
     montant_estimation = reference["base"] + sum((reference["options"].get(o, Decimal("0")) for o in retenues), Decimal("0"))
     bareme = Decimal(analyse.bareme or 10)
 
+    variantes_autorisees = consultation_du_projet(lot.projet).variantes_autorisees
+
     lignes = []
-    for offre in Offre.objects.filter(lot=lot).select_related("entreprise"):
+    offres = list(Offre.objects.filter(lot=lot).select_related("entreprise"))
+    avec_base = {o.entreprise_id for o in offres if not o.variante}
+    for offre in offres:
         prix, incomplete = prix_compare(offre, retenues)
-        lignes.append(LigneClassement(offre, prix, incomplete))
-    # Une offre qui ne chiffre pas une PSE retenue n'est pas comparable : ni notée ni classée tant qu'elle n'est pas complétée.
-    actives = [l for l in lignes if not l.offre.ecartee and not l.incomplete and l.prix is not None and l.prix > 0]
+        ligne = LigneClassement(offre, prix, incomplete)
+        # Offres non comparables : ni notées ni classées.
+        if offre.ecartee:
+            ligne.motif_non_classee = f"écartée{f' : {offre.motif_ecart}' if offre.motif_ecart else ''}"
+        elif offre.variante and not variantes_autorisees:
+            ligne.motif_non_classee = "variante non autorisée par le règlement de la consultation"
+        elif offre.montant_base is None:
+            ligne.motif_non_classee = "montant non saisi"
+        elif incomplete:
+            ligne.motif_non_classee = "PSE retenue non chiffrée"
+        elif prix is None or prix <= 0:
+            ligne.motif_non_classee = "montant nul"
+        ligne.variante_sans_base = offre.variante and offre.entreprise_id not in avec_base
+        lignes.append(ligne)
+    actives = [l for l in lignes if not l.motif_non_classee]
 
     if actives:
         moyenne = sum((l.prix for l in actives), Decimal("0")) / len(actives)
@@ -122,3 +140,13 @@ def classer(lot: LotProjet) -> tuple[AnalyseLot, list[dict], list[LigneClassemen
         for rang, ligne in enumerate(classees, start=1):
             ligne.rang = rang
     return analyse, [{"libelle": c["libelle"], "ponderation": c["ponderation"], "prix": c["prix"]} for c in liste_criteres], lignes
+
+
+def proposition(analyse: AnalyseLot, lignes: list[LigneClassement]) -> tuple[LigneClassement | None, bool]:
+    """Offre proposée : celle choisie par l'économiste si elle est classée, sinon la mieux classée.
+
+    Le second élément indique qu'un choix enregistré ne vaut plus (offre écartée, devenue incomplète…).
+    """
+    classees = sorted((l for l in lignes if l.rang), key=lambda l: l.rang)
+    choisie = next((l for l in classees if l.offre.pk == analyse.attributaire_id), None)
+    return choisie or (classees[0] if classees else None), bool(analyse.attributaire_id and choisie is None)

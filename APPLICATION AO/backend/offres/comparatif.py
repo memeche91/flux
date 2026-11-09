@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import io
+import re
 from decimal import Decimal
 
 from projets.models import LotProjet
@@ -75,7 +76,13 @@ def comparatif_xlsx(lots: list[LotProjet]) -> bytes:
     classeur.remove(classeur.active)
     gras = Font(bold=True)
     for lot in lots:
-        feuille = classeur.create_sheet(f"Lot {lot.code}"[:31])
+        # Titre de feuille Excel : sans les caractères / \ * ? : [ ], 31 caractères au plus, unique.
+        titre = re.sub(r"[\\/*?:\[\]]", "-", f"Lot {lot.code}")[:31]
+        suffixe = 2
+        while titre in classeur.sheetnames:
+            titre = f"{titre[:26]} ({suffixe})"
+            suffixe += 1
+        feuille = classeur.create_sheet(titre)
         projet = lot.projet
         couleur = projet.couleur_tableaux.lstrip("#").upper()
         entete = PatternFill("solid", start_color=couleur, end_color=couleur)

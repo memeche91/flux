@@ -1,3 +1,4 @@
+import datetime
 import io
 import json
 import shutil
@@ -235,23 +236,103 @@ class OffresTests(TestCase):
 
         # Validation de la proposition : statuts de l'annuaire mis à jour.
         etat = self.json("post", f"/api/lots-projet/{self.lot.pk}/analyse/valider")
-        self.assertEqual(etat["analyse"]["attributaire_id"], ids["Alu Martin"])
+        self.assertEqual((etat["analyse"]["proposee_id"], etat["analyse"]["attributaire_id"]), (ids["Alu Martin"], None))
         self.assertIsNotNone(etat["analyse"]["validee_le"])
-        statuts = dict(ConsultationEntreprise.objects.filter(lot=self.lot).values_list("entreprise__raison_sociale", "statut"))
-        self.assertEqual(statuts, {
+        statuts = lambda: dict(ConsultationEntreprise.objects.filter(lot=self.lot).values_list("entreprise__raison_sociale", "statut"))  # noqa: E731
+        self.assertEqual(statuts(), {
             "Alu Martin": StatutConsultation.RETENUE, "Menuiseries Durand": StatutConsultation.NON_RETENUE,
             "Petit Fermetures": StatutConsultation.NON_RETENUE,
         })
 
-        # L'économiste peut proposer une autre offre que la mieux classée.
+        # L'économiste peut proposer une autre offre classée : la validation est à refaire.
         etat = self.json("patch", f"/api/lots-projet/{self.lot.pk}/analyse", {"attributaire_id": ids["Menuiseries Durand"], "observations": "Délai plus court."})
-        self.assertEqual(etat["analyse"]["attributaire_id"], ids["Menuiseries Durand"])
+        self.assertEqual((etat["analyse"]["attributaire_id"], etat["analyse"]["proposee_id"]), (ids["Menuiseries Durand"],) * 2)
+        self.assertIsNone(etat["analyse"]["validee_le"])
+        self.assertEqual(set(statuts().values()), {StatutConsultation.REPONDU})
+        erreur = self.json("patch", f"/api/lots-projet/{self.lot.pk}/analyse", {"attributaire_id": ids["Petit Fermetures"]}, attendu=400)
+        self.assertIn("n'est pas classée (écartée", erreur["detail"])
+        self.json("post", f"/api/lots-projet/{self.lot.pk}/analyse/valider")
+        self.assertEqual(statuts()["Menuiseries Durand"], StatutConsultation.RETENUE)
+        # Une note corrigée change le classement : validation à refaire.
+        etat = self.json("patch", f"/api/offres/{ids['Alu Martin']}", {"notes": {"Valeur technique": {"note": 10}}})
+        self.assertIsNone(etat["analyse"]["validee_le"])
+        # L'offre choisie est écartée : le choix tombe, la mieux classée est proposée.
+        etat = self.json("patch", f"/api/offres/{ids['Menuiseries Durand']}", {"ecartee": True, "motif_ecart": "Attestation manquante"})
+        self.assertEqual((etat["analyse"]["attributaire_id"], etat["analyse"]["proposee_id"]), (None, ids["Alu Martin"]))
+        self.json("patch", f"/api/offres/{ids['Menuiseries Durand']}", {"ecartee": False})
 
         # Suppression d'une offre : l'entreprise redevient « consultée ».
         autre = self.deposer(self.durand, montant_base="1", variante=True)
         self.json("delete", f"/api/offres/{autre['id']}", attendu=204)
         self.json("delete", f"/api/offres/{ids['Petit Fermetures']}", attendu=204)
         self.assertEqual(ConsultationEntreprise.objects.get(entreprise=self.petit).statut, StatutConsultation.CONSULTEE)
+
+    def test_offre_anormalement_basse_variante_et_date_de_reception(self):
+        from projets.champs import consultation_du_projet
+
+        consultation = consultation_du_projet(self.projet)
+        consultation.date_limite_offres = datetime.datetime(2026, 10, 15, 12, tzinfo=datetime.timezone.utc)
+        consultation.save()
+        durand = self.deposer(self.durand, montant_base="12000", recue_le="2026-10-14")
+        martin = self.deposer(self.martin, montant_base="12600", recue_le="2026-10-16")
+        petit = self.deposer(self.petit, montant_base="7000")
+        variante = self.deposer(self.durand, montant_base="6500", variante=True, libelle_variante="PVC")
+        for offre in (durand, martin, petit, variante):
+            self.json("patch", f"/api/offres/{offre['id']}", {"notes": {"Valeur technique": {"note": 8}, "Performance en matière de protection de l'environnement": {"note": 8}}})
+        offres = self.par_entreprise(self.etat())
+        self.assertEqual((offres["Menuiseries Durand"]["hors_delai"], offres["Alu Martin"]["hors_delai"]), (False, True))
+        # Variantes non autorisées par le RC : ni notée ni classée.
+        self.assertEqual(offres["Menuiseries Durand – variante (PVC)"]["motif_non_classee"], "variante non autorisée par le règlement de la consultation")
+        self.assertIsNone(offres["Menuiseries Durand – variante (PVC)"]["rang"])
+        # Offre anormalement basse classée 1re : pas de validation sans examen de ses justifications.
+        self.assertEqual(offres["Petit Fermetures"]["rang"], 1)
+        self.assertTrue(offres["Petit Fermetures"]["anormalement_basse"])
+        erreur = self.json("post", f"/api/lots-projet/{self.lot.pk}/analyse/valider", attendu=400)
+        self.assertIn("R2152-3", erreur["detail"])
+        self.json("patch", f"/api/offres/{petit['id']}", {"justification_prix": "DEMANDEE"})
+        self.json("post", f"/api/lots-projet/{self.lot.pk}/analyse/valider", attendu=400)
+        self.json("patch", f"/api/offres/{petit['id']}", {"justification_prix": "ACCEPTEE", "motif_justification": "Matériel en stock, sous-détail cohérent."})
+        self.json("post", f"/api/lots-projet/{self.lot.pk}/analyse/valider")
+        texte = self.texte_rapport()
+        self.assertIn("justifications apportées par l'entreprise ont été jugées satisfaisantes : Matériel en stock", texte)
+        self.assertIn("Reçue après la date limite", texte)
+        # Justifications rejetées : l'offre est écartée.
+        etat = self.json("patch", f"/api/offres/{petit['id']}", {"justification_prix": "REJETEE"})
+        offres = self.par_entreprise(etat)
+        self.assertTrue(offres["Petit Fermetures"]["ecartee"])
+        self.assertIn("justifications de prix insuffisantes", offres["Petit Fermetures"]["motif_ecart"])
+        self.assertEqual(offres["Menuiseries Durand"]["rang"], 1)
+        # Variantes autorisées : la variante est classée.
+        consultation.variantes_autorisees = True
+        consultation.save()
+        self.assertIsNotNone(self.par_entreprise(self.etat())["Menuiseries Durand – variante (PVC)"]["rang"])
+
+    def test_saisie_manuelle_apres_lecture(self):
+        self.deposer(self.durand, "dpgf.xlsx", self.dpgf_remplie({FENETRE: 700, PORTE: 1100, VOLETS: 400}, total_base=11000))
+        offre = Offre.objects.get()
+        self.assertEqual(offre.statut_lecture, StatutLecture.A_VERIFIER)
+        etat = self.json("patch", f"/api/offres/{offre.pk}", {"montant_base": "11400.00"})
+        self.assertEqual(etat["offres"][0]["statut_lecture"], "MANUELLE")
+        self.assertEqual(etat["offres"][0]["message_lecture"], "Montant saisi à la main (montant lu dans le document : 11 000,00 €).")
+        self.assertNotIn("erreur de calcul", self.texte_rapport())
+
+    def test_recapitulatif_et_arrondis_du_rapport(self):
+        from .rapport import _euros
+
+        self.assertEqual((_euros(Decimal("1100.165")), _euros("3.165")), ("1 100,17 €", "3,17 €"))
+        lot11 = LotProjet.objects.create(projet=self.projet, lot=Lot.objects.get(code="11"), code="11", intitule="Plâtrerie", ordre=2)
+        self.deposer(self.durand, montant_base="11400")
+        reponse = self.client.post(f"/api/lots-projet/{lot11.pk}/offres", {"entreprise_id": self.martin.pk, "montant_base": "50000"})
+        self.assertEqual(reponse.status_code, 201)
+        texte = self.texte_rapport()
+        self.assertIn("Total des lots attribués : 61 400,00 € HT, soit 73 680,00 € TTC, pour une estimation de 12 800,00 € HT (estimation non établie pour certains lots).", texte)
+        self.assertIn("Estimation du maître d'œuvre : non établie", texte)
+
+    def texte_rapport(self):
+        from docx import Document
+
+        document = Document(io.BytesIO(self.client.get(f"/api/projets/{self.projet.pk}/rapport-act/docx").content))
+        return "\n".join([p.text for p in document.paragraphs] + [c.text for t in document.tables for r in t.rows for c in r.cells])
 
     # --- rapport ACT et exports ---------------------------------------------------
     def test_rapport_act_et_comparatif_excel(self):
@@ -287,9 +368,14 @@ class OffresTests(TestCase):
         self.assertIn("Menuiseries Durand", valeurs)
         self.assertIn(17000.0, valeurs)  # base + PSE retenue
         self.assertEqual(self.client.get(f"/api/projets/{self.projet.pk}/comparatif-offres.xlsx", {"lot_id": lot11.pk}).status_code, 200)
+        lot11.code = "11/12"
+        lot11.save()
+        LotProjet.objects.create(projet=self.projet, lot=Lot.objects.get(code="12"), code="11:12", intitule="Peinture", ordre=3)
+        classeur = load_workbook(io.BytesIO(self.client.get(f"/api/projets/{self.projet.pk}/comparatif-offres.xlsx").content))
+        self.assertEqual(classeur.sheetnames, ["Lot 08", "Lot 11-12", "Lot 11-12 (2)"])
 
         etat = self.json("get", f"/api/projets/{self.projet.pk}/offres")
-        self.assertEqual([l["code"] for l in etat["lots"]], ["08", "11"])
+        self.assertEqual([l["code"] for l in etat["lots"]], ["08", "11/12", "11:12"])
         self.assertEqual(etat["lots"][1]["offres"], [])
         self.assertTrue(AnalyseLot.objects.filter(lot=self.lot).exists())
 
