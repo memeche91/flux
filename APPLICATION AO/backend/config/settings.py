@@ -221,6 +221,8 @@ GED_DISQUE_LIBRE_MIN_GO = int(env("GED_DISQUE_LIBRE_MIN_GO") or "5")
 TESTS = len(sys.argv) > 1 and sys.argv[1] == "test"
 # Dossier des archives de fin de chantier (monté depuis le PC ou le serveur du cabinet).
 DOSSIER_ARCHIVES = Path(env("DOSSIER_ARCHIVES", str(MEDIA_ROOT / "archives")))
+# Emplacement du dossier d'archives tel que le cabinet le voit sur le PC (affichage seulement).
+DOSSIER_ARCHIVES_AFFICHE = env("DOSSIER_ARCHIVES_AFFICHE", "donnees\\archives")
 # Assistant IA local (administrateur) : Ollama pour le texte, Whisper et Piper pour la voix.
 # Tout tourne sur le poste ou le serveur du cabinet ; seuls les modèles sont téléchargés.
 OLLAMA_URL = env("OLLAMA_URL", "http://localhost:11434").rstrip("/")

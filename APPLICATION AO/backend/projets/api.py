@@ -327,8 +327,21 @@ def modifier_projet(request, projet_id: int, donnees: ProjetModification):
     return _projet_out(projet)
 
 
+@router.get("/projets/{projet_id}/bilan")
+def bilan_projet(request, projet_id: int):
+    """Ce que la suppression du projet ferait perdre (prix reçus, historique de l'annuaire…)."""
+    from ged.archivage import bilan_projet as bilan
+
+    return bilan(get_object_or_404(Projet, pk=projet_id))
+
+
 @router.delete("/projets/{projet_id}", response={204: None})
 def supprimer_projet(request, projet_id: int):
+    """Suppression totale, réservée à l'administrateur : après un chantier, archivez puis purgez les fichiers."""
+    from ninja.errors import HttpError
+
+    if not request.auth.est_administrateur:
+        raise HttpError(403, "La suppression d'un projet est réservée à l'administrateur. Pour libérer de la place, archivez le projet puis purgez ses fichiers.")
     get_object_or_404(Projet, pk=projet_id).delete()
     return 204, None
 

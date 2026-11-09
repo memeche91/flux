@@ -72,7 +72,7 @@ def version_out(v: Version, document: Document, acteur: Acteur, statut: str) -> 
         "echeance_visa": v.echeance_visa, "visa_en_retard": attente and v.echeance_visa is not None and v.echeance_visa < aujourd_hui,
         "jours_restants": (v.echeance_visa - aujourd_hui).days if attente and v.echeance_visa else None,
         "nouvel_indice_attendu": v.nouvel_indice_attendu, "nom_telechargement": nom_telechargement(document, v, statut),
-        "indice_force": v.indice_force,
+        "indice_force": v.indice_force, "fichier_archive": not v.fichier,
         "sources": [{"id": s.pk, "nom_original": s.nom_original, "taille": s.taille} for s in v.sources.all()],
         "avis": [], "peut_donner_avis": peut_donner_avis(acteur, v) and espace.statut != StatutEspace.CLOS,
         "lecture_requise": document.categorie in LECTURE_REQUISE and document.zone == Zone.LOT, "accuses": [], "lu_le": None,
