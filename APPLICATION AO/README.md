@@ -3,7 +3,7 @@
 Application web pour gérer les appels d'offres de A à Z : pièces écrites (CCTP, DPGF, CCAP, RC, AE), DCE, analyse des offres (rapport ACT) et GED de chantier.
 L'application est **100 % gratuite et open source**. Elle tourne sur un poste ou un serveur du cabinet, et aucune donnée n'est envoyée sur Internet.
 
-> **Version actuelle : étape 1.4.** Bibliothèque, articles et prix (1.0 et 1.1), CCTP et DPGF (1.2), CCAP, RC et actes d'engagement à partir de modèles vérifiés (1.3), et maintenant l'**assistant IA local** de l'administrateur, à l'écrit et à la voix : il répond à partir de vos documents, de vos prix et des modèles vérifiés, sans rien envoyer sur Internet.
+> **Version actuelle : étape 2.** Pièces écrites et assistant IA local (étape 1), et maintenant le **DCE** : annuaire des entreprises, dossier .zip classé automatiquement, transmission au maître d'ouvrage (marché public) ou envoi à chaque entreprise d'un dossier limité à ses lots (marché privé).
 
 ---
 
@@ -132,6 +132,37 @@ La sauvegarde et l'archivage complet (export du chantier sur le PC ou le serveur
 | DPGF vierge | Excel, PDF | Page de garde avec **cadre réservé à l'entreprise**, quantités, prix à compléter, sous-totaux et totaux en formules, récapitulatif HT / TVA / TTC, emplacement pour cachet et signature |
 | DPGF chiffrée | Excel, PDF | La même DPGF avec vos prix unitaires : estimation du maître d'œuvre |
 
+### Entreprises (annuaire)
+
+- **Bibliothèque des entreprises** : coordonnées, SIRET, lots sur lesquels l'entreprise est consultée, savoir-faire, qualifications (Qualibat, RGE…), assureur et échéance de l'attestation décennale (signalée quand elle est échue), contacts, notes internes.
+- **Import de votre carnet d'adresses** (Excel ou CSV) : les colonnes sont reconnues (Entreprise, Ville, E-mail, Lots, Contact…), les lots sont retrouvés par leur code ou leur intitulé, et une fiche existante est complétée, jamais écrasée. **Export** en un clic.
+- **Historique** : chaque fiche montre les projets et les lots pour lesquels l'entreprise a été consultée, et la suite donnée (offre remise, excusée, retenue…).
+
+### DCE (dossier de consultation des entreprises)
+
+Bouton **Préparer le DCE** sur la page du projet :
+
+1. **Contrôle du dossier** : pièces manquantes, champs à compléter dans le RC, le CCAP et les actes d'engagement, ouvrages sans quantité, date limite, plans.
+2. **Plans et documents à joindre** : plans, études, diagnostics, PGC… sans limite de nombre, communs ou rattachés à un lot.
+3. **Génération du .zip**, classé ainsi :
+
+```
+DCE <opération> - Indice A/
+  00 - Bordereau des pièces.pdf
+  01 - Pièces administratives/    RC, CCAP, Actes d'engagement/ (Word + PDF)
+  02 - Pièces techniques/
+       Lot 08 - Menuiseries extérieures/   CCTP (PDF), DPGF à compléter (Excel + PDF), Plans du lot/
+  03 - Plans/   04 - Études et rapports/   05 - Diagnostics/
+  06 - Sécurité et santé (PGC)/   07 - Autres documents/
+```
+
+4. **Diffusion**, selon le type de marché :
+   - **Marché public** : transmission du DCE au **maître d'ouvrage**, qui le publie sur son profil d'acheteur ; invitation facultative d'entreprises à le consulter sur la plateforme (sans pièce jointe : la plateforme fait foi).
+   - **Marché privé** : choix des entreprises de l'annuaire pour chaque lot ; chacune reçoit **un dossier limité à ses lots**, avec une **lettre de consultation** personnalisée.
+5. **Suivi des envois** et statut de chaque entreprise (consultée, offre remise, excusée…).
+
+**Envoi des courriels** : renseignez la messagerie du cabinet dans `.env` (lignes `EMAIL_…`, voir `.env.example`), puis relancez `installer.ps1`. Sans messagerie, l'application prépare chaque message (bouton **Ouvrir dans ma messagerie**) et vous l'envoyez vous-même. Un dossier de plus de 20 Mo n'est pas joint : transmettez-le par [FranceTransfert](https://francetransfert.numerique.gouv.fr) (gratuit) ou un service équivalent.
+
 ### Assistant IA (administrateur)
 
 - Page **Assistant** (visible par l'administrateur uniquement) : une conversation à l'écrit ou **au micro**, et les réponses **lues à voix haute** si vous le souhaitez.
@@ -174,10 +205,12 @@ APPLICATION AO/
 │   ├── bibliotheque/      Documents de référence, import, lecture (conversion, OCR)
 │   ├── articles/          Découpage en articles, lignes de prix, normes citées
 │   ├── projets/           Projets, lots, PSE, CCTP et DPGF, CCAP / RC / AE, modèles, exports Word / PDF / Excel
+│   ├── entreprises/       Annuaire des entreprises (import, historique)
+│   ├── dce/               Dossier de consultation : contrôle, .zip classé, envois
 │   └── assistant/         Assistant IA local : recherche par le sens, conversations, voix
 └── frontend/              React 19 · TypeScript · Vite · Tailwind CSS
     └── src/
-        ├── pages/         Connexion, Tableau de bord, Projets, éditeurs de lot et de pièce, Documents, Articles, Prix, Assistant
+        ├── pages/         Connexion, Tableau de bord, Projets, éditeurs, DCE, Entreprises, Documents, Articles, Prix, Assistant
         ├── components/    En-tête, liste des lots, zone d'import, tableau
         └── api/           Accès à l'API (session + protection CSRF)
 ```
@@ -223,6 +256,6 @@ npm install && npm run dev
 - [x] **1.2** Rédaction CCTP / DPGF (PSE, variantes), éditeur visuel, exports Word / PDF / Excel
 - [x] **1.3** CCAP, RC, AE à partir de modèles, champs automatiques, paramètres de la consultation
 - [x] **1.4** Assistant IA local (chat et voix, administrateur uniquement)
-- [ ] **2** DCE : dossier .zip classé, annuaire des entreprises
+- [x] **2** DCE : dossier .zip classé, annuaire des entreprises, envois public / privé
 - [ ] **3** Analyse des offres et rapport ACT
 - [ ] **4** GED de chantier, accès entreprises, archivage

@@ -180,19 +180,19 @@ CELERY_TASK_ROUTES = {
 
 # Courriels (envoi du DCE, puis notifications de la GED) : la messagerie du cabinet, en SMTP.
 # Sans réglage, l'application prépare les messages et vous les envoyez vous-même.
-EMAIL_HOST = env("EMAIL_HOST", "")
-EMAIL_PORT = int(env("EMAIL_PORT", "587"))
-EMAIL_HOST_USER = env("EMAIL_HOST_USER", "")
-EMAIL_HOST_PASSWORD = env("EMAIL_HOST_PASSWORD", "")
+EMAIL_HOST = (env("EMAIL_HOST") or "").strip()
+EMAIL_PORT = int(env("EMAIL_PORT") or "587")
+EMAIL_HOST_USER = (env("EMAIL_HOST_USER") or "").strip()
+EMAIL_HOST_PASSWORD = env("EMAIL_HOST_PASSWORD") or ""
 EMAIL_USE_TLS = env_bool("EMAIL_USE_TLS", True)
 EMAIL_USE_SSL = env_bool("EMAIL_USE_SSL", False)
 EMAIL_TIMEOUT = 60
-DEFAULT_FROM_EMAIL = env("DEFAULT_FROM_EMAIL", EMAIL_HOST_USER or "application-ao@localhost")
+DEFAULT_FROM_EMAIL = (env("DEFAULT_FROM_EMAIL") or "").strip() or EMAIL_HOST_USER or "application-ao@localhost"
 if env("EMAIL_BACKEND"):
     EMAIL_BACKEND = env("EMAIL_BACKEND")
     EMAIL_FILE_PATH = env("EMAIL_FILE_PATH", str(MEDIA_ROOT / "courriels"))
 EMAIL_ACTIF = bool(EMAIL_HOST or env("EMAIL_BACKEND"))
-EMAIL_PIECE_JOINTE_MAX_MO = int(env("EMAIL_PIECE_JOINTE_MAX_MO", "20"))
+EMAIL_PIECE_JOINTE_MAX_MO = int(env("EMAIL_PIECE_JOINTE_MAX_MO") or "20")
 
 # Assistant IA local (administrateur) : Ollama pour le texte, Whisper et Piper pour la voix.
 # Tout tourne sur le poste ou le serveur du cabinet ; seuls les modèles sont téléchargés.
