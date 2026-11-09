@@ -1,0 +1,15 @@
+{% extends "dce/_base.html" %}
+{% block contenu %}
+<div class="entete">
+  <p><strong>{{ projet.maitre_oeuvre|default:"Maîtrise d'œuvre" }}</strong></p>
+  <p class="discret">{{ projet.nom }}</p>
+</div>
+<p style="margin-left: 95mm;">
+  <strong>{{ entreprise.raison_sociale }}</strong><br>
+  {% if entreprise.adresse %}{{ entreprise.adresse }}<br>{% endif %}
+  {{ entreprise.code_postal }} {{ entreprise.ville }}
+</p>
+<p style="margin-left: 95mm;">Le {{ date|date:"j F Y" }}</p>
+<p><strong>Objet : consultation – {{ projet.nom }}{% if lots %} – {% for lot in lots %}lot {{ lot.code }}{% if not forloop.last %}, {% endif %}{% endfor %}{% endif %}</strong></p>
+{% for paragraphe in paragraphes %}<p>{{ paragraphe|linebreaksbr }}</p>{% endfor %}
+{% endblock %}

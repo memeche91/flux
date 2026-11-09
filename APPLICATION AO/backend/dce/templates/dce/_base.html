@@ -1,0 +1,27 @@
+{% load format_fr %}<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<style>
+  @page { size: A4; margin: 18mm 16mm 18mm 16mm;
+    @bottom-left { content: "{{ projet.nom|chaine_css }} – DCE indice {{ indice|chaine_css }}"; font-family: {{ police|safe }}; font-size: 7.5pt; color: #666; }
+    @bottom-right { content: "Page " counter(page) " / " counter(pages); font-family: {{ police|safe }}; font-size: 7.5pt; color: #666; } }
+  body { font-family: {{ police|safe }}; font-size: 9.5pt; color: #1a1a1a; line-height: 1.4; }
+  h1 { color: {{ couleur_titres }}; font-size: 17pt; margin: 0 0 2mm; }
+  .entete { border-bottom: 2px solid {{ couleur_titres }}; padding-bottom: 4mm; margin-bottom: 6mm; }
+  .entete p { margin: 0.6mm 0; }
+  .discret { color: #555; }
+  table { width: 100%; border-collapse: collapse; margin-bottom: 4mm; }
+  th { background: {{ couleur_tableaux }}; text-align: left; font-size: 8.5pt; padding: 1.6mm 2mm; border: 0.4pt solid #b9c2cf; }
+  td { padding: 1.4mm 2mm; border: 0.4pt solid #d0d6de; vertical-align: top; }
+  td.numero, td.format { width: 12mm; white-space: nowrap; }
+  td.format { width: 16mm; }
+  tr.rubrique td { background: #f2f4f7; font-weight: bold; color: {{ couleur_titres }}; }
+  .nom { font-size: 7.5pt; color: #666; word-break: break-all; }
+  .signature { margin-top: 10mm; }
+</style>
+</head>
+<body>
+{% block contenu %}{% endblock %}
+</body>
+</html>

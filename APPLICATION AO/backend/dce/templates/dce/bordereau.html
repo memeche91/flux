@@ -1,0 +1,24 @@
+{% extends "dce/_base.html" %}
+{% block contenu %}
+<div class="entete">
+  <h1>Bordereau des pièces du DCE</h1>
+  <p><strong>{{ projet.nom }}</strong>{% if projet.numero %} – affaire n° {{ projet.numero }}{% endif %}</p>
+  {% if projet.maitre_ouvrage %}<p>Maître d'ouvrage : {{ projet.maitre_ouvrage }}</p>{% endif %}
+  {% if projet.maitre_oeuvre %}<p>Maîtrise d'œuvre : {{ projet.maitre_oeuvre }}</p>{% endif %}
+  <p>{{ projet.get_type_marche_display }}{% if projet.procedure %} – {{ projet.procedure }}{% endif %}</p>
+  <p class="discret">Dossier de consultation des entreprises – indice {{ indice }} du {{ date|date:"j F Y" }}</p>
+  {% if entreprise %}<p>Dossier établi pour : <strong>{{ entreprise.raison_sociale }}</strong>{% if lots %} – {% for lot in lots %}lot {{ lot.code }} {{ lot.intitule }}{% if not forloop.last %}, {% endif %}{% endfor %}{% endif %}</p>{% endif %}
+</div>
+<table>
+  <thead><tr><th>N°</th><th>Pièce</th><th>Format</th></tr></thead>
+  <tbody>
+  {% for rubrique in rubriques %}
+    {% if rubrique.dossier %}<tr class="rubrique"><td colspan="3">{{ rubrique.dossier }}</td></tr>{% endif %}
+    {% for fichier in rubrique.fichiers %}
+    <tr><td class="numero">{{ fichier.numero }}</td><td>{{ fichier.designation }}<div class="nom">{{ fichier.nom }}</div></td><td class="format">{{ fichier.format }}</td></tr>
+    {% endfor %}
+  {% endfor %}
+  </tbody>
+</table>
+<p class="discret">Les quantités de la décomposition du prix global et forfaitaire (DPGF) sont données à titre indicatif : l'entreprise les vérifie et les complète sous sa responsabilité.</p>
+{% endblock %}
