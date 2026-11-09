@@ -1,6 +1,6 @@
 @import "tailwindcss";
 
-/* Thème « Chantier Nuit » : graphite + jaune chantier. */
+/* Thème « Chantier Nuit » : graphite + vert sauge de l'agence (logo Vignier Architecte). */
 @theme {
   --color-fond: #121417;
   --color-entete: #171a1e;
@@ -10,9 +10,11 @@
   --color-bordure-forte: #3a414b;
   --color-texte: #eceef1;
   --color-attenue: #9aa3af;
-  --color-accent: #f5b700;
-  --color-accent-clair: #ffc933;
+  --color-accent: #8b9d75;
+  --color-accent-clair: #a2b190;
   --color-sur-accent: #121417;
+  /* Points d'attention (à compléter, à vérifier, à reprendre) : ambre, distinct de la marque. */
+  --color-attention: #e9a93a;
   --color-succes: #4ade80;
   --color-info: #60a5fa;
   --color-danger: #f87171;
