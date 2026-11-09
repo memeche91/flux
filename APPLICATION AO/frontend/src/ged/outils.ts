@@ -27,6 +27,34 @@ export function indiceSuivant(indice: string | null | undefined): string {
   return `A${lettres.join("")}`;
 }
 
+/** Clé de tri des indices : 0 < 1 < A < A1 < B < Z < AA (mêmes règles que le serveur). */
+function cleIndice(indice: string): [number, number, string, number] {
+  const propre = normaliserIndice(indice);
+  if (/^\d+$/.test(propre)) return [0, Number(propre), "", 0];
+  const lettres = propre.replace(/\d+$/, "");
+  return [1, lettres.length, lettres, Number(propre.slice(lettres.length) || 0)];
+}
+
+/** Plus haut indice d'un document (après un indice hors séquence, le suivant part de celui-ci). */
+export function indicePlusHaut(indices: string[]): string | null {
+  let haut: string | null = null;
+  for (const indice of indices) {
+    if (haut === null) {
+      haut = indice;
+      continue;
+    }
+    const a = cleIndice(indice);
+    const b = cleIndice(haut);
+    for (let i = 0; i < 4; i += 1) {
+      if (a[i] !== b[i]) {
+        if (a[i] > b[i]) haut = indice;
+        break;
+      }
+    }
+  }
+  return haut;
+}
+
 export interface NomAnalyse {
   base: string;
   extension: string;

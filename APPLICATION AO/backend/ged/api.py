@@ -192,7 +192,7 @@ def _creer_intervenant(espace: EspaceChantier, donnees: IntervenantIn, request) 
     if donnees.profil == Profil.ENTREPRISE and not lots:
         raise HttpError(400, f"Choisissez au moins un lot pour {nom}.")
     titulaire = None
-    if donnees.sous_traitant_de:
+    if donnees.sous_traitant_de and donnees.profil == Profil.ENTREPRISE:
         titulaire = get_object_or_404(Intervenant, pk=donnees.sous_traitant_de, espace=espace, profil=Profil.ENTREPRISE)
     intervenant = Intervenant.objects.create(
         espace=espace, entreprise=entreprise, nom=nom[:255], profil=donnees.profil, sous_traitant_de=titulaire,
@@ -428,6 +428,13 @@ def modifier_document(request, espace_id: int, document_id: int, donnees: Modifi
     acteur = _acteur(request)
     document = vues.document_visible(acteur, espace, document_id)
     champs = donnees.model_dump(exclude_unset=True)
+    categorie = (champs.get("categorie") or "").strip()
+    if categorie and categorie != document.categorie:
+        # Contrôles faits avant toute écriture : une requête refusée ne doit rien modifier.
+        if categorie not in PAR_CODE:
+            raise HttpError(400, "Catégorie inconnue.")
+        if document.zone == Zone.COMMUN and categorie in CONFIDENTIELLES:
+            raise HttpError(400, MESSAGE_CONFIDENTIELLE_COMMUN)
     if champs.get("annule") is True and not document.annule:
         annuler(acteur, document, champs.get("motif_annulation") or "")
     elif champs.get("annule") is False and document.annule:

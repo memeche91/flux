@@ -226,7 +226,7 @@ function CarteArchive({
         <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-accent/50 bg-accent/10 px-3 py-2">
           <p className="text-sm">
             Purge des fichiers programmée le <strong>{formaterJour(a.purge_prevue_le)}</strong> : jusque-là, tout reste disponible et la purge peut être
-            annulée.
+            annulée. Un document déposé ou visé après l'archive empêche la purge : préparez alors une nouvelle archive.
           </p>
           <div className="flex flex-wrap gap-2">
             <button

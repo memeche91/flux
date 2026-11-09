@@ -46,11 +46,16 @@ function Session() {
   const [espace, setEspace] = useState<EspacePortail | null>(null);
   const [verification, setVerification] = useState(!codeInvitation);
   const [expiree, setExpiree] = useState(false);
+  const [sessionExistante, setSessionExistante] = useState<EspacePortail | null>(null);
 
   useEffect(() => {
     if (codeInvitation) {
       // Code retiré de l'adresse (historique, captures d'écran).
       window.history.replaceState(null, "", window.location.pathname + window.location.search);
+      // Session déjà ouverte : proposée si le code du lien n'est plus valide.
+      apiPortail<EspacePortail>("/ged/portail/espace")
+        .then(setSessionExistante)
+        .catch(() => setSessionExistante(null));
     } else {
       apiPortail<EspacePortail>("/ged/portail/espace")
         .then(setEspace)
@@ -73,6 +78,7 @@ function Session() {
       <Connexion
         codeInitial={codeInvitation}
         expiree={expiree}
+        sessionExistante={sessionExistante}
         surConnecte={(e) => {
           setExpiree(false);
           setCodeInvitation("");
@@ -83,7 +89,17 @@ function Session() {
   return <Espace espace={espace} surMaj={setEspace} surDeconnecte={() => setEspace(null)} />;
 }
 
-function Connexion({ codeInitial, expiree, surConnecte }: { codeInitial: string; expiree: boolean; surConnecte: (espace: EspacePortail) => void }) {
+function Connexion({
+  codeInitial,
+  expiree,
+  sessionExistante,
+  surConnecte,
+}: {
+  codeInitial: string;
+  expiree: boolean;
+  sessionExistante: EspacePortail | null;
+  surConnecte: (espace: EspacePortail) => void;
+}) {
   const [code, setCode] = useState(codeInitial);
   const [memoriser, setMemoriser] = useState(false);
   const [erreur, setErreur] = useState<string | null>(null);
@@ -147,6 +163,11 @@ function Connexion({ codeInitial, expiree, surConnecte }: { codeInitial: string;
           {envoi ? "Vérification…" : "Accéder aux documents"}
         </button>
       </form>
+      {sessionExistante && (
+        <button type="button" onClick={() => surConnecte(sessionExistante)} className={`${CLASSE_BOUTON} justify-center`}>
+          Continuer avec la session ouverte ({sessionExistante.personne.nom}, {sessionExistante.intervenant.nom})
+        </button>
+      )}
       <p className="text-sm text-attenue">
         Le code figure dans le courriel d'invitation de la maîtrise d'œuvre. Il est personnel : chacun de vos collègues peut recevoir le sien. Code perdu ou ne
         fonctionnant plus ? Demandez-en un nouveau à la maîtrise d'œuvre.

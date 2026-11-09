@@ -12,6 +12,7 @@ import {
   CLASSE_BOUTON,
   CLASSE_BOUTON_PRINCIPAL,
   identifiantDepot,
+  indicePlusHaut,
   indiceSuivant,
   messageErreur,
   normaliserIndice,
@@ -307,7 +308,7 @@ export default function Depot({ client, droits, referentiels, documents, zoneIni
         <ul className="flex flex-col gap-2">
           {lignes.map((ligne) => {
             const existant = documents.find((d) => d.id === ligne.documentId);
-            const suggestion = existant ? indiceSuivant(existant.versions[0]?.indice) : "A";
+            const suggestion = existant ? indiceSuivant(indicePlusHaut(existant.versions.map((v) => v.indice))) : "A";
             const pasPdf = pdfExige && !ligne.fichier.name.toLowerCase().endsWith(".pdf");
             const fige = ligne.etat === "fait" || ligne.etat === "envoi";
             return (

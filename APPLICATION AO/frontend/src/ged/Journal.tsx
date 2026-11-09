@@ -14,6 +14,7 @@ export default function Journal({ client, surOuvrirDocument }: { client: ClientG
   const [total, setTotal] = useState<number | null>(null);
   const [page, setPage] = useState(1);
   const [chargement, setChargement] = useState(false);
+  const [fin, setFin] = useState(false);
   const [erreur, setErreur] = useState<string | null>(null);
 
   const charger = useCallback(
@@ -28,6 +29,7 @@ export default function Journal({ client, surOuvrirDocument }: { client: ClientG
           );
           setTotal(resultat.total);
           setPage(numero);
+          setFin(resultat.resultats.length < PAR_PAGE);
         })
         .catch((p: unknown) => setErreur(messageErreur(p, "Journal indisponible.")))
         .finally(() => setChargement(false));
@@ -97,7 +99,7 @@ export default function Journal({ client, surOuvrirDocument }: { client: ClientG
           </tbody>
         </table>
       </div>
-      <BoutonAfficherPlus reste={total - evenements.length} chargement={chargement} surClic={() => charger(page + 1)} />
+      <BoutonAfficherPlus reste={fin ? 0 : Math.max(1, total - evenements.length)} chargement={chargement} surClic={() => charger(page + 1)} />
       <p className="text-xs text-attenue">{PAR_PAGE} événements par page · journal conservé avec l'archive du chantier.</p>
     </div>
   );

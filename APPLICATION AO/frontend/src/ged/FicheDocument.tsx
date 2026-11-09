@@ -14,6 +14,7 @@ import {
   formaterJour,
   FORMAT_INDICE,
   identifiantDepot,
+  indicePlusHaut,
   indiceSuivant,
   messageErreur,
   normaliserIndice,
@@ -332,7 +333,7 @@ function FormulaireIndice({
   surEnvoi,
   surFermer,
 }: { surEnvoi: (enCours: boolean) => void; surFermer: () => void } & Omit<Proprietes, "document"> & { document: DocumentGed }) {
-  const precedent = d.versions[0]?.indice;
+  const precedent = indicePlusHaut(d.versions.map((v) => v.indice));
   const categorie = referentiels.categories.find((c) => c.code === d.categorie);
   const pdfExige = !droits.choix_diffusion && Boolean(categorie?.visa);
   const [fichier, setFichier] = useState<File | null>(null);

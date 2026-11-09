@@ -213,7 +213,7 @@ if env("REDIS_URL"):
 # (réseau local) ; GED_URL_PUBLIQUE : adresse Internet racine, sans chemin (https://ged.cabinet.fr),
 # vide quand la GED n'est pas ouverte sur Internet ; les entreprises ouvrent cette adresse + /ged.
 URL_APPLICATION = (env("URL_APPLICATION") or f"http://localhost:{env('APP_PORT', '8080')}").strip()
-GED_URL_PUBLIQUE = (env("GED_URL_PUBLIQUE") or "").strip()
+GED_URL_PUBLIQUE = (env("GED_URL_PUBLIQUE") or "").strip().rstrip("/")
 # Adresse IP des visiteurs fiable (transmise par Caddy depuis l'adresse publique, tunnel ou IP fixe
 # vérifiée) : seulement alors une adresse peut être bloquée après des codes erronés.
 GED_IP_FIABLE = env_bool("GED_IP_FIABLE", False)

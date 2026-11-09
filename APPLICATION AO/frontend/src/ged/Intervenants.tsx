@@ -37,6 +37,8 @@ export default function Intervenants({ etat, surMaj, surInvitations }: Propriete
   const [erreur, setErreur] = useState<string | null>(null);
   const [envoi, setEnvoi] = useState(false);
 
+  const [ajoutees, setAjoutees] = useState<number[]>([]);
+
   async function ajouterSuggestion(suggestion: EtatGed["suggestions"][number]) {
     if (envoi) return; // double clic : un seul intervenant créé
     setEnvoi(true);
@@ -52,6 +54,7 @@ export default function Intervenants({ etat, surMaj, surInvitations }: Propriete
           personnes: suggestion.personnes,
         }),
       });
+      setAjoutees((liste) => [...liste, suggestion.entreprise_id]);
       surInvitations(resultat.invitations);
       surMaj();
     } catch (p) {
@@ -69,27 +72,30 @@ export default function Intervenants({ etat, surMaj, surInvitations }: Propriete
           Lots sans entreprise active : {espace.lots_sans_entreprise.map((l) => `${l.code} – ${l.intitule}`).join(" ; ")}.
         </p>
       )}
-      {etat.suggestions.length > 0 && !clos && (
+      {etat.suggestions.some((x) => !ajoutees.includes(x.entreprise_id)) && !clos && (
         <section aria-labelledby="titre-suggestions" className="flex flex-col gap-2 rounded-xl border border-bordure bg-surface p-4">
           <h3 id="titre-suggestions" className="font-titre font-semibold">
             Entreprises retenues à l'analyse des offres
           </h3>
           <ul className="flex flex-col gap-2">
-            {etat.suggestions.map((s) => (
-              <li key={s.entreprise_id} className="flex flex-wrap items-center justify-between gap-3">
-                <span>
-                  <span className="font-semibold">{s.nom}</span>
-                  <span className="text-sm text-attenue">
-                    {" "}
-                    · lots {s.lots.map((l) => l.code).join(", ")} · {s.personnes.length ? s.personnes.map((p) => p.email || p.nom).join(", ") : "aucun contact"}
+            {etat.suggestions
+              .filter((x) => !ajoutees.includes(x.entreprise_id))
+              .map((s) => (
+                <li key={s.entreprise_id} className="flex flex-wrap items-center justify-between gap-3">
+                  <span>
+                    <span className="font-semibold">{s.nom}</span>
+                    <span className="text-sm text-attenue">
+                      {" "}
+                      · lots {s.lots.map((l) => l.code).join(", ")} ·{" "}
+                      {s.personnes.length ? s.personnes.map((p) => p.email || p.nom).join(", ") : "aucun contact"}
+                    </span>
                   </span>
-                </span>
-                <button type="button" onClick={() => void ajouterSuggestion(s)} disabled={envoi} className={CLASSE_BOUTON}>
-                  <UserPlus aria-hidden="true" className="size-4" />
-                  Donner accès
-                </button>
-              </li>
-            ))}
+                  <button type="button" onClick={() => void ajouterSuggestion(s)} disabled={envoi} className={CLASSE_BOUTON}>
+                    <UserPlus aria-hidden="true" className="size-4" />
+                    Donner accès
+                  </button>
+                </li>
+              ))}
           </ul>
         </section>
       )}

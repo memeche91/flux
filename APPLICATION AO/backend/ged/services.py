@@ -277,12 +277,16 @@ def donner_avis(acteur: Acteur, version: Version, *, avis: str, observations: st
         raise HttpError(403, "Vous ne pouvez pas donner d'avis sur cet indice (il n'est pas, ou plus, en attente de visa).")
     if avis not in Avis.values:
         raise HttpError(400, "Avis inconnu.")
+    if fichier is not None:
+        verifier_fichier(fichier, version.document.espace)
+    # Un intervenant n'a qu'un avis par indice : le nouveau remplace le précédent (fichier compris).
+    for ancien in AvisVersion.objects.filter(version=version, intervenant=acteur.intervenant):
+        ancien.delete()
     avis_version = AvisVersion(
         version=version, role=role_avis(acteur), avis=avis, observations=(observations or "").strip()[:4000],
         intervenant=acteur.intervenant, acces=acteur.acces, auteur_nom=acteur.nom[:255],
     )
     if fichier is not None:
-        verifier_fichier(fichier, version.document.espace)
         avis_version.nom_original = (fichier.name or "avis")[:255]
         avis_version.fichier.save(fichier.name or "avis", fichier, save=False)
     avis_version.save()

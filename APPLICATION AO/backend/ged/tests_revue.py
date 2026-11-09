@@ -209,3 +209,19 @@ class RevueGedTests(TestCase):
         avant = fichiers_sur_disque()
         self.poster(durand, f"{DOCUMENTS}/{plan['id']}/versions", {"fichier": fichier(), "sources": [fichier("plan.html", b"<html>")]}, attendu=400)
         self.assertEqual(fichiers_sur_disque(), avant)
+
+    # --- Suites de la vérification : avis remplacé, modification refusée sans effet ----------
+    def test_un_seul_avis_par_intervenant(self):
+        self.ouvrir()
+        durand, bet = self.portail("Menuiseries Durand"), self.portail("BET Fluides")
+        version = self.deposer_exe(durand)["versions"][0]["id"]
+        self.poster(bet, f"/api/ged/portail/versions/{version}/avis", {"avis": "REF", "observations": "Premier avis", "fichier": fichier("avis1.pdf")}, attendu=200)
+        self.poster(bet, f"/api/ged/portail/versions/{version}/avis", {"avis": "VSO", "observations": "Avis corrigé"}, attendu=200)
+        avis = AvisVersion.objects.get(version_id=version)
+        self.assertEqual((avis.avis, avis.observations, bool(avis.fichier)), ("VSO", "Avis corrigé", False))
+
+    def test_modification_refusee_n_annule_pas(self):
+        self.ouvrir()
+        document = self.poster(self.client, self.url("/documents"), {"fichier": fichier(), "zone": "COMMUN", "categorie": "MAR"}, attendu=201)
+        self.json(self.client, "patch", self.url(f"/documents/{document['id']}"), {"annule": True, "motif_annulation": "essai", "categorie": "TS"}, attendu=400)
+        self.assertFalse(Document.objects.get(pk=document["id"]).annule)

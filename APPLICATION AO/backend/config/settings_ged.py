@@ -12,8 +12,8 @@ from .settings import GED_URL_PUBLIQUE
 
 ROOT_URLCONF = "config.urls_ged"
 _publique = urlsplit(GED_URL_PUBLIQUE)
-if _publique.scheme != "https" or not _publique.hostname:
-    raise ImproperlyConfigured("GED_URL_PUBLIQUE doit être une adresse https://… (par exemple https://ged.cabinet.fr).")
+if _publique.scheme != "https" or not _publique.hostname or _publique.path or _publique.query or _publique.fragment:
+    raise ImproperlyConfigured("GED_URL_PUBLIQUE doit être une adresse https://nom sans chemin (par exemple https://ged.cabinet.fr).")
 ALLOWED_HOSTS = [_publique.hostname]
 CSRF_TRUSTED_ORIGINS = [f"https://{_publique.netloc}"]
 SESSION_COOKIE_SECURE = True
