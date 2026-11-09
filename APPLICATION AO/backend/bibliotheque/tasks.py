@@ -69,3 +69,11 @@ def analyser_document(document_id: int) -> None:
             document.texte_extrait = texte
 
     document.save(update_fields=["statut_analyse", "message_analyse", "texte_extrait"])
+    if document.statut_analyse == StatutAnalyse.ANALYSE:
+        # L'assistant IA apprend les nouveaux articles et prix (sans effet si l'IA n'est pas installée).
+        try:
+            from assistant.tasks import planifier_indexation
+
+            planifier_indexation()
+        except Exception:  # noqa: BLE001 - l'analyse du document reste valable
+            logger.exception("Mise à jour de l'index de l'assistant impossible")

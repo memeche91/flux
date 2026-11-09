@@ -20,7 +20,7 @@ function lireCookie(nom: string): string | null {
   return null;
 }
 
-async function assurerJetonCsrf(): Promise<string> {
+export async function assurerJetonCsrf(): Promise<string> {
   let jeton = lireCookie("csrftoken");
   if (!jeton) {
     await fetch("/api/auth/csrf", { credentials: "same-origin" });
@@ -29,7 +29,7 @@ async function assurerJetonCsrf(): Promise<string> {
   return jeton ?? "";
 }
 
-function messageDepuisCorps(corps: unknown, statut: number): string {
+export function messageDepuisCorps(corps: unknown, statut: number): string {
   if (corps && typeof corps === "object" && "detail" in corps) {
     const detail = (corps as { detail: unknown }).detail;
     if (typeof detail === "string") return detail;
@@ -45,7 +45,7 @@ function messageDepuisCorps(corps: unknown, statut: number): string {
   return `Erreur ${statut}`;
 }
 
-function signalerSiSessionExpiree(statut: number, chemin: string) {
+export function signalerSiSessionExpiree(statut: number, chemin: string) {
   if (statut === 401 && !chemin.startsWith("/auth/")) {
     window.dispatchEvent(new Event(EVENEMENT_SESSION_EXPIREE));
   }

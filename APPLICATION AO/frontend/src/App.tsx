@@ -4,6 +4,7 @@ import { FournisseurAuth } from "./auth/AuthContext";
 import Layout from "./components/Layout";
 import RouteProtegee from "./components/RouteProtegee";
 import Articles from "./pages/Articles";
+import Assistant from "./pages/Assistant";
 import Bibliotheque from "./pages/Bibliotheque";
 import Connexion from "./pages/Connexion";
 import LotEditeur from "./pages/LotEditeur";
@@ -30,6 +31,7 @@ export default function App() {
             <Route path="bibliotheque" element={<Bibliotheque />} />
             <Route path="articles" element={<Articles />} />
             <Route path="prix" element={<Prix />} />
+            <Route path="assistant" element={<Assistant />} />
             <Route path="projets" element={<Projets />} />
             <Route path="projets/:projetId" element={<ProjetDetail />} />
             <Route path="projets/:projetId/lots/:lotId" element={<LotEditeur />} />

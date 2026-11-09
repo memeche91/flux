@@ -324,3 +324,53 @@ export const NOMS_PIECES: Record<TypePiece, string> = {
   RC: "Règlement de consultation",
   AE: "Acte d'engagement",
 };
+
+// --- Assistant IA local (étape 1.4) ---
+
+export interface SourceAssistant {
+  numero: number;
+  type: "ARTICLE" | "PRIX" | "MODELE";
+  titre: string;
+  detail: string;
+  lien: string;
+}
+
+export interface MessageAssistant {
+  id: number;
+  role: "user" | "assistant";
+  texte: string;
+  sources: SourceAssistant[];
+  interrompu: boolean;
+  cree_le: string;
+}
+
+export interface ConversationResume {
+  id: number;
+  titre: string;
+  projet: { id: number; nom: string } | null;
+  modifie_le: string;
+}
+
+export interface ConversationDetail extends ConversationResume {
+  messages: MessageAssistant[];
+}
+
+export interface EtatAssistant {
+  moteur: {
+    joignable: boolean;
+    version: string | null;
+    modele: string;
+    modele_installe: boolean;
+    embedding: string;
+    embedding_installe: boolean;
+  };
+  voix: { transcription: string; transcription_installee: boolean; synthese: string; synthese_installee: boolean };
+  index: { passages: number; a_jour: number; en_cours: boolean; total: number; faits: number; message: string; fin: string | null };
+}
+
+export type EvenementAssistant =
+  | { type: "etape"; texte: string }
+  | { type: "sources"; sources: SourceAssistant[] }
+  | { type: "texte"; texte: string }
+  | { type: "fin"; message_id: number | null }
+  | { type: "erreur"; message: string };

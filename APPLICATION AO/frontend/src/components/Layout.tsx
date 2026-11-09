@@ -20,7 +20,7 @@ export default function Layout() {
       <header className="flex flex-wrap items-center gap-x-8 gap-y-3 border-b border-bordure bg-entete px-4 py-3 sm:px-8">
         <Logo />
         <nav aria-label="Navigation principale" className="flex flex-[1_1_320px] flex-wrap gap-1">
-          {LIENS.map((lien) => (
+          {[...LIENS, ...(utilisateur?.est_administrateur ? [{ vers: "/assistant", libelle: "Assistant", fin: false }] : [])].map((lien) => (
             <NavLink
               key={lien.vers}
               to={lien.vers}

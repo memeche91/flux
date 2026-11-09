@@ -52,6 +52,25 @@ if (Test-Path -LiteralPath $cheminEnv) {
     Write-Host "Fichier .env créé avec des clés aléatoires."
 }
 
+Ecrire-Etape "Assistant IA : réglages selon votre ordinateur"
+$contenuEnv = [System.IO.File]::ReadAllText($cheminEnv)
+if ($contenuEnv -notmatch '(?m)^IA_MODELE=') {
+    # Fichier .env d'une version précédente : ajout des réglages de l'assistant.
+    $contenuEnv = $contenuEnv.TrimEnd() + "`n`n# Assistant IA local`nIA_MODELE=qwen3.5:9b`n"
+}
+$memoireGo = [math]::Round((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory / 1GB)
+if ($memoireGo -lt 16 -and $contenuEnv -match '(?m)^IA_MODELE=qwen3\.5:9b') {
+    $contenuEnv = $contenuEnv -replace '(?m)^IA_MODELE=qwen3\.5:9b', 'IA_MODELE=qwen3.5:4b'
+    Write-Host "Mémoire : $memoireGo Go. Modèle léger choisi pour l'assistant (qwen3.5:4b)."
+} else {
+    Write-Host "Mémoire : $memoireGo Go."
+}
+if ((Get-Command nvidia-smi -ErrorAction SilentlyContinue) -and $contenuEnv -notmatch '(?m)^COMPOSE_FILE=') {
+    $contenuEnv = $contenuEnv.TrimEnd() + "`nCOMPOSE_FILE=docker-compose.yml;docker-compose.gpu.yml`n"
+    Write-Host "Carte graphique NVIDIA détectée : l'assistant l'utilisera."
+}
+[System.IO.File]::WriteAllText($cheminEnv, $contenuEnv, (New-Object System.Text.UTF8Encoding($false)))
+
 Ecrire-Etape "Construction et démarrage (le premier lancement peut prendre 5 à 10 minutes)"
 docker compose up -d --build
 if ($LASTEXITCODE -ne 0) {
@@ -76,6 +95,13 @@ if ("$administrateurExiste".Trim() -ne "True") {
     Write-Host "Choisissez un identifiant puis un mot de passe d'au moins 12 caractères."
     Write-Host "(L'adresse e-mail est facultative : appuyez sur Entrée pour la passer.)"
     docker compose exec backend python manage.py createsuperuser
+}
+
+Ecrire-Etape "Assistant IA : téléchargement des modèles gratuits (une seule fois, environ 8 Go)"
+docker compose exec -T backend python manage.py preparer_assistant
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "Les modèles de l'assistant n'ont pas pu être téléchargés (connexion Internet ?)." -ForegroundColor Yellow
+    Write-Host "Le reste de l'application fonctionne. Relancez installer.ps1 plus tard pour terminer." -ForegroundColor Yellow
 }
 
 $port = "8080"

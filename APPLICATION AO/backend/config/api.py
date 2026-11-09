@@ -3,6 +3,7 @@ from django.contrib.admin.views.decorators import staff_member_required
 from ninja import NinjaAPI
 
 from articles.api import router as articles_router
+from assistant.api import router as assistant_router
 from bibliotheque.api import router as bibliotheque_router
 from comptes.api import router as comptes_router
 from comptes.securite import session_bureau_etudes
@@ -24,3 +25,4 @@ api.add_router("/bibliotheque", bibliotheque_router)
 api.add_router("", articles_router)
 api.add_router("", projets_router)
 api.add_router("", pieces_router)
+api.add_router("/assistant", assistant_router)

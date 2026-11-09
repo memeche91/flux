@@ -16,3 +16,4 @@ backend/staticfiles/
 frontend/node_modules/
 frontend/dist/
 *.tsbuildinfo
+backend/modeles-ia/

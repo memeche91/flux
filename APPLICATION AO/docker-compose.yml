@@ -6,13 +6,17 @@ x-backend: &backend
   build: ./backend
   restart: unless-stopped
   env_file: .env
-  environment:
+  environment: &environnement
     POSTGRES_HOST: base
     REDIS_URL: redis://redis:6379/0
     MEDIA_ROOT: /donnees/fichiers
+    OLLAMA_URL: http://ollama:11434
+    IA_DOSSIER_MODELES: /donnees/modeles-ia
   volumes:
     # Les fichiers importés restent visibles dans le dossier « donnees\fichiers » du PC.
     - ./donnees/fichiers:/donnees/fichiers
+    # Modèles de voix de l'assistant (transcription et lecture à voix haute).
+    - modeles_voix:/donnees/modeles-ia
 
 services:
   base:
@@ -37,14 +41,14 @@ services:
   backend:
     <<: *backend
     environment:
-      POSTGRES_HOST: base
-      REDIS_URL: redis://redis:6379/0
-      MEDIA_ROOT: /donnees/fichiers
+      <<: *environnement
       INITIALISER: "1"
     depends_on:
       base:
         condition: service_healthy
       redis:
+        condition: service_started
+      ollama:
         condition: service_started
 
   worker:
@@ -53,6 +57,17 @@ services:
     depends_on:
       backend:
         condition: service_started
+
+  # Moteur d'IA local de l'assistant (modèles gratuits, rien n'est envoyé sur Internet).
+  # Carte graphique NVIDIA : voir docker-compose.gpu.yml.
+  ollama:
+    image: ollama/ollama:0.40.15
+    restart: unless-stopped
+    environment:
+      OLLAMA_KEEP_ALIVE: 30m
+      OLLAMA_NUM_PARALLEL: "1"
+    volumes:
+      - modeles_ia:/root/.ollama
 
   web:
     build: ./frontend
@@ -64,3 +79,5 @@ services:
 
 volumes:
   base_donnees:
+  modeles_ia:
+  modeles_voix:

@@ -27,4 +27,5 @@ COPY . .
 RUN sed -i 's/\r$//' entrypoint.sh && chmod +x entrypoint.sh
 
 ENTRYPOINT ["./entrypoint.sh"]
-CMD ["gunicorn", "config.wsgi:application", "--bind", "0.0.0.0:8000", "--workers", "3", "--timeout", "600"]
+# Fils d'exécution : une réponse de l'assistant (plusieurs minutes) ne bloque pas le reste.
+CMD ["gunicorn", "config.wsgi:application", "--bind", "0.0.0.0:8000", "--workers", "3", "--worker-class", "gthread", "--threads", "4", "--timeout", "600"]

@@ -56,6 +56,7 @@ INSTALLED_APPS = [
     "bibliotheque.apps.BibliothequeConfig",
     "articles",
     "projets",
+    "assistant",
 ]
 
 MIDDLEWARE = [
@@ -167,6 +168,18 @@ CELERY_TASK_IGNORE_RESULT = True
 CELERY_TIMEZONE = TIME_ZONE
 CELERY_TASK_TIME_LIMIT = 60 * 60  # OCR d'un gros document scanné
 
+# Assistant IA local (administrateur) : Ollama pour le texte, Whisper et Piper pour la voix.
+# Tout tourne sur le poste ou le serveur du cabinet ; seuls les modèles sont téléchargés.
+OLLAMA_URL = env("OLLAMA_URL", "http://localhost:11434").rstrip("/")
+IA_MODELE = env("IA_MODELE", "qwen3.5:9b")
+IA_MODELE_EMBEDDING = env("IA_MODELE_EMBEDDING", "bge-m3")
+IA_CONTEXTE = int(env("IA_CONTEXTE", "8192"))
+IA_WHISPER = env("IA_WHISPER", "large-v3-turbo")
+IA_VOIX = env("IA_VOIX", "fr_FR-siwis-medium")
+IA_DOSSIER_MODELES = Path(env("IA_DOSSIER_MODELES", str(BASE_DIR / "modeles-ia")))
+# Sans Redis (développement, tests), l'indexation bloquerait la requête : elle se lance à la main.
+IA_INDEXATION_AUTO = env_bool("IA_INDEXATION_AUTO", not CELERY_TASK_ALWAYS_EAGER)
+
 LOGGING = {
     "version": 1,
     "disable_existing_loggers": False,
@@ -176,5 +189,8 @@ LOGGING = {
     "loggers": {
         "weasyprint": {"level": "WARNING"},
         "fontTools": {"level": "WARNING"},
+        # Échanges avec le moteur d'IA local : une ligne par requête, inutile au quotidien.
+        "httpx": {"level": "WARNING"},
+        "httpcore": {"level": "WARNING"},
     },
 }

@@ -1,0 +1,12 @@
+# Carte graphique NVIDIA (facultatif) : l'assistant répond beaucoup plus vite.
+# installer.ps1 l'active automatiquement si une carte NVIDIA est détectée
+# (ligne COMPOSE_FILE du fichier .env).
+services:
+  ollama:
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]

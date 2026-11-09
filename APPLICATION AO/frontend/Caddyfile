@@ -1,6 +1,8 @@
 # Serveur web de l'application : interface React + relais vers Django.
 :80 {
-	encode zstd gzip
+	# Les réponses de l'assistant arrivent mot à mot : elles ne sont pas compressées.
+	@compressible not path /api/assistant/*
+	encode @compressible zstd gzip
 
 	request_body {
 		max_size 1GB
@@ -16,6 +18,7 @@
 	@django path /api /api/* /admin /admin/* /static/*
 	handle @django {
 		reverse_proxy backend:8000 {
+			flush_interval -1
 			transport http {
 				read_timeout 10m
 				write_timeout 10m
