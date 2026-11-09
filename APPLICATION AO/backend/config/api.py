@@ -9,6 +9,7 @@ from comptes.api import router as comptes_router
 from comptes.securite import session_bureau_etudes
 from dce.api import router as dce_router
 from entreprises.api import router as entreprises_router
+from offres.api import router as offres_router
 from projets.api import router as projets_router
 from projets.api_pieces import router as pieces_router
 from referentiel.api import router as referentiel_router
@@ -30,3 +31,4 @@ api.add_router("", pieces_router)
 api.add_router("/assistant", assistant_router)
 api.add_router("", entreprises_router)
 api.add_router("", dce_router)
+api.add_router("", offres_router)

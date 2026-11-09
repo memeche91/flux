@@ -1,0 +1,123 @@
+"""Analyse d'un lot : prix comparés, détection des offres anormalement basses, notes pondérées, classement.
+
+Les critères et leur pondération sont ceux des paramètres de la consultation (RC). Le critère
+« Prix » est noté automatiquement ; les autres le sont par l'économiste (avec commentaire).
+"""
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from decimal import ROUND_HALF_UP, Decimal
+
+from articles.normalisation import normaliser
+from projets.champs import consultation_du_projet
+from projets.models import LotProjet
+from projets.structure import structurer
+
+from .models import AnalyseLot, MethodePrix, Offre
+
+
+def criteres(lot: LotProjet) -> list[dict]:
+    """Critères de la consultation ; le premier qui parle de prix (ou de coût) est noté automatiquement."""
+    liste = [c for c in (consultation_du_projet(lot.projet).criteres or []) if str(c.get("libelle", "")).strip()]
+    prix_trouve = False
+    resultat = []
+    for critere in liste:
+        libelle = str(critere["libelle"]).strip()
+        est_prix = not prix_trouve and any(m in normaliser(libelle).split() for m in ("prix", "cout", "couts"))
+        prix_trouve = prix_trouve or est_prix
+        resultat.append({"libelle": libelle, "ponderation": Decimal(str(critere.get("ponderation", 0))), "prix": est_prix})
+    return resultat
+
+
+def analyse_du_lot(lot: LotProjet) -> AnalyseLot:
+    analyse, _ = AnalyseLot.objects.get_or_create(lot=lot)
+    return analyse
+
+
+def estimation(lot: LotProjet) -> dict:
+    structure = structurer(lot)
+    base = structure.sections_dpgf[0].total if structure.sections_dpgf else Decimal("0")
+    options = {s.option.pk: s.total for s in structure.sections_dpgf[1:] if s.option is not None}
+    return {"base": base, "options": options}
+
+
+@dataclass
+class LigneClassement:
+    offre: Offre
+    prix: Decimal | None
+    incomplete: bool
+    anormalement_basse: bool = False
+    ecart_estimation: Decimal | None = None
+    ecart_moyenne: Decimal | None = None
+    notes: dict[str, Decimal | None] = field(default_factory=dict)
+    total: Decimal | None = None
+    rang: int | None = None
+    notation_complete: bool = True
+
+
+def _arrondi(valeur: Decimal, decimales: str = "0.01") -> Decimal:
+    return valeur.quantize(Decimal(decimales), rounding=ROUND_HALF_UP)
+
+
+def prix_compare(offre: Offre, options_retenues: list[int]) -> tuple[Decimal | None, bool]:
+    """Montant de base + PSE retenues ; `incomplete` si une PSE retenue n'est pas chiffrée."""
+    if offre.montant_base is None:
+        return None, True
+    total = offre.montant_base
+    incomplete = False
+    for option_id in options_retenues:
+        montant = offre.montants_options.get(str(option_id))
+        if montant in (None, ""):
+            incomplete = True
+            continue
+        total += Decimal(str(montant))
+    return total, incomplete
+
+
+def classer(lot: LotProjet) -> tuple[AnalyseLot, list[dict], list[LigneClassement]]:
+    analyse = analyse_du_lot(lot)
+    liste_criteres = criteres(lot)
+    retenues = list(analyse.options_retenues.values_list("pk", flat=True))
+    reference = estimation(lot)
+    montant_estimation = reference["base"] + sum((reference["options"].get(o, Decimal("0")) for o in retenues), Decimal("0"))
+    bareme = Decimal(analyse.bareme or 10)
+
+    lignes = []
+    for offre in Offre.objects.filter(lot=lot).select_related("entreprise"):
+        prix, incomplete = prix_compare(offre, retenues)
+        lignes.append(LigneClassement(offre, prix, incomplete))
+    actives = [l for l in lignes if not l.offre.ecartee and l.prix is not None and l.prix > 0]
+
+    if actives:
+        moyenne = sum((l.prix for l in actives), Decimal("0")) / len(actives)
+        minimum = min(l.prix for l in actives)
+        for ligne in actives:
+            ligne.ecart_moyenne = _arrondi((ligne.prix - moyenne) / moyenne * 100, "0.1")
+            if montant_estimation:
+                ligne.ecart_estimation = _arrondi((ligne.prix - montant_estimation) / montant_estimation * 100, "0.1")
+            # Offre nettement sous la moyenne des offres (ou de l'estimation) : précisions à demander.
+            seuil = Decimal(100 - analyse.seuil_anormal) / 100
+            sous_moyenne = len(actives) > 1 and ligne.prix < moyenne * seuil
+            sous_estimation = bool(montant_estimation) and ligne.prix < montant_estimation * seuil
+            ligne.anormalement_basse = sous_moyenne or sous_estimation
+            for critere in liste_criteres:
+                cle = critere["libelle"]
+                if critere["prix"]:
+                    if analyse.methode_prix == MethodePrix.LINEAIRE:
+                        note = bareme * max(Decimal("0"), 1 - (ligne.prix - minimum) / minimum)
+                    else:
+                        note = bareme * minimum / ligne.prix
+                    ligne.notes[cle] = _arrondi(note)
+                else:
+                    saisie = (ligne.offre.notes.get(cle) or {}).get("note")
+                    ligne.notes[cle] = None if saisie in (None, "") else Decimal(str(saisie))
+                    if ligne.notes[cle] is None:
+                        ligne.notation_complete = False
+            if liste_criteres:
+                ligne.total = _arrondi(sum(
+                    ((ligne.notes[c["libelle"]] or Decimal("0")) / bareme * c["ponderation"] for c in liste_criteres), Decimal("0")
+                ))
+        classees = sorted((l for l in actives if l.total is not None), key=lambda l: (-l.total, l.prix))
+        for rang, ligne in enumerate(classees, start=1):
+            ligne.rang = rang
+    return analyse, [{"libelle": c["libelle"], "ponderation": c["ponderation"], "prix": c["prix"]} for c in liste_criteres], lignes

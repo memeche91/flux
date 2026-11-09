@@ -59,6 +59,7 @@ INSTALLED_APPS = [
     "assistant",
     "entreprises",
     "dce",
+    "offres",
 ]
 
 MIDDLEWARE = [
