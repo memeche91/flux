@@ -247,9 +247,9 @@ function Configurer-Serveur {
         Write-Host "Mot de passe vide : le serveur refusera la connexion." -ForegroundColor Yellow
         return $false
     }
-    if ($motDePasse -match "[,'`"]") {
-        Write-Host "Ce mot de passe contient une virgule, un guillemet ou une apostrophe, que D’Aplomb ne sait pas enregistrer pour Docker :" -ForegroundColor Yellow
-        Write-Host "donnez au compte dédié un mot de passe sans virgule, guillemet ni apostrophe, puis recommencez." -ForegroundColor Yellow
+    if ($motDePasse -match "[,'`"]" -or $motDePasse.EndsWith('\')) {
+        Write-Host "Ce mot de passe contient une virgule, un guillemet ou une apostrophe, ou se termine par \, ce que D’Aplomb ne sait pas enregistrer pour Docker :" -ForegroundColor Yellow
+        Write-Host "donnez au compte dédié un mot de passe sans virgule, guillemet ni apostrophe, qui ne se termine pas par \, puis recommencez." -ForegroundColor Yellow
         return $false
     }
     $compteWindows = $utilisateur
@@ -291,16 +291,15 @@ function Chemin-Pc([string]$valeur, [string]$defaut) {
     return (Join-Path $PSScriptRoot ($valeur -replace '^\.\\', ''))
 }
 
-# Chemin à écrire dans .env pour Docker, qui ne lit comme dossier qu'un chemin complet (E:\…) ou commençant par
-# « . » : un chemin relatif sans « .\ » (donnees\sauvegardes) serait pris pour un nom de volume, et Docker refuserait
-# tout le projet (plus rien ne démarrerait). Il devient .\donnees\sauvegardes. \Sauvegardes, /Sauvegardes,
-# D:Sauvegardes et ~\Sauvegardes deviennent des chemins complets, lus de la même façon par Docker et par ce script.
-function Chemin-Docker([string]$valeur) {
-    if (-not $valeur -or $valeur -match '^([A-Za-z]:[\\/]|\\\\|//|\.)') { return $valeur }
-    if ($valeur -match '^[A-Za-z]:') { return $valeur.Substring(0, 2) + "\" + $valeur.Substring(2) }
-    if ($valeur -match '^[\\/]') { return [System.IO.Path]::GetPathRoot($PSScriptRoot).TrimEnd('\') + "\" + ($valeur -replace '^[\\/]+', '') }
-    if ($valeur -match '^~([\\/]|$)') { return $env:USERPROFILE + $valeur.Substring(1) }
-    return ".\$valeur"
+# Dossier du PC indiqué dans .env (DOSSIER_SAUVEGARDES_PC, DOSSIER_ARCHIVES_PC) : jamais réécrit par les scripts,
+# seulement vérifié. Docker ne lit comme dossier qu'un chemin complet (E:\Sauvegardes DAplomb) ou commençant par .\ ;
+# une apostrophe, un guillemet, un # (commentaire) ou un \ final seraient mal lus par Docker. Message vide si correct.
+function Probleme-Dossier([string]$valeur) {
+    if (-not $valeur) { return "" }
+    if ($valeur -match "['`"#]") { return "ne doit contenir ni apostrophe, ni guillemet, ni # (pas de commentaire sur la ligne)" }
+    if ($valeur -notmatch '^([A-Za-z]:\\[^\\/]|\.\\[^\\/])') { return "doit être un dossier complet, par exemple E:\Sauvegardes DAplomb (pas la racine d’un disque), ou commencer par .\" }
+    if ($valeur -match '[\\/]$') { return "ne doit pas se terminer par \" }
+    return ""
 }
 
 # Dossier réseau (\\NAS\…) ou lecteur réseau (S:\…, vu par la session Windows mais pas par Docker Desktop), même
@@ -522,18 +521,13 @@ foreach ($nom in @("STOCKAGE", "SERVEUR_CHEMIN_AFFICHE", "SERVEUR_ADRESSE", "SER
 foreach ($reglage in @(@("SAUVEGARDE_HEURE", "2:30"), @("SAUVEGARDE_JOURS", "14"), @("SAUVEGARDE_MOIS", "6"))) {
     if ($contenuEnv -notmatch "(?m)^$($reglage[0])=") { $contenuEnv = Definir-Variable $contenuEnv $reglage[0] $reglage[1] }
 }
-# Dossiers du PC écrits à la main dans .env : réécrits pour que Docker et ce script lisent le même dossier (voir
-# Chemin-Docker). Entre guillemets doubles, Docker interpréterait les \n, \t… du chemin : ils deviennent des
-# apostrophes droites. Un chemin qui contient une apostrophe s'écrit sans guillemets (Docker le lit tel quel) ;
-# dans DOSSIER_SAUVEGARDES_PC, il est refusé plus bas.
+# Dossiers du PC écrits à la main dans .env : vérifiés (jamais réécrits) pour que Docker et ce script lisent le même dossier.
 foreach ($nomDossier in @("DOSSIER_SAUVEGARDES_PC", "DOSSIER_ARCHIVES_PC")) {
     $cheminLu = Lire-Variable $contenuEnv $nomDossier
-    $cheminDocker = Chemin-Docker $cheminLu.Trim('"')
-    if ($cheminDocker -ne $cheminLu) {
-        $valeurDossier = Valeur-Env $cheminDocker
-        if ($cheminDocker.Contains("'")) { $valeurDossier = $cheminDocker }
-        $contenuEnv = Definir-Variable $contenuEnv $nomDossier $valeurDossier
-        Write-Host "Ligne $nomDossier de .env : $cheminDocker (au lieu de $cheminLu), chemin que Docker sait lire."
+    $probleme = Probleme-Dossier $cheminLu
+    if ($probleme) {
+        Arreter ("Ligne $nomDossier de .env (« $cheminLu ») : le dossier $probleme.`n" +
+            "Corrigez cette ligne avec le Bloc-notes (exemple : $nomDossier=E:\Sauvegardes DAplomb, ou videz-la), puis relancez ce script.")
     }
 }
 $stockage = (Lire-Variable $contenuEnv "STOCKAGE").ToLower()

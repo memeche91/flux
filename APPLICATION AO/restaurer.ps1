@@ -146,17 +146,15 @@ function Est-Reseau([string]$chemin) {
     return $false
 }
 
-# Chemin lisible par Docker (même règle que installer.ps1), qui ne lit comme dossier qu'un chemin complet (E:\…) ou
-# commençant par « . » : un chemin relatif sans « .\ » (donnees\sauvegardes) serait pris pour un nom de volume, et
-# Docker refuserait tout le projet (plus rien ne démarrerait). Il devient .\donnees\sauvegardes. \Sauvegardes,
-# /Sauvegardes, D:Sauvegardes et ~\Sauvegardes deviennent des chemins complets, lus de la même façon par Docker et par
-# ce script.
-function Chemin-Docker([string]$valeur) {
-    if (-not $valeur -or $valeur -match '^([A-Za-z]:[\\/]|\\\\|//|\.)') { return $valeur }
-    if ($valeur -match '^[A-Za-z]:') { return $valeur.Substring(0, 2) + "\" + $valeur.Substring(2) }
-    if ($valeur -match '^[\\/]') { return [System.IO.Path]::GetPathRoot($PSScriptRoot).TrimEnd('\') + "\" + ($valeur -replace '^[\\/]+', '') }
-    if ($valeur -match '^~([\\/]|$)') { return $env:USERPROFILE + $valeur.Substring(1) }
-    return ".\$valeur"
+# Dossier du PC indiqué dans .env (DOSSIER_SAUVEGARDES_PC, DOSSIER_ARCHIVES_PC) : jamais réécrit par les scripts,
+# seulement vérifié. Docker ne lit comme dossier qu'un chemin complet (E:\Sauvegardes DAplomb) ou commençant par .\ ;
+# une apostrophe, un guillemet, un # (commentaire) ou un \ final seraient mal lus par Docker. Message vide si correct.
+function Probleme-Dossier([string]$valeur) {
+    if (-not $valeur) { return "" }
+    if ($valeur -match "['`"#]") { return "ne doit contenir ni apostrophe, ni guillemet, ni # (pas de commentaire sur la ligne)" }
+    if ($valeur -notmatch '^([A-Za-z]:\\[^\\/]|\.\\[^\\/])') { return "doit être un dossier complet, par exemple E:\Sauvegardes DAplomb (pas la racine d’un disque), ou commencer par .\" }
+    if ($valeur -match '[\\/]$') { return "ne doit pas se terminer par \" }
+    return ""
 }
 
 # Fichiers sur le PC : le service worker lit les sauvegardes dans le dossier que Docker monte (ligne
@@ -193,6 +191,12 @@ function Utiliser-Dossier-Sauvegardes([string]$dossier) {
     if ($lisible -and (Chemin-Complet $monte) -eq (Chemin-Complet $dossier)) { return }
     # Chemin complet : un chemin relatif tapé sans « .\ » n'est pas lisible par Docker.
     $complet = Chemin-Complet $dossier
+    $probleme = ""
+    if ($complet -ne (Chemin-Complet $dossierLocal)) { $probleme = Probleme-Dossier $complet }
+    if ($probleme) {
+        Arreter ("Dossier des sauvegardes « $complet » : il $probleme. $(Abandon)`n" +
+            "Recopiez les sauvegardes dans un dossier comme E:\Sauvegardes DAplomb, puis relancez ce script.")
+    }
     $valeur = "'" + $complet + "'"
     if ($complet -eq (Chemin-Complet $dossierLocal)) { $valeur = "" }
     $script:contenuEnv = Definir-Variable $script:contenuEnv "DOSSIER_SAUVEGARDES_PC" $valeur
@@ -270,19 +274,13 @@ if (Test-Path -LiteralPath $cheminEnv) {
 $contenuEnv = [System.IO.File]::ReadAllText($cheminEnv)
 $serveur = (Lire-Variable $contenuEnv "COMPOSE_FILE") -match 'serveur'
 if (-not $serveur) {
-    # Dossiers du PC écrits à la main dans .env (chemin relatif sans « .\ », guillemets doubles, dans lesquels Docker
-    # interpréterait les \n, \t… du chemin) : réécrits comme par installer.ps1, sinon Docker refuserait le projet.
+    # Dossiers du PC écrits à la main dans .env : vérifiés (jamais réécrits), comme par installer.ps1.
     foreach ($nomDossier in @("DOSSIER_SAUVEGARDES_PC", "DOSSIER_ARCHIVES_PC")) {
         $cheminLu = Lire-Variable $contenuEnv $nomDossier
-        $cheminDocker = Chemin-Docker $cheminLu.Trim('"')
-        if ($cheminDocker -ne $cheminLu) {
-            # Entre apostrophes droites, sauf un chemin qui en contient une : Docker le lit alors tel quel.
-            $valeurDossier = "'" + $cheminDocker + "'"
-            if ($cheminDocker.Contains("'")) { $valeurDossier = $cheminDocker }
-            $contenuEnv = Definir-Variable $contenuEnv $nomDossier $valeurDossier
-            Enregistrer-Env $contenuEnv
-            if (-not $noteEnv) { $noteEnv = " (.env a été mis à jour)" }
-            Write-Host "Ligne $nomDossier de .env : $cheminDocker (au lieu de $cheminLu), chemin que Docker sait lire." -ForegroundColor Cyan
+        $probleme = Probleme-Dossier $cheminLu
+        if ($probleme) {
+            Arreter ("Ligne $nomDossier de .env (« $cheminLu ») : le dossier $probleme. $(Abandon)`n" +
+                "Corrigez cette ligne avec le Bloc-notes (exemple : $nomDossier=E:\Sauvegardes DAplomb, ou videz-la), puis relancez ce script.")
         }
     }
     # Archives sur un dossier ou un lecteur réseau, que Docker ne sait pas ouvrir : la restauration ne pourrait pas

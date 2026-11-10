@@ -102,7 +102,7 @@ La base de données reste toujours sur le PC : PostgreSQL ne fonctionne pas de f
 
 **Préparer le serveur** (Windows Server ; avec votre prestataire informatique au besoin) :
 1. créez un dossier, par exemple `D:\DAplomb`, partagez-le sous le nom `DAplomb`, et créez dedans les sous-dossiers `fichiers`, `archives` et `sauvegardes` (l’installateur les réutilise). Nom de partage et chemin sans apostrophe (`'`) : Docker ne saurait pas les lire dans `.env` ;
-2. créez un **compte Windows dédié** (par exemple `daplomb`), avec un mot de passe sans virgule, guillemet ni apostrophe, et qui n’expire pas, et donnez-lui le droit **Modifier** sur ce dossier (onglets Partage et Sécurité), et sur rien d’autre ;
+2. créez un **compte Windows dédié** (par exemple `daplomb`), avec un mot de passe sans virgule, guillemet ni apostrophe, qui ne se termine pas par `\` et qui n’expire pas, et donnez-lui le droit **Modifier** sur ce dossier (onglets Partage et Sécurité), et sur rien d’autre ;
 3. vérifiez que le pare-feu du serveur autorise le partage de fichiers (port 445) depuis le PC de D’Aplomb, et que le partage accepte SMB 3 (c’est le cas par défaut depuis Windows Server 2012) ;
 4. si d’autres personnes doivent consulter les archives, donnez-leur seulement la **lecture** sur le sous-dossier `archives`. Les sous-dossiers `sauvegardes` et `fichiers` restent réservés au compte dédié et aux administrateurs (Propriétés › Sécurité › Avancé › désactiver l’héritage sur `sauvegardes` et `fichiers`) : `sauvegardes` contient les clés de l’application et des copies complètes de la base.
 
