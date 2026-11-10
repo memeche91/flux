@@ -19,6 +19,15 @@ RUN apt-get update \
         fonts-dejavu-core fonts-liberation fonts-crosextra-carlito \
     && rm -rf /var/lib/apt/lists/*
 
+# Sauvegarde de chaque nuit : pg_dump, pg_restore, createdb et dropdb de la même version que la base
+# (PostgreSQL 16), depuis le dépôt officiel PostgreSQL (PGDG) ; Debian ne fournit qu'une autre version.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates postgresql-common \
+    && /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y \
+    && apt-get install -y --no-install-recommends postgresql-client-16 \
+    && pg_dump --version | grep -q " 16\." \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY requirements.txt .
 RUN pip install -r requirements.txt
 

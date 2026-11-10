@@ -21,3 +21,7 @@ CSRF_COOKIE_SECURE = True
 SESSION_COOKIE_NAME = "__Host-ged-session"
 CSRF_COOKIE_NAME = "__Host-ged-csrf"
 SECURE_CONTENT_TYPE_NOSNIFF = True
+
+# Envoi (POST, PATCH…) sans session ouverte avec un code : refusé avant toute lecture du corps.
+MIDDLEWARE = list(MIDDLEWARE)  # noqa: F405
+MIDDLEWARE.insert(MIDDLEWARE.index("django.contrib.sessions.middleware.SessionMiddleware") + 1, "ged.protection.EnvoiSansSessionRefuse")

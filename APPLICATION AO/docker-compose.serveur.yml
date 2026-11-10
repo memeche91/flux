@@ -1,0 +1,71 @@
+# Stockage sur le serveur de l'agence (dossier partagé Windows) : recommandé.
+#
+# Les fichiers de l'application, les archives de fin de chantier et les sauvegardes de chaque nuit
+# sont écrits directement dans le dossier partagé du serveur, sous-dossiers « fichiers », « archives »
+# et « sauvegardes » : ils profitent ainsi de la sauvegarde du serveur. La base de données reste sur
+# ce PC (volume base_donnees) ; sa copie vérifiée de chaque nuit part dans « sauvegardes ».
+#
+# installer.ps1 active ce fichier (ligne COMPOSE_FILE de .env) quand vous choisissez le stockage sur
+# le serveur, après avoir vérifié l'accès au dossier avec le compte indiqué. Réglages dans .env :
+#   SERVEUR_ADRESSE         adresse IP du serveur (Docker ne connaît pas les noms du réseau Windows)
+#   SERVEUR_PARTAGE         nom du partage, suivi d'un sous-dossier éventuel (DAplomb, Donnees/DAplomb)
+#   SERVEUR_UTILISATEUR     compte Windows dédié, SERVEUR_DOMAINE son domaine (facultatif)
+#   SERVEUR_MOT_DE_PASSE    son mot de passe (sans virgule ni guillemet)
+#   SERVEUR_CHEMIN_AFFICHE  chemin affiché dans l'application, par exemple \\SERVEUR\DAplomb
+#
+# Docker monte ces volumes au démarrage des services : le serveur doit être allumé et joignable.
+# Leurs réglages sont fixés à leur création : après un changement de mot de passe ou d'adresse,
+# relancez installer.ps1, qui les recrée (les fichiers du serveur ne sont pas touchés).
+#
+# Le service « ged » (fichiers internet et tunnel) reprend le service backend de docker-compose.yml :
+# il voit les volumes du serveur grâce aux lignes VOLUME_FICHIERS et VOLUME_ARCHIVES de .env.
+
+x-options-cifs: &options-cifs addr=${SERVEUR_ADRESSE:?Relancez installer.ps1 (adresse du serveur absente de .env)},username=${SERVEUR_UTILISATEUR:?Relancez installer.ps1 (compte du serveur absent de .env)},password=${SERVEUR_MOT_DE_PASSE:-},${SERVEUR_DOMAINE:+domain=${SERVEUR_DOMAINE},}vers=3.0,uid=0,gid=0,file_mode=0660,dir_mode=0770,nounix,noserverino
+
+x-environnement-serveur: &environnement-serveur
+  STOCKAGE_SERVEUR: "1"
+  SERVEUR_CHEMIN_AFFICHE: ${SERVEUR_CHEMIN_AFFICHE:-}
+  DOSSIER_ARCHIVES_AFFICHE: ${SERVEUR_CHEMIN_AFFICHE:-}\archives
+  DOSSIER_SAUVEGARDES_AFFICHE: ${SERVEUR_CHEMIN_AFFICHE:-}\sauvegardes
+
+services:
+  # Les montages remplacent ceux de docker-compose.yml de même cible (dossier dans le conteneur).
+  backend:
+    environment: *environnement-serveur
+    volumes:
+      - serveur_fichiers:/donnees/fichiers
+      - serveur_archives:/donnees/archives
+      - serveur_sauvegardes:/sauvegardes:ro
+
+  worker:
+    environment: *environnement-serveur
+    volumes:
+      - serveur_fichiers:/donnees/fichiers
+      - serveur_archives:/donnees/archives
+      - serveur_sauvegardes:/sauvegardes
+
+  voix:
+    environment: *environnement-serveur
+    volumes:
+      - serveur_fichiers:/donnees/fichiers
+      - serveur_archives:/donnees/archives
+
+volumes:
+  serveur_fichiers:
+    driver: local
+    driver_opts:
+      type: cifs
+      device: //${SERVEUR_ADRESSE}/${SERVEUR_PARTAGE:?Relancez installer.ps1 (nom du partage absent de .env)}/fichiers
+      o: *options-cifs
+  serveur_archives:
+    driver: local
+    driver_opts:
+      type: cifs
+      device: //${SERVEUR_ADRESSE}/${SERVEUR_PARTAGE}/archives
+      o: *options-cifs
+  serveur_sauvegardes:
+    driver: local
+    driver_opts:
+      type: cifs
+      device: //${SERVEUR_ADRESSE}/${SERVEUR_PARTAGE}/sauvegardes
+      o: *options-cifs

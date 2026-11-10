@@ -1,0 +1,47 @@
+"""Audit global (constat 2) : import de l'annuaire protégé contre un classeur démesuré."""
+import io
+from unittest import mock
+
+from django.test import TestCase
+
+from bibliotheque import lecture
+from bibliotheque.tests_audit import xlsx_chaines_partagees
+
+from . import importation
+from .importation import ImportImpossible, _lignes, importer
+
+
+def _classeur(lignes: list[list], vides_avant_fin: int = 0) -> bytes:
+    from openpyxl import Workbook
+
+    classeur = Workbook()
+    feuille = classeur.active
+    for ligne in lignes:
+        feuille.append(ligne)
+    if vides_avant_fin:
+        # Feuille « formatée » très loin : cellules sans valeur, mais avec un style.
+        feuille.cell(len(lignes) + vides_avant_fin, 1).number_format = "0.00"
+    flux = io.BytesIO()
+    classeur.save(flux)
+    return flux.getvalue()
+
+
+class ImportAnnuaireAuditTests(TestCase):
+    def test_classeur_ordinaire_importe(self):
+        contenu = _classeur([["Entreprise", "Ville"], ["Menuiseries Durand", "Annecy"]], vides_avant_fin=5_000)
+        lignes = _lignes("annuaire.xlsx", contenu)
+        self.assertLessEqual(len(lignes), 2 + importation.LIGNES_VIDES_MAX + 1)  # le blanc final n'est pas chargé
+        self.assertEqual(importer("annuaire.xlsx", contenu).creees, 1)
+
+    def test_table_des_chaines_demesuree_refusee(self):
+        contenu = xlsx_chaines_partagees([["Entreprise", "Ville"]] + [[f"Entreprise {n}", f"Ville {n}"] for n in range(300)])
+        self.assertEqual(len(_lignes("annuaire.xlsx", contenu)), 301)
+        with mock.patch.object(lecture, "XML_LU_EN_ENTIER_MAX", 5_000), mock.patch("openpyxl.load_workbook") as chargement:
+            with self.assertRaisesMessage(ImportImpossible, "anormalement volumineux"):
+                _lignes("annuaire.xlsx", contenu)
+        chargement.assert_not_called()
+
+    def test_trop_de_lignes_refuse(self):
+        contenu = _classeur([["Entreprise", "Ville"]] + [[f"Entreprise {n}", "Annecy"] for n in range(60)])
+        with mock.patch.object(importation, "LIGNES_MAX", 50), self.assertRaisesMessage(ImportImpossible, "trop long"):
+            _lignes("annuaire.xlsx", contenu)

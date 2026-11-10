@@ -39,7 +39,7 @@ from django.utils import timezone
 from dce.assemblage import nom_lot, nom_sur
 from projets.models import Projet
 
-from .models import AvisVersion, Document, EspaceChantier, FichierSource, ProjetArchive, StatutArchive, StatutEspace, Version, Zone
+from .models import AvisVersion, Document, EspaceChantier, Evenement, FichierSource, ProjetArchive, StatutArchive, StatutEspace, Version, Zone
 from .serialisation import EN_VIGUEUR, LIBELLES_STATUTS, statuts_des_versions
 
 logger = logging.getLogger(__name__)
@@ -215,6 +215,10 @@ def _registre_xlsx(projet: Projet, registre: list[dict]) -> bytes:
                     "Visa", "Visé le", "Observations du visa", "État", "Fichier dans l'archive"])
     for cellule in feuille[3]:
         cellule.font = Font(bold=True)
+    # Numéro de ligne tenu ici : feuille.max_row et feuille[n] parcourent toutes les cellules déjà
+    # écrites à chaque appel (registre quadratique : 23 s pour 2 000 documents).
+    numero = feuille.max_row
+    style_lien = Font(color="1F4E8C", underline="single")
     for ligne in registre:
         d, v = ligne["document"], ligne["version"]
         chemin = ligne["entree"].chemin if ligne["entree"] is not None else ""
@@ -224,13 +228,15 @@ def _registre_xlsx(projet: Projet, registre: list[dict]) -> bytes:
             timezone.localtime(v.vise_le).strftime("%d/%m/%Y") if v.vise_le else "", v.visa_commentaire,
             "Annulé" if d.annule else LIBELLES_STATUTS[ligne["statut"]], chemin or "(fichier absent)",
         ])
-        for cellule in feuille[feuille.max_row]:
+        numero += 1
+        for colonne in range(1, 16):
+            cellule = feuille.cell(numero, colonne)
             if cellule.data_type == "f":
                 cellule.data_type = "s"  # « =… » saisi par un intervenant : texte, jamais une formule
         if chemin:
-            cellule = feuille.cell(feuille.max_row, 15)
+            cellule = feuille.cell(numero, 15)
             cellule.hyperlink = "../" + chemin  # le registre est dans « 04 GED »
-            cellule.font = Font(color="1F4E8C", underline="single")
+            cellule.font = style_lien
     for colonne, largeur in zip("ABCDEFGHIJKLMNO", (12, 6, 26, 15, 16, 40, 7, 16, 24, 30, 22, 11, 40, 16, 60)):
         feuille.column_dimensions[colonne].width = largeur
     flux = io.BytesIO()
@@ -476,6 +482,9 @@ def purger(archive: ProjetArchive) -> int:
             espace.statut = StatutEspace.CLOS
             espace.save(update_fields=["statut"])
             espace.intervenants.update(actif=False)
+            # Adresses IP et navigateurs des intervenants : données personnelles, sans utilité une fois
+            # le chantier archivé (l'archive les exclut déjà). Le journal garde dates, acteurs et opérations.
+            Evenement.objects.filter(espace=espace).update(adresse_ip=None, navigateur="")
         archive.fichiers_purges_le = timezone.now()
         archive.purge_prevue_le = None
         archive.octets_liberes = octets

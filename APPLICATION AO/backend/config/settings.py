@@ -5,6 +5,7 @@ Toute la configuration sensible passe par des variables d'environnement
 bascule sur SQLite : pratique pour le développement et les tests.
 """
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -62,6 +63,7 @@ INSTALLED_APPS = [
     "dce",
     "offres",
     "ged",
+    "sauvegardes",
 ]
 
 MIDDLEWARE = [
@@ -224,6 +226,49 @@ TESTS = len(sys.argv) > 1 and sys.argv[1] == "test"
 DOSSIER_ARCHIVES = Path(env("DOSSIER_ARCHIVES", str(MEDIA_ROOT / "archives")))
 # Emplacement du dossier d'archives tel que le cabinet le voit sur le PC (affichage seulement).
 DOSSIER_ARCHIVES_AFFICHE = env("DOSSIER_ARCHIVES_AFFICHE", "donnees\\archives")
+
+# Sauvegarde de chaque nuit (tâche sauvegardes.tasks.sauvegarder, service worker) : copie de la base
+# vérifiée par une restauration d'essai, copie du .env (clé des codes d'accès de la GED) et, quand les
+# fichiers sont sur le PC, miroir des fichiers et des archives. Dossier monté depuis le PC
+# (DOSSIER_SAUVEGARDES_PC) ou depuis le partage du serveur de l'agence (docker-compose.serveur.yml).
+DOSSIER_SAUVEGARDES = Path(env("DOSSIER_SAUVEGARDES") or "/sauvegardes")
+DOSSIER_SAUVEGARDES_PC = (env("DOSSIER_SAUVEGARDES_PC") or "").strip()
+DOSSIER_SAUVEGARDES_AFFICHE = (env("DOSSIER_SAUVEGARDES_AFFICHE") or "").strip() or DOSSIER_SAUVEGARDES_PC or "donnees\\sauvegardes"
+# Fichier .env de l'application, monté en lecture seule dans le worker.
+FICHIER_CONFIGURATION = Path(env("FICHIER_CONFIGURATION") or "/configuration/.env")
+# 1 : fichiers et archives sur le partage du serveur (pas de miroir, ils y sont déjà).
+STOCKAGE_SERVEUR = (env("STOCKAGE_SERVEUR") or "").strip() == "1"
+SERVEUR_CHEMIN_AFFICHE = (env("SERVEUR_CHEMIN_AFFICHE") or "").strip()
+SERVEUR_ADRESSE = (env("SERVEUR_ADRESSE") or "").strip()
+SERVEUR_PARTAGE = (env("SERVEUR_PARTAGE") or "").strip()
+
+
+def _entier(nom, defaut, minimum=0):
+    try:
+        return max(minimum, int((env(nom) or "").strip() or defaut))
+    except ValueError:
+        return defaut
+
+
+def _heure_sauvegarde(texte):
+    """« 2:30 », « 02h30 », « 2 » ; une valeur illisible revient à 2 h 30 plutôt que d'empêcher le démarrage."""
+    correspondance = re.fullmatch(r"\s*(\d{1,2})\s*(?:[:hH.]\s*(\d{1,2})?)?\s*", texte or "")
+    if correspondance:
+        heure, minute = int(correspondance[1]), int(correspondance[2] or 0)
+        if heure < 24 and minute < 60:
+            return heure, minute
+    return 2, 30
+
+
+SAUVEGARDE_HEURE = _heure_sauvegarde(env("SAUVEGARDE_HEURE") or "2:30")
+SAUVEGARDE_JOURS = _entier("SAUVEGARDE_JOURS", 14, minimum=1)  # sauvegardes quotidiennes gardées
+SAUVEGARDE_MOIS = _entier("SAUVEGARDE_MOIS", 6)  # sauvegardes mensuelles gardées (la première du mois)
+# Heure de Paris (CELERY_TIMEZONE) ; un PC éteint la nuit fait la sauvegarde manquée à son démarrage.
+CELERY_BEAT_SCHEDULE["sauvegarde-nocturne"] = {
+    "task": "sauvegardes.tasks.sauvegarder",
+    "schedule": crontab(hour=SAUVEGARDE_HEURE[0], minute=SAUVEGARDE_HEURE[1]),
+}
+
 # Assistant IA local (administrateur) : Ollama pour le texte, Whisper et Piper pour la voix.
 # Tout tourne sur le poste ou le serveur du cabinet ; seuls les modèles sont téléchargés.
 OLLAMA_URL = env("OLLAMA_URL", "http://localhost:11434").rstrip("/")

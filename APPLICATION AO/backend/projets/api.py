@@ -391,7 +391,15 @@ def modifier_lot(request, lot_id: int, donnees: LotModification):
 
 @router.delete("/lots-projet/{lot_id}", response={204: None})
 def supprimer_lot(request, lot_id: int):
-    _lot(lot_id).delete()
+    """Un lot vide ou en rédaction se supprime librement ; jamais un lot qui a des documents dans la GED
+    (ils ne sont jamais supprimés, seulement annulés), et seul l'administrateur supprime un lot qui a
+    des offres ou des consultations (comme pour la suppression d'un projet)."""
+    lot = _lot(lot_id)
+    if lot.documents_ged.exists():
+        raise HttpError(409, "Ce lot a des documents dans la GED du chantier : ils ne sont jamais supprimés (annulez-les si besoin). Le lot est conservé.")
+    if not request.auth.est_administrateur and (lot.offres.exists() or lot.consultations_entreprises.exists()):
+        raise HttpError(403, "Ce lot a des offres ou des consultations d’entreprises : sa suppression est réservée à l’administrateur.")
+    lot.delete()
     return 204, None
 
 

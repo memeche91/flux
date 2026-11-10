@@ -10,14 +10,15 @@ from django.db import transaction
 from django.utils import timezone
 
 from .archivage import liberer_archives_interrompues
-from .models import EspaceChantier, Evenement, Frequence, StatutEspace, TypeEvenement, Version
-from .notifications import EVENEMENTS_INTERNES, envoyer, message_recepisse, messages_nouveautes, messages_quotidiens
+from .models import EspaceChantier, Evenement, Frequence, Notification, StatutEspace, TypeEvenement, Version
+from .notifications import EVENEMENTS_INTERNES, MESSAGES_PAR_MINUTE, envoyer, message_recepisse, messages_nouveautes, messages_quotidiens
 
 logger = logging.getLogger(__name__)
 DELAI_REGROUPEMENT = 600  # secondes sans nouvel événement avant l'envoi : un dépôt de 15 plans en 4G = un courriel
 ATTENTE_MAX = datetime.timedelta(minutes=30)  # au-delà, on envoie même si l'activité continue
 CLE_RECAPITULATIF = "ged:recapitulatif:dernier"
 TYPES_NOTIFIES = [TypeEvenement.DEPOT, TypeEvenement.INDICE, TypeEvenement.VISA, TypeEvenement.ANNULATION]
+DUREE_VERROU_NOTIFICATIONS = 10 * 60  # secondes, prolongées d'une minute par tranche de 20 courriels
 
 
 def planifier_notifications(espace_id: int) -> None:
@@ -30,33 +31,62 @@ def _messagerie(espace: EspaceChantier) -> bool:
 
 @shared_task
 def notifier_espace(espace_id: int) -> None:
+    """Courriels des nouveautés d'un espace (regroupées : un dépôt de 15 plans = un courriel).
+
+    L'envoi, à débit limité (pause d'une minute tous les 20 courriels), se fait hors de toute
+    transaction : aucun verrou de la base n'est tenu pendant les pauses, et chaque courriel parti est
+    enregistré aussitôt (Notification). Si le worker s'arrête en plein envoi, le nouvel essai ne
+    renvoie pas les courriels déjà partis. Un verrou (Valkey) empêche deux envois simultanés pour le
+    même espace.
+    """
     espace = EspaceChantier.objects.select_related("projet").filter(pk=espace_id).first()
     if espace is None:
         return
-    with transaction.atomic():
-        en_attente = Evenement.objects.select_for_update(skip_locked=True, of=("self",)).filter(espace=espace, a_notifier=True, notifie_le__isnull=True)
-        evenements = list(en_attente.select_related("document__lot", "version__document", "utilisateur").order_by("date", "id"))
-        if not evenements:
-            return
-        dernier = max(e.date for e in evenements)
-        premier = min(e.date for e in evenements)
-        maintenant = timezone.now()
-        if (not settings.CELERY_TASK_ALWAYS_EAGER and maintenant - dernier < datetime.timedelta(seconds=DELAI_REGROUPEMENT - 5)
-                and maintenant - premier < ATTENTE_MAX):
-            # Dépôt encore en cours : on attend le calme pour envoyer un seul courriel (30 minutes au plus).
-            transaction.on_commit(lambda: notifier_espace.apply_async((espace_id,), countdown=DELAI_REGROUPEMENT))
-            return
-        identifiants = [e.pk for e in evenements]
-        if not _messagerie(espace):
-            Evenement.objects.filter(pk__in=identifiants).update(a_notifier=False)
-            return
-        try:
-            envoyes = envoyer(messages_nouveautes(espace, evenements, Frequence.IMMEDIATE))
-        except Exception:  # noqa: BLE001 - messagerie injoignable : nouvel essai au prochain événement
-            logger.exception("Notifications de la GED %s non envoyées", espace_id)
-            return
-        Evenement.objects.filter(pk__in=identifiants).update(a_notifier=False, notifie_le=timezone.now())
-        logger.info("GED %s : %s courriel(s) envoyé(s)", espace_id, envoyes)
+    verrou = f"ged:notifications:{espace_id}"
+    if not cache.add(verrou, 1, DUREE_VERROU_NOTIFICATIONS):
+        return  # envoi en cours : les nouveautés restantes partiront à la relance (toutes les 15 minutes)
+    try:
+        _notifier(espace, verrou)
+    finally:
+        cache.delete(verrou)
+
+
+def _notifier(espace: EspaceChantier, verrou: str) -> None:
+    espace_id = espace.pk
+    evenements = list(
+        Evenement.objects.filter(espace=espace, a_notifier=True, notifie_le__isnull=True)
+        .select_related("document__lot", "version__document", "utilisateur").order_by("date", "id")
+    )
+    if not evenements:
+        return
+    dernier = max(e.date for e in evenements)
+    premier = min(e.date for e in evenements)
+    maintenant = timezone.now()
+    if (not settings.CELERY_TASK_ALWAYS_EAGER and maintenant - dernier < datetime.timedelta(seconds=DELAI_REGROUPEMENT - 5)
+            and maintenant - premier < ATTENTE_MAX):
+        # Dépôt encore en cours : on attend le calme pour envoyer un seul courriel (30 minutes au plus).
+        transaction.on_commit(lambda: notifier_espace.apply_async((espace_id,), countdown=DELAI_REGROUPEMENT))
+        return
+    identifiants = [e.pk for e in evenements]
+    if not _messagerie(espace):
+        Evenement.objects.filter(pk__in=identifiants).update(a_notifier=False)
+        return
+    paquets = messages_nouveautes(espace, evenements, Frequence.IMMEDIATE)
+    # Courriels déjà partis lors d'un essai interrompu (worker arrêté pendant une pause) : pas de doublon.
+    deja = {(e, a.lower()) for e, a in Notification.objects.filter(evenement_id__in=identifiants, envoyee_le__isnull=False)
+            .values_list("evenement_id", "adresse")}
+    if deja:
+        paquets = [p for p in paquets if not all((e.pk, p[0].to[0].lower()) in deja for e in p[1])]
+    # Verrou gardé le temps de l'envoi (une minute par tranche de 20 courriels), sans plus : après un
+    # arrêt du worker, la relance reprend bientôt.
+    cache.touch(verrou, DUREE_VERROU_NOTIFICATIONS + 60 * (len(paquets) // MESSAGES_PAR_MINUTE))
+    try:
+        envoyes = envoyer(paquets)
+    except Exception:  # noqa: BLE001 - messagerie injoignable : nouvel essai à la relance
+        logger.exception("Notifications de la GED %s non envoyées", espace_id)
+        return
+    Evenement.objects.filter(pk__in=identifiants).update(a_notifier=False, notifie_le=timezone.now())
+    logger.info("GED %s : %s courriel(s) envoyé(s)", espace_id, envoyes)
 
 
 @shared_task

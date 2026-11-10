@@ -132,9 +132,21 @@ def fermer_session(request) -> None:
 
 
 class SessionIntervenant(APIKeyCookie):
-    """Session ouverte avec un code : accès et intervenant actifs, code inchangé, espace actif."""
+    """Session ouverte avec un code : accès et intervenant actifs, code inchangé, espace actif.
+
+    La session est vérifiée AVANT le contrôle CSRF : pour un envoi multipart, ce contrôle lit tout le
+    corps de la requête (jusqu'à 1 Go, écrit dans /tmp). Sans session valide, le refus (401) part
+    donc sans rien lire : un inconnu ne peut ni occuper les fils du serveur ni remplir son disque.
+    """
 
     param_name: str = settings.SESSION_COOKIE_NAME
+
+    def __call__(self, request):
+        acces = self.authenticate(request, None)
+        if acces is None:
+            return None
+        self._get_key(request)  # contrôle CSRF (refus 403) pour une session valide seulement
+        return acces
 
     def authenticate(self, request, key):
         identifiant = request.session.get(CLE_SESSION)

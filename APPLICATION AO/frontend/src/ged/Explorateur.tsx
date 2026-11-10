@@ -1,9 +1,10 @@
 /** Explorateur des documents du chantier : classement par zone, lot et catégorie, indices,
  * visas et avis. Commun au cabinet et au portail des intervenants (droits fournis par le serveur). */
 import { AlertTriangle, ChevronDown, ChevronRight, Clock, Download, Eye, FileSpreadsheet, Lock, RefreshCw, Upload } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { CLASSE_CHAMP, Champ, ChampRecherche } from "../components/Filtres";
+import { formaterNombre } from "../lib/format";
 import type { ClientGed } from "./client";
 import Depot from "./Depot";
 import FicheDocument from "./FicheDocument";
@@ -12,11 +13,29 @@ import type { DocumentGed, DroitsGed, Referentiels } from "./types";
 
 type Vue = "tous" | "a_viser" | "retard" | "avis" | "en_attente" | "a_reprendre" | "a_lire" | "COMMUN" | "MOE" | `lot:${number}`;
 
+/** Rendu progressif : monter 2 000 lignes d'un coup fige l'écran plusieurs secondes sur un PC
+ * modeste ou une tablette de chantier. La liste est affichée par tranches de cette taille. */
+const TRANCHE = 200;
+
+const COLLATION = new Intl.Collator("fr", { numeric: true });
+
 const sansAccents = (texte: string) =>
   texte
     .normalize("NFD")
     .replace(/\p{Diacritic}/gu, "")
     .toLowerCase();
+
+/** Texte de recherche d'un document, calculé une fois par version de l'objet (un document modifié
+ * est un nouvel objet). */
+const textesRecherche = new WeakMap<DocumentGed, string>();
+function texteRecherche(d: DocumentGed): string {
+  let texte = textesRecherche.get(d);
+  if (texte === undefined) {
+    texte = sansAccents(`${d.reference} ${d.reference_emetteur} ${d.titre} ${d.categorie_libelle} ${d.auteur}`);
+    textesRecherche.set(d, texte);
+  }
+  return texte;
+}
 
 interface Proprietes {
   client: ClientGed;
@@ -38,6 +57,24 @@ export default function Explorateur({ client, droits, referentiels, documentOuve
   const [annules, setAnnules] = useState(false);
   const [depot, setDepot] = useState(false);
   const [chargement, setChargement] = useState(false);
+  // La saisie reste fluide : le filtrage suit la frappe avec un temps de retard si besoin.
+  const rechercheDifferee = useDeferredValue(recherche);
+
+  // Nombre de documents affichés, remis à une tranche à chaque changement de classement ou de recherche
+  // (ajustement pendant le rendu, sans passage intermédiaire par l'ancienne limite).
+  const cleAffichage = `${vue}|${rechercheDifferee}|${categorie}|${annules}`;
+  const [limite, setLimite] = useState(TRANCHE);
+  const [cleLimite, setCleLimite] = useState(cleAffichage);
+  if (cleLimite !== cleAffichage) {
+    setCleLimite(cleAffichage);
+    setLimite(TRANCHE);
+  }
+
+  // Fonction de bascule stable : les lignes mémoïsées ne sont pas redessinées à chaque rendu de la liste.
+  const surOuvrirActuel = useRef(surOuvrir);
+  useLayoutEffect(() => {
+    surOuvrirActuel.current = surOuvrir;
+  });
 
   const charger = useCallback(() => {
     setChargement(true);
@@ -84,6 +121,10 @@ export default function Explorateur({ client, droits, referentiels, documentOuve
   // cours. Un document ouvert d'un clic dans la liste garde la vue choisie.
   const ouvertParClic = useRef<number | null>(null);
   const lienTraite = useRef<number | null>(null);
+  const basculer = useCallback((id: number, ouvert: boolean) => {
+    ouvertParClic.current = ouvert ? null : id;
+    surOuvrirActuel.current(ouvertParClic.current);
+  }, []);
   useEffect(() => {
     if (documentOuvert === null) {
       lienTraite.current = null;
@@ -105,7 +146,7 @@ export default function Explorateur({ client, droits, referentiels, documentOuve
   }, [documentOuvert, documents]);
 
   const visibles = useMemo(() => {
-    const terme = sansAccents(recherche.trim());
+    const terme = sansAccents(rechercheDifferee.trim());
     return (documents ?? [])
       .filter((d) => {
         // Le document ouvert reste affiché (après un visa, il quitte la vue « À viser »).
@@ -113,7 +154,7 @@ export default function Explorateur({ client, droits, referentiels, documentOuve
         const v = derniere(d);
         if (d.annule && !annules) return false;
         if (categorie && d.categorie !== categorie) return false;
-        if (terme && !sansAccents(`${d.reference} ${d.reference_emetteur} ${d.titre} ${d.categorie_libelle} ${d.auteur}`).includes(terme)) return false;
+        if (terme && !texteRecherche(d).includes(terme)) return false;
         switch (vue) {
           case "tous":
             return true;
@@ -140,20 +181,37 @@ export default function Explorateur({ client, droits, referentiels, documentOuve
         if (vue === "a_viser" || vue === "retard") {
           return (derniere(a)?.echeance_visa ?? "9999").localeCompare(derniere(b)?.echeance_visa ?? "9999");
         }
-        const zone = (d: DocumentGed) => (d.zone === "COMMUN" ? "0" : d.zone === "LOT" ? `1${d.lot?.code ?? ""}` : "2");
+        // Commun, puis les lots dans l'ordre de leur code, puis la maîtrise d'œuvre (ordre du menu). Le rang
+        // de zone est comparé à part : en tri numérique, « 2 » passerait avant « 101 » (lot 01).
+        const rangZone = (d: DocumentGed) => (d.zone === "COMMUN" ? 0 : d.zone === "LOT" ? 1 : 2);
         return (
-          zone(a).localeCompare(zone(b), "fr", { numeric: true }) ||
+          rangZone(a) - rangZone(b) ||
+          COLLATION.compare(a.lot?.code ?? "", b.lot?.code ?? "") ||
           (ordreCategories.get(a.categorie) ?? 99) - (ordreCategories.get(b.categorie) ?? 99) ||
-          a.reference.localeCompare(b.reference, "fr", { numeric: true })
+          COLLATION.compare(a.reference, b.reference)
         );
       });
-  }, [documents, vue, recherche, categorie, annules, ordreCategories, documentOuvert]);
+  }, [documents, vue, rechercheDifferee, categorie, annules, ordreCategories, documentOuvert]);
+
+  // Documents montés : la tranche en cours, plus le document ouvert s'il est plus loin dans la liste
+  // (lien direct d'un courriel ou du journal) : il est alors affiché à la suite de la tranche.
+  const affiches = useMemo(() => {
+    if (visibles.length <= limite) return visibles;
+    const tranche = visibles.slice(0, limite);
+    if (documentOuvert !== null && !tranche.some((d) => d.id === documentOuvert)) {
+      const ouvert = visibles.find((d) => d.id === documentOuvert);
+      if (ouvert) tranche.push(ouvert);
+    }
+    return tranche;
+  }, [visibles, limite, documentOuvert]);
+  const restants = visibles.length - affiches.length;
 
   // Intertitres : par zone et lot dans « Tous », par catégorie dans un lot.
   const groupes = useMemo(() => {
-    const resultat: { cle: string; titre: string; documents: DocumentGed[] }[] = [];
+    const resultat: { base: string; cle: string; titre: string; documents: DocumentGed[] }[] = [];
     const parCategorie = vue === "COMMUN" || vue === "MOE" || vue.startsWith("lot:");
-    for (const d of visibles) {
+    const vus = new Map<string, number>();
+    for (const d of affiches) {
       let cle = "";
       let titre = "";
       if (vue === "tous") {
@@ -164,11 +222,17 @@ export default function Explorateur({ client, droits, referentiels, documentOuve
         titre = d.categorie_libelle;
       }
       const dernier = resultat[resultat.length - 1];
-      if (dernier && dernier.cle === cle) dernier.documents.push(d);
-      else resultat.push({ cle, titre, documents: [d] });
+      if (dernier && dernier.base === cle) {
+        dernier.documents.push(d);
+      } else {
+        // Clé React unique, même si un intertitre revient plus bas.
+        const occurrences = vus.get(cle) ?? 0;
+        vus.set(cle, occurrences + 1);
+        resultat.push({ base: cle, cle: occurrences ? `${cle}#${occurrences}` : cle, titre, documents: [d] });
+      }
     }
     return resultat;
-  }, [visibles, vue]);
+  }, [affiches, vue]);
 
   const entreesVues: { vue: Vue; libelle: string; nombre?: number; alerte?: boolean }[] = [
     ...(compteurs.a_viser || vue === "a_viser" ? [{ vue: "a_viser" as Vue, libelle: "À viser", nombre: compteurs.a_viser }] : []),
@@ -180,20 +244,33 @@ export default function Explorateur({ client, droits, referentiels, documentOuve
     ...(compteurs.en_attente || vue === "en_attente" ? [{ vue: "en_attente" as Vue, libelle: "En attente de visa", nombre: compteurs.en_attente }] : []),
     ...(compteurs.a_lire || vue === "a_lire" ? [{ vue: "a_lire" as Vue, libelle: "À lire (accusé demandé)", nombre: compteurs.a_lire, alerte: true }] : []),
   ];
-  const nombreParVue = (filtre: (d: DocumentGed) => boolean) => (documents ?? []).filter((d) => !d.annule && filtre(d)).length;
+  // Nombres par zone et catégories présentes : un seul passage sur la liste.
+  const repartition = useMemo(() => {
+    const parZone = new Map<string, number>();
+    const categories = new Set<string>();
+    let tous = 0;
+    for (const d of documents ?? []) {
+      categories.add(d.categorie);
+      if (d.annule) continue;
+      tous += 1;
+      const cle = d.zone === "LOT" ? `lot:${d.lot?.id}` : d.zone;
+      parZone.set(cle, (parZone.get(cle) ?? 0) + 1);
+    }
+    return { tous, parZone, categories };
+  }, [documents]);
   const entreesZones: { vue: Vue; libelle: string; nombre: number; mien?: boolean }[] = [
-    { vue: "COMMUN", libelle: "Commun à tous", nombre: nombreParVue((d) => d.zone === "COMMUN") },
+    { vue: "COMMUN", libelle: "Commun à tous", nombre: repartition.parZone.get("COMMUN") ?? 0 },
     ...droits.lots.map((l) => ({
       vue: `lot:${l.id}` as Vue,
       libelle: `${l.code} – ${l.intitule}`,
-      nombre: nombreParVue((d) => d.zone === "LOT" && d.lot?.id === l.id),
+      nombre: repartition.parZone.get(`lot:${l.id}`) ?? 0,
       mien: droits.mes_lots.some((m) => m.id === l.id),
     })),
     ...(droits.zones_visibles.includes("MOE")
-      ? [{ vue: "MOE" as Vue, libelle: "Maîtrise d'œuvre (réservé)", nombre: nombreParVue((d) => d.zone === "MOE") }]
+      ? [{ vue: "MOE" as Vue, libelle: "Maîtrise d'œuvre (réservé)", nombre: repartition.parZone.get("MOE") ?? 0 }]
       : []),
   ];
-  const categoriesPresentes = referentiels.categories.filter((c) => (documents ?? []).some((d) => d.categorie === c.code));
+  const categoriesPresentes = referentiels.categories.filter((c) => repartition.categories.has(c.code));
   const lotVue = vue.startsWith("lot:") ? lotsParId.get(Number(vue.slice(4))) : undefined;
   // Pas de bouton « Déposer » sans catégorie permise (CT, OPC après la réception).
   const peutDeposer = droits.zones_depot.length > 0 && droits.categories_depot.length > 0;
@@ -232,7 +309,7 @@ export default function Explorateur({ client, droits, referentiels, documentOuve
           )}
           <ul className="flex flex-col gap-1 rounded-xl border border-bordure bg-surface p-2">
             <li>
-              <BoutonVue actif={vue === "tous"} surClic={() => setVue("tous")} libelle="Tous les documents" nombre={nombreParVue(() => true)} />
+              <BoutonVue actif={vue === "tous"} surClic={() => setVue("tous")} libelle="Tous les documents" nombre={repartition.tous} />
             </li>
             {entreesZones.map((e) => (
               <li key={e.vue}>
@@ -290,28 +367,42 @@ export default function Explorateur({ client, droits, referentiels, documentOuve
                 : "Aucun document ne correspond à ce classement ou à cette recherche."}
             </p>
           ) : (
-            groupes.map((groupe) => (
-              <div key={groupe.cle || "liste"} className="flex flex-col gap-2">
-                {groupe.titre && <h3 className="mt-2 font-titre text-base font-semibold text-attenue">{groupe.titre}</h3>}
-                <ul className="flex flex-col gap-2">
-                  {groupe.documents.map((d) => (
-                    <LigneDocument
-                      key={d.id}
-                      document={d}
-                      ouvert={documentOuvert === d.id}
-                      surBascule={() => {
-                        ouvertParClic.current = documentOuvert === d.id ? null : d.id;
-                        surOuvrir(ouvertParClic.current);
-                      }}
-                      client={client}
-                      droits={droits}
-                      referentiels={referentiels}
-                      surMaj={majDocument}
-                    />
-                  ))}
-                </ul>
-              </div>
-            ))
+            <>
+              {groupes.map((groupe) => (
+                <div key={groupe.cle || "liste"} className="flex flex-col gap-2">
+                  {groupe.titre && <h3 className="mt-2 font-titre text-base font-semibold text-attenue">{groupe.titre}</h3>}
+                  <ul className="flex flex-col gap-2">
+                    {groupe.documents.map((d) => (
+                      <LigneDocument
+                        key={d.id}
+                        document={d}
+                        ouvert={documentOuvert === d.id}
+                        surBascule={basculer}
+                        client={client}
+                        droits={droits}
+                        referentiels={referentiels}
+                        surMaj={majDocument}
+                      />
+                    ))}
+                  </ul>
+                </div>
+              ))}
+              {restants > 0 && (
+                <div className="flex flex-wrap items-center gap-3 rounded-xl border border-bordure bg-surface px-4 py-3">
+                  <p role="status" className="min-w-0 flex-[1_1_260px] text-sm text-attenue">
+                    {formaterNombre(affiches.length)} documents affichés sur {formaterNombre(visibles.length)}. La recherche et le classement portent sur tous
+                    les documents.
+                  </p>
+                  <button type="button" onClick={() => setLimite((l) => l + TRANCHE)} className={CLASSE_BOUTON}>
+                    <ChevronDown aria-hidden="true" className="size-4" />
+                    Afficher {restants > TRANCHE ? `les ${formaterNombre(TRANCHE)} suivants` : restants > 1 ? `les ${restants} derniers` : "le dernier"}
+                  </button>
+                  <button type="button" onClick={() => setLimite(Number.POSITIVE_INFINITY)} className={CLASSE_BOUTON}>
+                    Tout afficher ({formaterNombre(visibles.length)})
+                  </button>
+                </div>
+              )}
+            </>
           )}
         </section>
       </div>
@@ -353,14 +444,17 @@ function BoutonVue({
 interface ProprietesLigne {
   document: DocumentGed;
   ouvert: boolean;
-  surBascule: () => void;
+  /** Fonction stable (commune à toutes les lignes) : ouvre ou referme la fiche du document. */
+  surBascule: (id: number, ouvert: boolean) => void;
   client: ClientGed;
   droits: DroitsGed;
   referentiels: Referentiels;
   surMaj: (document: DocumentGed) => void;
 }
 
-function LigneDocument({ document: d, ouvert, surBascule, client, droits, referentiels, surMaj }: ProprietesLigne) {
+/** Ligne mémoïsée : seules les lignes dont le document ou l'état d'ouverture change sont redessinées
+ * (les autres propriétés sont stables). */
+const LigneDocument = memo(function LigneDocument({ document: d, ouvert, surBascule, client, droits, referentiels, surMaj }: ProprietesLigne) {
   const v = derniere(d);
   const enVigueur = d.versions.find((x) => x.statut === "EN_VIGUEUR");
   const aLire = d.versions.some((x) => x.peut_accuser_lecture && !x.lu_le);
@@ -370,7 +464,7 @@ function LigneDocument({ document: d, ouvert, surBascule, client, droits, refere
       <div className="flex items-center gap-1 pr-2">
         <button
           type="button"
-          onClick={surBascule}
+          onClick={() => surBascule(d.id, ouvert)}
           aria-expanded={ouvert}
           className="flex min-w-0 flex-1 flex-wrap items-center gap-x-4 gap-y-2 px-4 py-3 text-left"
         >
@@ -436,4 +530,4 @@ function LigneDocument({ document: d, ouvert, surBascule, client, droits, refere
       {ouvert && <FicheDocument document={d} client={client} droits={droits} referentiels={referentiels} surMaj={surMaj} />}
     </li>
   );
-}
+});

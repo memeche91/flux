@@ -87,21 +87,46 @@
 		Referrer-Policy no-referrer
 	}
 
-	# Saisie du code : petite requête seulement.
-	request_body /api/ged/acces {
-		max_size 16KB
-	}
-	request_body {
+	# Taille des requêtes : 1 Go pour les seuls envois de fichiers (dépôt, nouvel indice, avis),
+	# 16 Ko pour la saisie du code et la déconnexion, 64 Ko pour tout le reste.
+	# Les trois groupes s'excluent : chaque requête n'a qu'une limite.
+	@envois path /api/ged/portail/documents /api/ged/portail/documents/*/versions /api/ged/portail/versions/*/avis
+	@sans_session path /api/ged/acces /api/ged/portail/deconnexion
+	@autres_requetes not path /api/ged/portail/documents /api/ged/portail/documents/*/versions /api/ged/portail/versions/*/avis /api/ged/acces /api/ged/portail/deconnexion
+	request_body @envois {
 		max_size 1GB
 	}
+	request_body @sans_session {
+		max_size 16KB
+	}
+	request_body @autres_requetes {
+		max_size 64KB
+	}
 
-	@api_ged path /api/ged/acces /api/ged/portail /api/ged/portail/*
+	# Saisie du code et déconnexion, ouvertes sans session : Caddy reçoit tout le corps (16 Ko au plus)
+	# avant de le transmettre. Un envoi au compte-gouttes (un octet par seconde) n'occupe donc jamais
+	# un fil du service « ged ». Les autres envois sont refusés par Django, sans lecture du corps,
+	# quand la session ouverte avec un code est absente (ged/protection.py).
+	# Ce bloc doit rester avant « handle @api_ged » : les blocs à matcher nommé gardent leur ordre.
+	handle @sans_session {
+		reverse_proxy ged:8000 {
+			request_buffers 16KB
+			header_up X-Ip-Client {client_ip}
+			transport http {
+				# Connexion inactive fermée par Caddy avant gunicorn (--keep-alive 5).
+				keepalive 4s
+			}
+		}
+	}
+
+	@api_ged path /api/ged/portail /api/ged/portail/*
 	handle @api_ged {
 		reverse_proxy ged:8000 {
 			header_up X-Ip-Client {client_ip}
 			transport http {
 				read_timeout 10m
 				write_timeout 10m
+				keepalive 4s
 			}
 		}
 	}

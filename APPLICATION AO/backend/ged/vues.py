@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import io
 
-from django.http import HttpResponse
+from django.http import Http404, HttpResponse
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from django.utils.http import content_disposition_header
@@ -14,10 +14,23 @@ from projets.fichiers import reponse_fichier_sure
 
 from .droits import Acteur, peut_voir
 from .models import AvisVersion, Document, EspaceChantier, StatutVisa, TypeEvenement, Version, Zone
-from .serialisation import EN_VIGUEUR, document_out, documents_visibles, evenement_out, nom_telechargement, statuts_des_versions
+from .serialisation import (
+    EN_VIGUEUR,
+    document_out,
+    documents_et_versions,
+    documents_visibles,
+    evenement_out,
+    liste_documents,
+    nom_telechargement,
+    statuts_des_versions,
+)
 from .services import accuser_lecture, deposer, donner_avis, journaliser, nouvel_indice, viser
 
 EVENEMENTS_VISIBLES_INTERVENANTS = [TypeEvenement.DEPOT, TypeEvenement.INDICE, TypeEvenement.VISA, TypeEvenement.ANNULATION, TypeEvenement.MODIFICATION]
+PAGES_JOURNAL_MAX = 100_000  # au-delà, le décalage SQL dépasserait un entier PostgreSQL (erreur 500)
+
+# Une pièce cachée à l'intervenant reçoit exactement la même réponse qu'une pièce inexistante
+# (Http404 → « Not Found », comme get_object_or_404) : on ne peut pas compter les pièces cachées.
 
 
 def _document_frais(document_id: int, acteur: Acteur) -> dict:
@@ -28,20 +41,20 @@ def _document_frais(document_id: int, acteur: Acteur) -> dict:
 
 
 def lister(espace: EspaceChantier, acteur: Acteur) -> list[dict]:
-    return [document_out(d, acteur) for d in documents_visibles(espace, acteur)]
+    return liste_documents(espace, acteur)
 
 
 def document_visible(acteur: Acteur, espace: EspaceChantier, document_id: int) -> Document:
     document = get_object_or_404(Document.objects.select_related("lot", "espace__projet"), pk=document_id, espace=espace)
     if not peut_voir(acteur, document):
-        raise HttpError(404, "Document introuvable.")
+        raise Http404
     return document
 
 
 def version_visible(acteur: Acteur, espace: EspaceChantier, version_id: int) -> Version:
     version = get_object_or_404(Version.objects.select_related("document__lot", "document__espace__projet"), pk=version_id, document__espace=espace)
     if not peut_voir(acteur, version.document):
-        raise HttpError(404, "Document introuvable.")
+        raise Http404
     return version
 
 
@@ -115,7 +128,7 @@ def telecharger_source(acteur: Acteur, espace: EspaceChantier, source_id: int):
 
     source = get_object_or_404(FichierSource.objects.select_related("version__document__espace"), pk=source_id, version__document__espace=espace)
     if not peut_voir(acteur, source.version.document):
-        raise HttpError(404, "Fichier introuvable.")
+        raise Http404
     return reponse_fichier(source.fichier, source.nom_original)
 
 
@@ -124,7 +137,7 @@ def telecharger_avis(acteur: Acteur, espace: EspaceChantier, avis_id: int):
     from .droits import voit_avis
 
     if not peut_voir(acteur, avis.version.document) or not voit_avis(acteur, avis.version):
-        raise HttpError(404, "Avis introuvable.")
+        raise Http404
     return reponse_fichier(avis.fichier, avis.nom_original or "avis")
 
 
@@ -134,7 +147,7 @@ def journal(espace: EspaceChantier, acteur: Acteur, page: int = 1, par_page: int
         visibles = documents_visibles(espace, acteur).values("pk")
         evenements = evenements.filter(type__in=EVENEMENTS_VISIBLES_INTERVENANTS, document__in=visibles)
     total = evenements.count()
-    page = max(1, page)
+    page = min(max(1, page), PAGES_JOURNAL_MAX)
     return {"total": total, "resultats": [evenement_out(e, acteur.cabinet) for e in evenements[(page - 1) * par_page:page * par_page]]}
 
 
@@ -160,8 +173,13 @@ def registre_xlsx(espace: EspaceChantier, acteur: Acteur) -> HttpResponse:
         cellule.font = Font(bold=True)
         cellule.fill = PatternFill("solid", start_color=couleur, end_color=couleur)
     aujourd_hui = timezone.localdate()
-    for document in documents_visibles(espace, acteur):
-        versions = sorted(document.versions.all(), key=lambda v: (v.deposee_le, v.pk), reverse=True)
+    # Numéro de ligne tenu ici : feuille.max_row et feuille[n] parcourent toutes les cellules déjà
+    # écrites, ce qui rendait le registre quadratique (81 s pour 4 000 documents).
+    ligne = feuille.max_row
+    gras = Font(bold=True)
+    documents, versions_par_document = documents_et_versions(espace, acteur)  # sans avis, accusés ni sources
+    for document in documents:
+        versions = sorted(versions_par_document.get(document.pk, []), key=lambda v: (v.deposee_le, v.pk), reverse=True)
         statuts = statuts_des_versions(versions)
         for v in versions:
             # Retard : jusqu'au visa, ou jusqu'à aujourd'hui pour un indice qui attend encore son visa
@@ -180,11 +198,13 @@ def registre_xlsx(espace: EspaceChantier, acteur: Acteur) -> HttpResponse:
                 v.get_visa_display() if v.visa else "", timezone.localtime(v.vise_le).strftime("%d/%m/%Y") if v.vise_le else "", retard,
                 v.visa_commentaire, "Annulé" if document.annule else LIBELLES_STATUTS[statuts[v.pk]],
             ])
-            for cellule in feuille[feuille.max_row]:
+            ligne += 1
+            for colonne in range(1, len(entetes) + 1):
+                cellule = feuille.cell(ligne, colonne)
                 if cellule.data_type == "f":
                     cellule.data_type = "s"  # texte saisi (« =… ») : écrit tel quel, jamais en formule Excel
                 if statuts[v.pk] == EN_VIGUEUR:
-                    cellule.font = Font(bold=True)
+                    cellule.font = gras
     for colonne, largeur in zip("ABCDEFGHIJKLMNOPQ", (12, 6, 26, 15, 16, 40, 7, 16, 24, 32, 16, 12, 22, 11, 9, 40, 11)):
         feuille.column_dimensions[colonne].width = largeur
     feuille.freeze_panes = "A4"

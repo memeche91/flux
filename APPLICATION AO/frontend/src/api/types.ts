@@ -675,3 +675,40 @@ export interface ComparatifLot {
   }[];
   hors_dpgf: Record<string, { numero: string; designation: string; montant: number | null }[]>;
 }
+
+// --- Sauvegardes (GET /api/sauvegardes/etat, POST /api/sauvegardes) ---
+
+export type StatutSauvegarde = "EN_COURS" | "REUSSIE" | "ECHEC";
+
+/** Dernière sauvegarde lancée, quel que soit son résultat. */
+export interface DerniereSauvegarde {
+  debut: string;
+  fin: string | null;
+  statut: StatutSauvegarde;
+  statut_libelle: string;
+  /** Taille en octets (0 tant que la sauvegarde n’est pas terminée). */
+  taille: number;
+  /** Copie de la base vérifiée par une restauration d’essai. */
+  verifiee: boolean;
+  message: string;
+}
+
+export interface SauvegardeReussie {
+  fin: string | null;
+  taille: number;
+  verifiee: boolean;
+}
+
+export interface EtatSauvegardes {
+  derniere: DerniereSauvegarde | null;
+  derniere_reussie: SauvegardeReussie | null;
+  en_cours: boolean;
+  /** Dossier des sauvegardes tel qu’affiché (\\SERVEUR\DAplomb\sauvegardes, ou donnees\sauvegardes). */
+  destination: string;
+  /** Fichiers de l’application sur le serveur de l’agence (STOCKAGE_SERVEUR=1). */
+  stockage_serveur: boolean;
+  /** Vide si tout va bien ; sinon message(s) à afficher. */
+  alerte: string;
+  /** Heure de la sauvegarde de chaque nuit, ex. « 2 h 30 ». */
+  heure: string;
+}

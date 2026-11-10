@@ -17,7 +17,7 @@ from ninja.utils import check_csrf
 from django.middleware.csrf import get_token
 
 from . import vues
-from .acces import acces_par_code, adresse_ip, fermer_session, ip_bloquee, navigateur, noter_echec, ouvrir_session, session_intervenant
+from .acces import CLE_SESSION, acces_par_code, adresse_ip, fermer_session, ip_bloquee, navigateur, noter_echec, ouvrir_session, session_intervenant
 from .droits import acteur_acces
 from .models import Frequence, TypeEvenement
 from .serialisation import droits_out, lot_court, referentiels
@@ -113,7 +113,9 @@ def acces(request, donnees: CodeAcces):
 
 @routes.post("/ged/portail/deconnexion", auth=None, response={204: None})
 def deconnexion(request):
-    if check_csrf(request) is not None:
+    # Sans session ouverte, rien à fermer : réponse immédiate, sans lire le corps de la requête
+    # (le contrôle CSRF lirait tout un envoi multipart).
+    if request.session.get(CLE_SESSION) and check_csrf(request) is not None:
         raise HttpError(403, "Session expirée.")
     fermer_session(request)
     return 204, None

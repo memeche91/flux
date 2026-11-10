@@ -25,6 +25,16 @@ from articles.normalisation import separer_numero, texte_cellule
 EXTENSIONS_ACCEPTEES = {".pdf", ".docx", ".doc", ".odt", ".rtf", ".xlsx", ".xlsm", ".xls", ".ods", ".csv"}
 CONVERSIONS = {".doc": "docx", ".odt": "docx", ".rtf": "docx", ".xls": "xlsx", ".ods": "xlsx"}
 
+# Garde-fous contre les fichiers fabriqués pour épuiser la mémoire du worker (bombes zip, page géante).
+# Un .docx est chargé en entier en mémoire (python-docx) ; un .xlsx est lu au fil de l'eau, sauf sa
+# table des chaînes partagées, son classeur et ses styles (openpyxl, même en lecture seule).
+XML_LU_EN_ENTIER_MAX = 100 * 1024 * 1024
+DOCX_DECOMPRESSE_MAX = 500 * 1024 * 1024
+TYPE_CHAINES_PARTAGEES = "application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"
+LIGNES_PAR_FEUILLE_MAX = 200_000
+PIXELS_OCR_MAX = 40_000_000  # une page A4 ou A3 garde ses 300 dpi ; une page A0 passe à environ 160 dpi
+MESSAGE_DECOMPRESSION = "Fichier anormalement volumineux une fois décompressé : il n’a pas été lu."
+
 
 class FormatNonAnalyse(Exception):
     """Le fichier est conservé mais son contenu ne peut pas être lu automatiquement."""
@@ -90,6 +100,8 @@ def lire_document(chemin: Path, dossier_travail: Path, *, tableaux_pdf: bool = F
     from pdfplumber.utils.exceptions import PdfminerException
 
     try:
+        if extension in {".docx", ".xlsx", ".xlsm"} and decompression_excessive(chemin, extension):
+            raise ErreurLecture(MESSAGE_DECOMPRESSION)
         if extension == ".docx":
             contenu = _lire_docx(chemin)
         elif extension in {".xlsx", ".xlsm"}:
@@ -108,7 +120,54 @@ def lire_document(chemin: Path, dossier_travail: Path, *, tableaux_pdf: bool = F
     return contenu
 
 
+def decompression_excessive(source, extension: str) -> bool:
+    """Bombe zip : les parties lues en entier dépassent-elles la limite une fois décompressées ?
+
+    Seule la taille annoncée par l'archive est lue (rien n'est décompressé) : une taille mensongère
+    est sans danger, zipfile s'arrête à cette taille puis signale une archive endommagée.
+    source : chemin ou flux binaire d'un .docx, .xlsx ou .xlsm.
+    """
+    with zipfile.ZipFile(source) as archive:
+        entrees = archive.infolist()
+        if extension.lower() == ".docx":
+            xml = sum(i.file_size for i in entrees if i.filename.lower().endswith((".xml", ".rels")))
+            return xml > XML_LU_EN_ENTIER_MAX or sum(i.file_size for i in entrees) > DOCX_DECOMPRESSE_MAX
+        lues = {"xl/sharedstrings.xml", "xl/workbook.xml", "xl/styles.xml"} | _chaines_partagees(archive)
+        return sum(i.file_size for i in entrees if i.filename.lower() in lues) > XML_LU_EN_ENTIER_MAX
+
+
+def _chaines_partagees(archive: zipfile.ZipFile) -> set[str]:
+    """Table des chaînes partagées déclarée dans [Content_Types].xml (openpyxl la cherche ainsi)."""
+    import xml.etree.ElementTree as ET
+
+    try:
+        info = archive.getinfo("[Content_Types].xml")
+    except KeyError:
+        return set()
+    if info.file_size > 5 * 1024 * 1024:
+        return {"[content_types].xml"}  # démesuré : compté dans les parties lues en entier
+    try:
+        racine = ET.fromstring(archive.read(info))
+    except (ET.ParseError, zipfile.BadZipFile, ValueError):
+        return set()
+    return {
+        (element.get("PartName") or "").lstrip("/").lower()
+        for element in racine.iter()
+        if element.tag.endswith("Override") and element.get("ContentType") == TYPE_CHAINES_PARTAGEES
+    }
+
+
 # --- Conversion des anciens formats -----------------------------------------
+
+# Profil LibreOffice : les images et objets liés d'un document reçu ne sont jamais téléchargés
+# (aucune requête vers l'adresse choisie par l'auteur du fichier, sur Internet ou le réseau local).
+PROFIL_LIBREOFFICE = """<?xml version="1.0" encoding="UTF-8"?>
+<oor:items xmlns:oor="http://openoffice.org/2001/registry" xmlns:xs="http://www.w3.org/2001/XMLSchema" \
+xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+<item oor:path="/org.openoffice.Office.Common/Security/Scripting"><prop oor:name="BlockUntrustedRefererLinks" \
+oor:op="fuse"><value>true</value></prop></item>
+</oor:items>
+"""
 
 
 def convertir(source: Path, format_cible: str, dossier: Path) -> Path:
@@ -120,6 +179,8 @@ def convertir(source: Path, format_cible: str, dossier: Path) -> Path:
     copie = dossier / f"source{source.suffix.lower()}"
     shutil.copyfile(source, copie)
     profil = dossier / "profil-libreoffice"  # profil propre : conversions simultanées possibles
+    (profil / "user").mkdir(parents=True, exist_ok=True)
+    (profil / "user" / "registrymodifications.xcu").write_text(PROFIL_LIBREOFFICE, encoding="utf-8")
     commande = [
         binaire,
         f"-env:UserInstallation={profil.as_uri()}",
@@ -246,6 +307,8 @@ def _lire_xlsx(chemin: Path) -> ContenuDocument:
                     continue
                 vides = 0
                 lignes.append(list(rangee))
+                if len(lignes) >= LIGNES_PAR_FEUILLE_MAX:  # feuille remplie exprès de cellules
+                    break
             if lignes:
                 contenu.tableaux.append(Tableau(feuille.title, lignes))
     finally:
@@ -320,7 +383,12 @@ def _ocr(chemin: Path, indices: list[int], dossier: Path) -> dict[int, str]:
     pdf = pypdfium2.PdfDocument(str(chemin))
     try:
         for indice in indices[: settings.OCR_PAGES_MAX]:
-            image = pdf[indice].render(scale=300 / 72).to_pil().convert("L")
+            page = pdf[indice]
+            # 300 dpi, sauf pour une page géante (jusqu'à 200 × 200 pouces dans un PDF) : nombre de
+            # pixels plafonné, sinon le rendu demanderait des dizaines de Go de mémoire.
+            largeur, hauteur = page.get_size()
+            echelle = min(300 / 72, (PIXELS_OCR_MAX / max(largeur * hauteur, 1.0)) ** 0.5)
+            image = page.render(scale=echelle).to_pil().convert("L")
             fichier = dossier / f"page-{indice}.png"
             image.save(fichier)
             sortie = subprocess.run(

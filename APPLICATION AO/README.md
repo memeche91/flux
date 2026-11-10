@@ -36,11 +36,13 @@ powershell -ExecutionPolicy Bypass -File .\installer.ps1
 
 L'installateur :
 1. vérifie que Docker Desktop fonctionne ;
-2. crée le fichier `.env` avec des clés de sécurité aléatoires ;
-3. construit et démarre l'application (5 à 10 minutes la première fois) ;
-4. vous demande de **créer votre compte administrateur** (mot de passe de 12 caractères minimum) ;
-5. télécharge **une seule fois** les modèles gratuits de l'assistant IA (environ 8 Go : comptez 10 à 30 minutes selon la connexion) ;
-6. ouvre **http://localhost:8080** dans votre navigateur.
+2. crée le fichier `.env` avec des clés de sécurité aléatoires (il s’arrête et explique quoi faire si une installation existe déjà sans son `.env`, voir « Mettre à jour sans rien perdre ») ;
+3. propose d’enregistrer les fichiers et les sauvegardes sur le **serveur de l’agence** (recommandé, voir « Stockage sur le serveur de l’agence ») et vérifie l’accès au dossier partagé ;
+4. construit et démarre l'application (5 à 10 minutes la première fois) ;
+5. vous demande de **créer votre compte administrateur** (mot de passe de 12 caractères minimum) ;
+6. télécharge **une seule fois** les modèles gratuits de l'assistant IA (environ 8 Go : comptez 10 à 30 minutes selon la connexion) ;
+7. fait une **première sauvegarde**, vérifiée, et affiche le résultat (ensuite, une sauvegarde est faite chaque nuit) ;
+8. ouvre **http://localhost:8080** dans votre navigateur.
 
 > **Mémoire** : Docker Desktop ne reçoit par défaut que la moitié de la mémoire du PC. L'installateur la mesure et choisit le modèle de l'assistant en conséquence : modèle complet à partir de 14 Go pour Docker (PC de 32 Go), modèle léger en dessous. **Carte graphique NVIDIA** : l'installateur vérifie que Docker peut l'utiliser ; l'assistant répond alors beaucoup plus vite. Si elle cesse d'être accessible, l'application redémarre sans elle.
 
@@ -52,19 +54,22 @@ L'installateur :
 |---|---|
 | Ouvrir D’Aplomb | http://localhost:8080 |
 | Paramétrer les lots et les utilisateurs | Bouton **Paramétrage** (en haut à droite, réservé à l'administrateur) |
-| Arrêter D’Aplomb | `docker compose down` dans le dossier |
-| Redémarrer / mettre à jour | Relancer `installer.ps1` (données conservées) |
+| Arrêter D’Aplomb | `docker compose down` dans le dossier (les tâches en attente sont conservées) |
+| Redémarrer / mettre à jour | Relancer `installer.ps1` (données conservées : voir « Mettre à jour sans rien perdre ») |
+| Sauvegarder tout de suite | `docker compose exec worker python manage.py sauvegarder` (sinon : chaque nuit à 2 h 30) |
+| Restaurer une sauvegarde | Clic droit sur `restaurer.ps1` › **Exécuter avec PowerShell** |
 | Voir les journaux en cas de problème | `docker compose logs -f backend worker` |
 | Ouvrir la GED aux entreprises sur Internet | Vider la ligne `GED_INTERNET=` du fichier `.env`, puis relancer `installer.ps1` et répondre **O** à la question « Ouvrir la GED aux entreprises sur Internet » |
 
 ### Où sont mes données ?
 
-- **Fichiers importés** : dossier `donnees\fichiers`, classés par type, puis par lot (par exemple `bibliotheque\CCTP\08\...`).
-- **Base de données** : volume Docker `application-ao_base_donnees`.
-- **Archives de fin de chantier** : dossier `donnees\archives` (ou le dossier choisi dans `.env`, ligne `DOSSIER_ARCHIVES_PC`, par exemple `D:\Archives chantiers`).
+- **Fichiers importés** : dossier `donnees\fichiers`, classés par type, puis par lot (par exemple `bibliotheque\CCTP\08\...`). Avec le stockage sur le serveur de l’agence : sous-dossier `fichiers` du dossier partagé (par exemple `\\SERVEUR\DAplomb\fichiers`).
+- **Base de données** : volume Docker `application-ao_base_donnees`, toujours sur ce PC (invisible dans l’Explorateur) ; sa copie vérifiée est faite chaque nuit dans le dossier des sauvegardes.
+- **Archives de fin de chantier** : dossier `donnees\archives` (ou le dossier choisi dans `.env`, ligne `DOSSIER_ARCHIVES_PC`, par exemple `D:\Archives chantiers`) ; avec le serveur de l’agence : `\\SERVEUR\DAplomb\archives`.
+- **Sauvegardes de chaque nuit** : dossier `donnees\sauvegardes` (ou ligne `DOSSIER_SAUVEGARDES_PC` de `.env`) ; avec le serveur de l’agence : `\\SERVEUR\DAplomb\sauvegardes`.
 - **Journal des connexions à la GED depuis Internet** : dossier `donnees\journaux`.
 
-> ⚠️ Ne supprimez jamais le fichier `.env` : il contient le mot de passe de la base de données. Sans lui, l'application ne peut plus ouvrir vos données.
+> ⚠️ Ne supprimez jamais le fichier `.env` : il contient le mot de passe de la base de données, la clé `DJANGO_SECRET_KEY` (sans elle, les codes d’accès des entreprises à la GED ne fonctionnent plus) et, avec le serveur de l’agence, le mot de passe du compte dédié. Sans lui, l'application ne peut plus ouvrir vos données. Une copie est faite chaque nuit dans `sauvegardes\configuration` (dossier confidentiel).
 
 En fin de chantier, l'archive complète du projet (bouton **Préparer l'archive complète**, page GED du projet) se télécharge ou se copie sur le serveur du cabinet ; la purge des fichiers libère ensuite la place (voir « GED de chantier »).
 
@@ -77,6 +82,83 @@ En fin de chantier, l'archive complète du projet (bouton **Préparer l'archive 
    DJANGO_CSRF_TRUSTED_ORIGINS=http://localhost:8080,http://127.0.0.1:8080,http://192.168.1.20:8080
    ```
 3. Relancez `installer.ps1`. Les autres postes ouvrent alors `http://192.168.1.20:8080`.
+
+---
+
+## Données : stockage, sauvegarde, restauration, mises à jour
+
+### Stockage sur le serveur de l’agence (recommandé)
+
+Par défaut, D’Aplomb range tout sur le PC où il est installé : une panne de son disque emporterait tout. Il est recommandé d’enregistrer les fichiers sur le serveur de l’agence, qui est lui-même sauvegardé :
+
+| Contenu | Fichiers sur le PC | Avec le serveur de l’agence |
+|---|---|---|
+| Fichiers importés, documents de la GED | `donnees\fichiers` | `\\SERVEUR\DAplomb\fichiers` |
+| Archives de fin de chantier | `donnees\archives` (ou `DOSSIER_ARCHIVES_PC`) | `\\SERVEUR\DAplomb\archives` |
+| Sauvegardes de chaque nuit | `donnees\sauvegardes` (ou `DOSSIER_SAUVEGARDES_PC`) | `\\SERVEUR\DAplomb\sauvegardes` |
+| Base de données | volume Docker du PC | volume Docker du PC (sa copie de chaque nuit part sur le serveur) |
+
+La base de données reste toujours sur le PC : PostgreSQL ne fonctionne pas de façon fiable sur un dossier réseau. C’est sa copie de chaque nuit, vérifiée, qui part sur le serveur.
+
+**Préparer le serveur** (Windows Server ; avec votre prestataire informatique au besoin) :
+1. créez un dossier, par exemple `D:\DAplomb`, et partagez-le sous le nom `DAplomb` ;
+2. créez un **compte Windows dédié** (par exemple `daplomb`), avec un mot de passe sans virgule ni guillemet et qui n’expire pas, et donnez-lui le droit **Modifier** sur ce dossier (onglets Partage et Sécurité), et sur rien d’autre ;
+3. vérifiez que le pare-feu du serveur autorise le partage de fichiers (port 445) depuis le PC de D’Aplomb, et que le partage accepte SMB 3 (c’est le cas par défaut depuis Windows Server 2012).
+
+**Activer** : lancez `installer.ps1` et répondez **O** à « Enregistrer les fichiers et les sauvegardes sur le serveur de l’agence ». Indiquez le chemin du dossier (`\\SERVEUR\DAplomb`, ou un sous-dossier : `\\SERVEUR\Donnees\DAplomb`), le compte (`DOMAINE\daplomb`, ou `SERVEUR\daplomb` pour un compte local du serveur) et son mot de passe. L’installateur :
+- trouve l’adresse IP du serveur (Docker ne connaît pas les noms du réseau Windows) ;
+- vérifie l’accès depuis Windows (création des sous-dossiers `fichiers`, `archives` et `sauvegardes`, écriture puis effacement d’un fichier d’essai), puis depuis Docker ;
+- copie sur le serveur les fichiers déjà enregistrés sur le PC, avant le redémarrage, puis renomme les anciens dossiers du PC (`donnees\fichiers-copie-avant-serveur-…`, à supprimer une fois l’application vérifiée) ;
+- active le fichier `docker-compose.serveur.yml` (ligne `COMPOSE_FILE` de `.env`).
+
+> Le mot de passe du compte dédié est enregistré dans `.env`, comme les autres clés de l’application : c’est pourquoi ce compte doit être **dédié** et limité au seul dossier de D’Aplomb. Seul Docker s’en sert, pour ouvrir le dossier partagé ; il n’est pas transmis aux services de l’application.
+
+À savoir :
+- le serveur doit être allumé quand l’application démarre (Docker ouvre le dossier partagé à ce moment-là). S’il était éteint, relancez `installer.ps1`, ou `docker compose up -d`, une fois le serveur revenu ;
+- mot de passe du compte changé, serveur renuméroté : relancez `installer.ps1`. Il retrouve l’adresse du serveur, vérifie l’accès et, s’il échoue, propose de saisir à nouveau le dossier et le compte. Les fichiers du serveur ne sont jamais effacés par cette opération ;
+- nouveau dossier partagé : copiez-y d’abord les sous-dossiers `fichiers` et `archives` de l’ancien, puis videz la ligne `STOCKAGE=` de `.env` et relancez `installer.ps1` ;
+- revenir aux fichiers sur le PC : mettez `STOCKAGE=pc` dans `.env`, puis relancez `installer.ps1`. Les fichiers du serveur sont recopiés sur le PC avant le redémarrage.
+
+### Sauvegarde automatique chaque nuit
+
+Chaque nuit à 2 h 30 (heure de Paris, ligne `SAUVEGARDE_HEURE` de `.env`), le service `worker` :
+1. copie la base de données dans `sauvegardes\base\AAAA-MM-JJ_HHMM.dump` ;
+2. **vérifie cette copie** : il la restaure dans une base temporaire et compare le nombre de lignes de tables clés avec la base réelle ;
+3. copie le fichier `.env` dans `sauvegardes\configuration\.env` : sa clé `DJANGO_SECRET_KEY` garde valides les codes d’accès des entreprises à la GED après une restauration. **Ce dossier est confidentiel** ;
+4. si les fichiers sont sur le PC, copie les fichiers nouveaux ou modifiés dans `sauvegardes\fichiers` et `sauvegardes\archives` (un fichier supprimé de l’application y reste encore 30 jours). Avec le serveur de l’agence, cette copie est inutile : les fichiers y sont déjà ;
+5. garde une sauvegarde par jour pendant 14 jours (`SAUVEGARDE_JOURS`) et la première de chaque mois pendant 6 mois (`SAUVEGARDE_MOIS`).
+
+En cas d’échec, les administrateurs (comptes administrateur actifs avec une adresse e-mail) reçoivent un courriel, si la messagerie est réglée. L’état de la dernière sauvegarde est affiché dans l’application, avec une alerte si aucune n’a réussi depuis plus de 36 heures, si la dernière a échoué, ou si les sauvegardes sont sur le même disque que l’application.
+
+- Le PC doit être allumé et la session Windows ouverte (Docker Desktop) à l’heure prévue. S’il était éteint, la sauvegarde est faite à son démarrage suivant.
+- Sauvegarder tout de suite : depuis l’application (administrateur), ou `docker compose exec worker python manage.py sauvegarder`. `installer.ps1` en fait une à la fin de chaque passage et affiche le résultat.
+- Fichiers sur le PC : placez les sauvegardes sur un autre disque, toujours branché (ligne `DOSSIER_SAUVEGARDES_PC` de `.env`, par exemple `E:\Sauvegardes DAplomb`), puis relancez `installer.ps1`. Sinon, une panne du disque emporterait l’application **et** ses sauvegardes.
+
+### Restaurer une sauvegarde
+
+Clic droit sur **`restaurer.ps1`** › **Exécuter avec PowerShell** (ou `powershell -ExecutionPolicy Bypass -File .\restaurer.ps1`). Le script :
+1. reprend le fichier `.env` enregistré avec les sauvegardes s’il est absent du dossier (nouveau PC) ;
+2. liste les sauvegardes et propose la plus récente (option `-Sauvegarde 2026-11-08_0230.dump` pour en choisir une sans la liste) ;
+3. vérifie que la clé des codes d’accès de la GED est bien celle de la sauvegarde, et propose de la reprendre sinon ;
+4. si les fichiers sont sur le PC, propose de les recopier depuis la sauvegarde (rien n’est effacé) ;
+5. après confirmation (taper `OUI`), arrête l’application, copie la base actuelle (`sauvegardes\base\avant-restauration_…`), restaure la base choisie, applique les mises à jour de structure, puis redémarre l’application.
+
+**Après une panne du PC** : installez Docker Desktop sur le nouveau PC, récupérez le dossier de l’application (étape 2 de l’installation), puis lancez **directement `restaurer.ps1`** et indiquez le dossier des sauvegardes (par exemple `\\SERVEUR\DAplomb\sauvegardes` ; le script demande le compte dédié si votre session n’y a pas accès). Il reprend `.env`, restaure la base, puis lance `installer.ps1` pour terminer (modèles de l’assistant, carte graphique). Si `installer.ps1` a déjà été lancé sur ce PC, `restaurer.ps1` propose de reprendre la clé de la sauvegarde.
+
+Application démarrée, la commande équivalente est : `docker compose exec worker python manage.py restaurer 2026-11-08_0230.dump --confirmer` (option `--avec-fichiers` pour recopier aussi les fichiers sauvegardés).
+
+### Mettre à jour sans rien perdre
+
+Vos données ne sont pas dans le code : la base est dans un volume Docker, les fichiers dans `donnees\` (ou sur le serveur de l’agence) et les clés dans `.env`. Pour mettre à jour :
+- **avec git** : `git pull` dans le dossier de l’application, puis relancez `installer.ps1` ;
+- **avec le ZIP** : copiez le contenu de la nouvelle version **par-dessus le dossier existant**, en acceptant de remplacer les fichiers. `.env` et le contenu de `donnees\` ne font pas partie du ZIP : ils sont conservés. Relancez ensuite `installer.ps1` ;
+- **dans un nouveau dossier** : copiez d’abord le fichier `.env` et le dossier `donnees` de l’ancien dossier dans le nouveau, puis lancez `installer.ps1`. Ne supprimez l’ancien dossier qu’une fois l’application vérifiée.
+
+Si le fichier `.env` manque alors qu’une base existe déjà, l’installateur s’arrête et explique quoi faire, au lieu de créer de nouvelles clés (qui rendraient la base inaccessible et les codes d’accès de la GED invalides). Les mises à jour de structure de la base sont appliquées automatiquement au démarrage. Par prudence, lancez une sauvegarde juste avant (`docker compose exec worker python manage.py sauvegarder`) ; `installer.ps1` en fait une à la fin de la mise à jour.
+
+### Journaux des services
+
+Chaque service garde au plus 5 fichiers de journal de 10 Mo (50 Mo) ; les plus anciens sont effacés automatiquement. Les journaux ne peuvent donc plus remplir le disque, même si la GED ouverte sur Internet reçoit beaucoup de requêtes. Pour lire les derniers messages : `docker compose logs --tail 200 backend worker`.
 
 ---
 
@@ -235,7 +317,9 @@ Après un changement de réglage, relancez `installer.ps1` : il télécharge le 
 ```
 APPLICATION AO/
 ├── installer.ps1          Installation / mise à jour Windows
+├── restaurer.ps1          Restauration d'une sauvegarde (y compris sur un nouveau PC)
 ├── docker-compose.yml     Les 7 services : base, redis, backend, worker, voix, ollama, web
+├── docker-compose.serveur.yml    Fichiers, archives et sauvegardes sur le serveur de l'agence (partage Windows)
 ├── docker-compose.internet.yml   GED sur Internet par l'adresse publique (service ged, port 443)
 ├── docker-compose.tunnel.yml     GED sur Internet par Cloudflare Tunnel (services ged et tunnel)
 ├── .env.example           Modèle de configuration (copié en .env par l'installateur)
@@ -251,6 +335,7 @@ APPLICATION AO/
 │   ├── dce/               Dossier de consultation : contrôle, .zip classé, envois
 │   ├── offres/            Analyse des offres : lecture des DPGF remplies, comparatif, notation, rapport ACT
 │   ├── ged/               GED de chantier : accès par code, droits, indices, visas, notifications, archive et purge
+│   ├── sauvegardes/       Sauvegarde de chaque nuit (base vérifiée, configuration, fichiers) et restauration
 │   └── assistant/         Assistant IA local : recherche par le sens, conversations, voix
 └── frontend/              React 19 · TypeScript · Vite · Tailwind CSS
     └── src/
@@ -264,9 +349,9 @@ APPLICATION AO/
 | Service | Rôle |
 |---|---|
 | `base` | PostgreSQL 16 |
-| `redis` | File d'attente des tâches (Valkey, fork open source de Redis) |
+| `redis` | File d'attente des tâches (Valkey, fork open source de Redis), conservée dans le volume `valkey_donnees` |
 | `backend` | API Django (gunicorn) |
-| `worker` | Tâches de fond : lecture, conversion, OCR et découpage des documents, lecture des offres, lecture des documents par l'IA ; tâches planifiées (récapitulatif GED du matin, relance des courriels, purges programmées) |
+| `worker` | Tâches de fond : lecture, conversion, OCR et découpage des documents, lecture des offres, lecture des documents par l'IA ; tâches planifiées (sauvegarde de chaque nuit, récapitulatif GED du matin, relance des courriels, purges programmées). Mémoire limitée à 6 Go |
 | `voix` | Voix de l'assistant : transcription (Whisper) et lecture à voix haute (Piper), chargées une seule fois |
 | `ollama` | Moteur d'IA local de l'assistant (modèles dans le volume `modeles_ia`) |
 | `web` | Caddy : sert l'interface et relaie l'API ; en mode Internet, site HTTPS public limité au portail de la GED |

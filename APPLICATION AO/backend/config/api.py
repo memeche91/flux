@@ -16,6 +16,7 @@ from offres.api import router as offres_router
 from projets.api import router as projets_router
 from projets.api_pieces import router as pieces_router
 from referentiel.api import router as referentiel_router
+from sauvegardes.api import router as sauvegardes_router
 
 api = NinjaAPI(
     title="D’Aplomb",
@@ -39,3 +40,4 @@ api.add_router("", offres_router)
 api.add_router("", ged_router)
 api.add_router("", archives_router)
 api.add_router("", ged_portail_router)
+api.add_router("", sauvegardes_router)

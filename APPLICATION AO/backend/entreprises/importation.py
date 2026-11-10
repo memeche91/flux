@@ -43,14 +43,35 @@ class ImportImpossible(Exception):
     pass
 
 
+LIGNES_MAX = 100_000
+LIGNES_VIDES_MAX = 1_000  # feuilles « formatées » sur un million de lignes : on s'arrête après ce blanc
+TROP_LONG = "Fichier trop long : un annuaire importé compte au plus 100 000 lignes."
+
+
 def _lignes(nom: str, contenu: bytes) -> list[list[str]]:
     if nom.lower().endswith((".xlsx", ".xlsm")):
         from openpyxl import load_workbook
 
+        from bibliotheque.lecture import decompression_excessive
+
         try:
+            if decompression_excessive(io.BytesIO(contenu), ".xlsx"):
+                raise ImportImpossible("Fichier anormalement volumineux une fois décompressé : il n’a pas été importé.")
             classeur = load_workbook(io.BytesIO(contenu), read_only=True, data_only=True)
             feuille = classeur.worksheets[0]
-            return [[_cellule(v) for v in ligne] for ligne in feuille.iter_rows(values_only=True)]
+            lignes: list[list[str]] = []
+            vides = 0
+            for ligne in feuille.iter_rows(values_only=True):
+                cellules = [_cellule(v) for v in ligne]
+                vides = 0 if any(cellules) else vides + 1
+                if vides > LIGNES_VIDES_MAX:
+                    break
+                if len(lignes) >= LIGNES_MAX:
+                    raise ImportImpossible(TROP_LONG)
+                lignes.append(cellules)
+            return lignes
+        except ImportImpossible:
+            raise
         except Exception:  # noqa: BLE001 - classeur protégé, ancien .xls renommé, fichier abîmé
             raise ImportImpossible(
                 "Classeur illisible ou protégé par un mot de passe : enregistrez-le en .xlsx sans mot de passe, ou en CSV."

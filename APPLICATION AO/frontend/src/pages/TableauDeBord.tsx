@@ -3,6 +3,7 @@ import { Link } from "react-router";
 
 import { TYPES_DOCUMENT, type Statistiques } from "../api/types";
 import { useAuth } from "../auth/AuthContext";
+import CarteSauvegarde from "../components/CarteSauvegarde";
 import EnTetePage from "../components/EnTetePage";
 import { formaterNombre } from "../lib/format";
 import { useRequete } from "../lib/useRequete";
@@ -60,6 +61,8 @@ export default function TableauDeBord() {
           {erreur}
         </p>
       )}
+
+      <CarteSauvegarde />
 
       <section aria-labelledby="titre-bibliotheque" className="flex flex-col gap-3">
         <h2 id="titre-bibliotheque" className="font-titre text-lg font-semibold">

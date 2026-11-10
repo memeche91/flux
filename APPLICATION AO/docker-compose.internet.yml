@@ -24,7 +24,12 @@ services:
       INITIALISER: "0"
       DJANGO_SETTINGS_MODULE: config.settings_ged
       GED_URL_PUBLIQUE: ${GED_URL_PUBLIQUE:?Renseignez GED_URL_PUBLIQUE dans .env (par exemple https://ged.cabinet.fr)}
-    command: ["gunicorn", "config.wsgi:application", "--bind", "0.0.0.0:8000", "--workers", "2", "--worker-class", "gthread", "--threads", "4", "--timeout", "120"]
+    # 2 processus × 16 fils : un téléchargement lent (plan de 200 Mo en 4G) occupe un fil jusqu'au bout,
+    # et une dizaine en parallèle ne doivent pas bloquer le portail des autres chantiers. Délais :
+    # 120 s sans signe de vie d'un processus, 30 s pour finir les requêtes en cours à l'arrêt,
+    # 5 s pour garder ouverte une connexion inactive de Caddy. Au plus 32 connexions à PostgreSQL.
+    command: ["gunicorn", "config.wsgi:application", "--bind", "0.0.0.0:8000", "--workers", "2", "--worker-class", "gthread",
+              "--threads", "16", "--timeout", "120", "--graceful-timeout", "30", "--keep-alive", "5"]
     depends_on:
       backend:
         condition: service_started

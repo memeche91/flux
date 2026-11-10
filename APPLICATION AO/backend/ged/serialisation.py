@@ -1,6 +1,8 @@
 """Données renvoyées par l'API de la GED (communes au cabinet et au portail des intervenants)."""
 from __future__ import annotations
 
+from collections import defaultdict
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from django.conf import settings
@@ -21,10 +23,29 @@ from .droits import (
     voit_avis,
     zones_de_depot,
 )
-from .models import Avis, Diffusion, Document, EspaceChantier, Evenement, Intervenant, Profil, StatutEspace, StatutVisa, Version, Zone
+from .models import (
+    AccuseLecture,
+    Avis,
+    AvisVersion,
+    Diffusion,
+    Document,
+    EspaceChantier,
+    Evenement,
+    FichierSource,
+    Intervenant,
+    Profil,
+    StatutEspace,
+    StatutVisa,
+    Version,
+    Zone,
+)
 
 EN_VIGUEUR, EN_EXAMEN, REFUSEE, REMPLACEE = "EN_VIGUEUR", "EN_EXAMEN", "REFUSEE", "REMPLACEE"
 LIBELLES_STATUTS = {EN_VIGUEUR: "À utiliser", EN_EXAMEN: "En examen", REFUSEE: "Refusé : ne pas exécuter", REMPLACEE: "Remplacé"}
+# Libellés lus dans un dictionnaire : get_FOO_display() reconstruit le sien à chaque appel (coûteux
+# sur les milliers d'indices d'une liste).
+LIBELLES_DIFFUSION = dict(Diffusion.choices)
+LIBELLES_VISA = dict(StatutVisa.choices)
 
 
 def statuts_des_versions(versions: list[Version]) -> dict[int, str]:
@@ -59,21 +80,35 @@ def lot_court(lot) -> dict | None:
     return None if lot is None else {"id": lot.pk, "code": lot.code, "intitule": lot.intitule}
 
 
-def version_out(v: Version, document: Document, acteur: Acteur, statut: str) -> dict:
+@dataclass
+class Annexes:
+    """Avis, accusés de lecture et fichiers sources des indices d'une liste, regroupés par indice
+    (chargés en une requête chacun pour toute la liste)."""
+
+    avis: dict[int, list] = field(default_factory=dict)
+    accuses: dict[int, list] = field(default_factory=dict)
+    sources: dict[int, list] = field(default_factory=dict)
+
+
+def version_out(v: Version, document: Document, acteur: Acteur, statut: str, annexes: Annexes | None = None) -> dict:
     espace = document.espace
     attente = v.visa == StatutVisa.EN_ATTENTE
     aujourd_hui = timezone.localdate()
+    if annexes is None:
+        sources, avis, accuses = v.sources.all(), v.avis.all(), list(v.accuses.all())
+    else:
+        sources, avis, accuses = annexes.sources.get(v.pk, []), annexes.avis.get(v.pk, []), annexes.accuses.get(v.pk, [])
     donnees = {
         "id": v.pk, "indice": v.indice, "date_indice": v.date_indice, "nom_original": v.nom_original, "taille": v.taille, "empreinte": v.empreinte,
         "objet": v.objet, "deposee_par": v.deposee_par_nom, "deposee_le": v.deposee_le, "diffusion": v.diffusion,
-        "diffusion_libelle": v.get_diffusion_display(), "statut": statut, "statut_libelle": LIBELLES_STATUTS[statut],
-        "visa": v.visa, "visa_libelle": v.get_visa_display() if v.visa else "", "visa_commentaire": v.visa_commentaire,
+        "diffusion_libelle": LIBELLES_DIFFUSION.get(v.diffusion, v.diffusion), "statut": statut, "statut_libelle": LIBELLES_STATUTS[statut],
+        "visa": v.visa, "visa_libelle": LIBELLES_VISA.get(v.visa, v.visa) if v.visa else "", "visa_commentaire": v.visa_commentaire,
         "visa_fichier": bool(v.visa_fichier), "fiche_visa": bool(v.fiche_visa), "vise_par": v.vise_par_nom, "vise_le": v.vise_le,
         "echeance_visa": v.echeance_visa, "visa_en_retard": attente and v.echeance_visa is not None and v.echeance_visa < aujourd_hui,
         "jours_restants": (v.echeance_visa - aujourd_hui).days if attente and v.echeance_visa else None,
         "nouvel_indice_attendu": v.nouvel_indice_attendu, "nom_telechargement": nom_telechargement(document, v, statut),
         "indice_force": v.indice_force, "fichier_archive": not v.fichier,
-        "sources": [{"id": s.pk, "nom_original": s.nom_original, "taille": s.taille} for s in v.sources.all()],
+        "sources": [{"id": s.pk, "nom_original": s.nom_original, "taille": s.taille} for s in sources],
         "avis": [], "peut_donner_avis": not acteur.cabinet and peut_donner_avis(acteur, v) and espace.statut != StatutEspace.CLOS,  # le cabinet vise
         "lecture_requise": document.categorie in LECTURE_REQUISE and document.zone == Zone.LOT, "accuses": [], "lu_le": None,
         "peut_accuser_lecture": peut_accuser_lecture(acteur, v),
@@ -82,9 +117,8 @@ def version_out(v: Version, document: Document, acteur: Acteur, statut: str) -> 
         donnees["avis"] = [
             {"id": a.pk, "role": a.role, "role_libelle": a.get_role_display(), "avis": a.avis, "avis_libelle": a.get_avis_display(),
              "observations": a.observations, "fichier": bool(a.fichier), "auteur": a.auteur_nom, "date": a.date}
-            for a in v.avis.all()
+            for a in avis
         ]
-    accuses = list(v.accuses.all())
     if acteur.cabinet:
         donnees["accuses"] = [{"intervenant": a.intervenant.nom, "lu_par": a.nom_declare, "lu_le": a.lu_le} for a in accuses]
     else:
@@ -93,8 +127,8 @@ def version_out(v: Version, document: Document, acteur: Acteur, statut: str) -> 
     return donnees
 
 
-def document_out(d: Document, acteur: Acteur) -> dict:
-    versions = sorted(d.versions.all(), key=lambda v: (v.deposee_le, v.pk), reverse=True)
+def document_out(d: Document, acteur: Acteur, versions: list[Version] | None = None, annexes: Annexes | None = None) -> dict:
+    versions = sorted(d.versions.all() if versions is None else versions, key=lambda v: (v.deposee_le, v.pk), reverse=True)
     statuts = statuts_des_versions(versions)
     en_vigueur = next((v for v in versions if statuts[v.pk] == EN_VIGUEUR), None)
     return {
@@ -102,7 +136,7 @@ def document_out(d: Document, acteur: Acteur) -> dict:
         "confidentielle": d.categorie in CONFIDENTIELLES, "reference": d.reference, "reference_emetteur": d.reference_emetteur, "titre": d.titre,
         "auteur": d.auteur_nom, "cree_le": d.cree_le, "annule": d.annule, "motif_annulation": d.motif_annulation,
         "indice_en_vigueur": en_vigueur.indice if en_vigueur else None,
-        "versions": [version_out(v, d, acteur, statuts[v.pk]) for v in versions],
+        "versions": [version_out(v, d, acteur, statuts[v.pk], annexes) for v in versions],
         "peut_ajouter_indice": peut_ajouter_indice(acteur, d),
     }
 
@@ -112,6 +146,49 @@ def documents_visibles(espace: EspaceChantier, acteur: Acteur):
         Document.objects.filter(espace=espace).filter(filtre_visibles(acteur, espace))
         .select_related("lot", "espace__projet").prefetch_related("versions__avis", "versions__accuses__intervenant", "versions__sources")
     )
+
+
+def _par_parent(objets, cle: str) -> dict[int, list]:
+    groupes: dict[int, list] = defaultdict(list)
+    for objet in objets:
+        groupes[getattr(objet, cle)].append(objet)
+    return groupes
+
+
+def documents_et_versions(espace: EspaceChantier, acteur: Acteur) -> tuple[list[Document], dict[int, list[Version]]]:
+    """Documents visibles et leurs indices, en deux requêtes.
+
+    Sans prefetch_related : Django y crée une copie de requête par document et par indice, ce qui
+    prenait les deux tiers du temps de la liste d'un gros chantier (2 000 documents, 6 000 indices).
+    """
+    visibles = Document.objects.filter(espace=espace).filter(filtre_visibles(acteur, espace))
+    documents = list(visibles.select_related("lot", "espace__projet"))
+    versions = _par_parent(Version.objects.filter(document__in=visibles.values("pk")), "document_id") if documents else {}
+    for document in documents:
+        for v in versions.get(document.pk, []):
+            v.document = document  # droits et noms de téléchargement sans requête par indice
+    return documents, versions
+
+
+def liste_documents(espace: EspaceChantier, acteur: Acteur) -> list[dict]:
+    """Liste des documents visibles : exactement document_out pour chacun, en cinq requêtes.
+
+    Pour un intervenant, seuls ses propres accusés de lecture sont chargés (il ne voit pas ceux des
+    autres) ; pour le cabinet, tous, avec le nom de l'intervenant.
+    """
+    documents, versions = documents_et_versions(espace, acteur)
+    if not documents:
+        return []
+    visibles = Document.objects.filter(espace=espace).filter(filtre_visibles(acteur, espace)).values("pk")
+    indices = Version.objects.filter(document__in=visibles).values("pk")
+    accuses = AccuseLecture.objects.filter(version__in=indices).order_by("pk")
+    accuses = accuses.select_related("intervenant") if acteur.cabinet else accuses.filter(intervenant=acteur.intervenant)
+    annexes = Annexes(
+        avis=_par_parent(AvisVersion.objects.filter(version__in=indices), "version_id"),
+        accuses=_par_parent(accuses, "version_id"),
+        sources=_par_parent(FichierSource.objects.filter(version__in=indices), "version_id"),
+    )
+    return [document_out(d, acteur, versions.get(d.pk, []), annexes) for d in documents]
 
 
 def evenement_out(e: Evenement, cabinet: bool = False) -> dict:
