@@ -496,8 +496,14 @@ def alerte(derniere_terminee: Sauvegarde | None, derniere_reussie: Sauvegarde | 
                             "depuis : lancez-en une avec le bouton « Sauvegarder maintenant » (compte administrateur) "
                             "pour protéger ce qui a été saisi depuis la restauration.")
         elif maintenant - fin > DELAI_ALERTE:
-            messages.append(f"La dernière sauvegarde réussie date du {_date(fin)}, il y a plus de 36 heures : "
-                            "le PC ou l’application étaient-ils arrêtés la nuit ?")
+            texte = f"La dernière sauvegarde réussie date du {_date(fin)}, il y a plus de 36 heures"
+            if (derniere_terminee is not None and derniere_terminee.statut == StatutSauvegarde.ECHEC
+                    and maintenant - derniere_terminee.debut <= DELAI_ALERTE):
+                # Les sauvegardes tournent mais échouent : la cause est l'échec affiché juste avant.
+                messages.append(texte + ".")
+            else:
+                # Aucune sauvegarde n'a tourné depuis plus de 36 heures.
+                messages.append(texte + " : le PC ou l’application étaient-ils arrêtés la nuit ?")
         if derniere_terminee is not None and derniere_terminee.pk == derniere_reussie.pk and not derniere_reussie.verifiee:
             messages.append("La dernière sauvegarde n’a pas pu être vérifiée par une restauration d’essai.")
     if derniere_terminee is not None and CLE_DIFFERENTE in derniere_terminee.message:
@@ -552,7 +558,16 @@ def courriel_echec(sauvegarde: Sauvegarde) -> int:
             return 0
         echec = sauvegarde.statut == StatutSauvegarde.ECHEC
         sujet = "D’Aplomb : la sauvegarde a échoué" if echec else "D’Aplomb : sauvegarde non vérifiée"
-        if settings.STOCKAGE_SERVEUR:
+        protection = "elles ne sont plus protégées tant qu’une sauvegarde complète n’a pas réussi."
+        if not echec:
+            # La copie a été écrite : le dossier des sauvegardes (ou le serveur) n'est pas en cause. La restauration
+            # d'essai se fait dans PostgreSQL, sur le disque de Docker du PC de l'application.
+            protection = "rien ne garantit que la copie de la base faite par cette sauvegarde pourrait être restaurée."
+            conseil = ("La copie a bien été écrite dans le dossier des sauvegardes : c’est la restauration d’essai, faite dans "
+                       "la base de données du PC de l’application, qui n’a pas abouti. Vérifiez qu’il reste de la place sur "
+                       "le disque du PC de l’application qui contient Docker (en général C:) ; le compte rendu ci-dessus "
+                       "donne la cause exacte.")
+        elif settings.STOCKAGE_SERVEUR:
             conseil = ("Vérifiez que le serveur de l’agence est allumé, joignable depuis le PC de l’application, et qu’il lui reste "
                        "de la place.")
         else:
@@ -567,9 +582,8 @@ def courriel_echec(sauvegarde: Sauvegarde) -> int:
             "",
             f"Destination : {destination_affichee()}",
             "",
-            "Vos données sont intactes dans l’application, mais elles ne sont plus protégées tant qu’une sauvegarde "
-            f"complète n’a pas réussi. {conseil} Relancez ensuite la sauvegarde depuis l’application, avec un compte "
-            f"administrateur : {settings.URL_APPLICATION}",
+            f"Vos données sont intactes dans l’application, mais {protection} {conseil} Relancez ensuite la sauvegarde "
+            f"depuis l’application, avec un compte administrateur : {settings.URL_APPLICATION}",
             "",
             "Message envoyé automatiquement par D’Aplomb.",
         ])

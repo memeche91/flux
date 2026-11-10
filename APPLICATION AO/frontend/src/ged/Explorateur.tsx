@@ -65,12 +65,22 @@ export default function Explorateur({ client, droits, referentiels, documentOuve
   const cleAffichage = `${vue}|${rechercheDifferee}|${categorie}|${annules}`;
   const [limite, setLimite] = useState(TRANCHE);
   const [cleLimite, setCleLimite] = useState(cleAffichage);
-  // Documents déposés pendant la session : affichés même au-delà de la limite, jusqu'au prochain changement de classement.
-  const [deposes, setDeposes] = useState<ReadonlySet<number>>(new Set());
+  // Documents retenus : déposés, ou dont la fiche a été refermée, pendant la session. Ils restent affichés à
+  // leur place même au-delà de la limite, jusqu'au prochain changement de classement.
+  const [retenus, setRetenus] = useState<ReadonlySet<number>>(new Set());
   if (cleLimite !== cleAffichage) {
     setCleLimite(cleAffichage);
     setLimite(TRANCHE);
-    setDeposes(new Set());
+    setRetenus(new Set());
+  }
+  // Fiche refermée (clic sur la ligne, Entrée) ou remplacée par celle d'un autre document : le document
+  // précédent est retenu. Sans cela, un document ouvert par un lien direct (courriel, journal) et classé
+  // au-delà de la tranche disparaîtrait de la liste à la fermeture de sa fiche : liste qui saute, focus
+  // clavier renvoyé en haut de la page. Object.is : un numéro illisible dans l'adresse donne NaN (NaN !== NaN).
+  const [ouvertPrecedent, setOuvertPrecedent] = useState(documentOuvert);
+  if (!Object.is(ouvertPrecedent, documentOuvert)) {
+    setOuvertPrecedent(documentOuvert);
+    if (ouvertPrecedent !== null) setRetenus((s) => (s.has(ouvertPrecedent) ? s : new Set(s).add(ouvertPrecedent)));
   }
   // Clavier : après « Afficher les … suivants » ou « Tout afficher », le focus passe à la première ligne
   // ajoutée (le bandeau et ses boutons disparaissent quand tout est affiché).
@@ -200,16 +210,16 @@ export default function Explorateur({ client, droits, referentiels, documentOuve
   }, [documents, vue, rechercheDifferee, categorie, annules, ordreCategories, documentOuvert]);
 
   // Documents montés : la tranche en cours, plus le document ouvert (lien direct d'un courriel ou du
-  // journal) et les documents déposés pendant la session s'ils sont plus loin dans la liste : ils sont
-  // alors affichés à la suite de la tranche, dans l'ordre de la liste.
+  // journal) et les documents retenus (déposés ou refermés pendant la session) s'ils sont plus loin dans
+  // la liste : ils sont alors affichés à la suite de la tranche, dans l'ordre de la liste.
   const affiches = useMemo(() => {
     if (visibles.length <= limite) return visibles;
     const tranche = visibles.slice(0, limite);
     for (const d of visibles.slice(limite)) {
-      if (d.id === documentOuvert || deposes.has(d.id)) tranche.push(d);
+      if (d.id === documentOuvert || retenus.has(d.id)) tranche.push(d);
     }
     return tranche;
-  }, [visibles, limite, documentOuvert, deposes]);
+  }, [visibles, limite, documentOuvert, retenus]);
   const restants = visibles.length - affiches.length;
 
   function afficherPlus(nouvelleLimite: number) {
@@ -302,7 +312,7 @@ export default function Explorateur({ client, droits, referentiels, documentOuve
           zoneInitiale={vue === "COMMUN" || vue === "MOE" ? vue : lotVue ? "LOT" : undefined}
           lotInitial={lotVue?.id}
           surDepose={(d) => {
-            setDeposes((s) => new Set(s).add(d.id));
+            setRetenus((s) => new Set(s).add(d.id));
             majDocument(d);
           }}
           surFermer={() => setDepot(false)}

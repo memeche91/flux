@@ -59,9 +59,7 @@ TROP_VOLUMINEUX = "Fichier anormalement volumineux une fois décompressé : il n
 
 def _lignes(nom: str, contenu: bytes) -> list[list[str]]:
     if nom.lower().endswith((".xlsx", ".xlsm")):
-        from openpyxl import load_workbook
-
-        from bibliotheque.lecture import decompression_excessive
+        from bibliotheque.lecture import decompression_excessive, ouvrir_classeur
 
         try:
             with zipfile.ZipFile(io.BytesIO(contenu)) as archive:  # taille annoncée : rien n'est décompressé
@@ -69,7 +67,8 @@ def _lignes(nom: str, contenu: bytes) -> list[list[str]]:
                     raise ImportImpossible(TROP_VOLUMINEUX)
             if decompression_excessive(io.BytesIO(contenu), ".xlsx"):
                 raise ImportImpossible(TROP_VOLUMINEUX)
-            classeur = load_workbook(io.BytesIO(contenu), read_only=True, data_only=True)
+            # Sans liens externes ni feuilles de graphique : openpyxl les lirait autant de fois qu'ils sont cités.
+            classeur = ouvrir_classeur(io.BytesIO(contenu))
             feuille = classeur.worksheets[0]
             lignes: list[list[str]] = []
             vides = 0

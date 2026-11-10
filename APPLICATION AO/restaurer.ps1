@@ -130,16 +130,33 @@ function Chemin-Complet([string]$chemin) {
     return [System.IO.Path]::GetFullPath($chemin).TrimEnd('\')
 }
 
-# Dossier réseau (\\NAS\…) ou lecteur réseau (S:\…, vu par la session Windows mais pas par Docker Desktop).
+# Dossier réseau (\\NAS\…) ou lecteur réseau (S:\…, vu par la session Windows mais pas par Docker Desktop), même
+# déconnecté ou invisible depuis une fenêtre d'administrateur (lecteur mémorisé dans HKCU:\Network).
 function Est-Reseau([string]$chemin) {
     if ($chemin.StartsWith('\\') -or $chemin.StartsWith('//')) { return $true }
     try {
         $racine = [System.IO.Path]::GetPathRoot($chemin)
         if ($racine -match '^[A-Za-z]:') {
-            return (New-Object System.IO.DriveInfo ($racine.Substring(0, 1))).DriveType -eq [System.IO.DriveType]::Network
+            $lettre = $racine.Substring(0, 1)
+            $type = (New-Object System.IO.DriveInfo ($lettre)).DriveType
+            if ($type -eq [System.IO.DriveType]::Network) { return $true }
+            if ($type -eq [System.IO.DriveType]::NoRootDirectory -and (Test-Path -LiteralPath "HKCU:\Network\$lettre")) { return $true }
         }
     } catch { }
     return $false
+}
+
+# Chemin lisible par Docker (même règle que installer.ps1), qui ne lit comme dossier qu'un chemin complet (E:\…) ou
+# commençant par « . » : un chemin relatif sans « .\ » (donnees\sauvegardes) serait pris pour un nom de volume, et
+# Docker refuserait tout le projet (plus rien ne démarrerait). Il devient .\donnees\sauvegardes. \Sauvegardes,
+# /Sauvegardes, D:Sauvegardes et ~\Sauvegardes deviennent des chemins complets, lus de la même façon par Docker et par
+# ce script.
+function Chemin-Docker([string]$valeur) {
+    if (-not $valeur -or $valeur -match '^([A-Za-z]:[\\/]|\\\\|//|\.)') { return $valeur }
+    if ($valeur -match '^[A-Za-z]:') { return $valeur.Substring(0, 2) + "\" + $valeur.Substring(2) }
+    if ($valeur -match '^[\\/]') { return [System.IO.Path]::GetPathRoot($PSScriptRoot).TrimEnd('\') + "\" + ($valeur -replace '^[\\/]+', '') }
+    if ($valeur -match '^~([\\/]|$)') { return $env:USERPROFILE + $valeur.Substring(1) }
+    return ".\$valeur"
 }
 
 # Fichiers sur le PC : le service worker lit les sauvegardes dans le dossier que Docker monte (ligne
@@ -252,6 +269,30 @@ if (Test-Path -LiteralPath $cheminEnv) {
 }
 $contenuEnv = [System.IO.File]::ReadAllText($cheminEnv)
 $serveur = (Lire-Variable $contenuEnv "COMPOSE_FILE") -match 'serveur'
+if (-not $serveur) {
+    # Dossiers du PC écrits à la main dans .env (chemin relatif sans « .\ », guillemets doubles, dans lesquels Docker
+    # interpréterait les \n, \t… du chemin) : réécrits comme par installer.ps1, sinon Docker refuserait le projet.
+    foreach ($nomDossier in @("DOSSIER_SAUVEGARDES_PC", "DOSSIER_ARCHIVES_PC")) {
+        $cheminLu = Lire-Variable $contenuEnv $nomDossier
+        $cheminDocker = Chemin-Docker $cheminLu.Trim('"')
+        if ($cheminDocker -ne $cheminLu) {
+            # Entre apostrophes droites, sauf un chemin qui en contient une : Docker le lit alors tel quel.
+            $valeurDossier = "'" + $cheminDocker + "'"
+            if ($cheminDocker.Contains("'")) { $valeurDossier = $cheminDocker }
+            $contenuEnv = Definir-Variable $contenuEnv $nomDossier $valeurDossier
+            Enregistrer-Env $contenuEnv
+            if (-not $noteEnv) { $noteEnv = " (.env a été mis à jour)" }
+            Write-Host "Ligne $nomDossier de .env : $cheminDocker (au lieu de $cheminLu), chemin que Docker sait lire." -ForegroundColor Cyan
+        }
+    }
+    # Archives sur un dossier ou un lecteur réseau, que Docker ne sait pas ouvrir : la restauration ne pourrait pas
+    # démarrer, ou recopierait les archives hors d'atteinte (installer.ps1 refuse aussi ce réglage).
+    $archivesPc = Lire-Variable $contenuEnv "DOSSIER_ARCHIVES_PC"
+    if ($archivesPc -and (Est-Reseau $archivesPc)) {
+        Arreter ("DOSSIER_ARCHIVES_PC ($archivesPc) est un dossier ou un lecteur réseau, que Docker ne sait pas ouvrir : $(Abandon)`n" +
+            "Indiquez dans .env un dossier d’un disque du PC (par exemple DOSSIER_ARCHIVES_PC='D:\Archives chantiers'), ou videz la ligne, puis relancez ce script.")
+    }
+}
 # Fichiers sur le PC : la liste et la restauration lisent le dossier monté par Docker, qui doit être celui
 # indiqué ci-dessus (disque externe qui a changé de lettre, sauvegardes recopiées ailleurs…).
 if ($dossier -and -not $serveur) { Utiliser-Dossier-Sauvegardes $dossier }
@@ -333,6 +374,9 @@ while ($true) {
     } else {
         # Dossier monté vide ou absent (disque externe qui a changé de lettre, .env neuf…).
         Write-Host "Aucune sauvegarde trouvée dans le dossier des sauvegardes du PC ($monte, sous-dossier base)." -ForegroundColor Yellow
+        if (Est-Reseau $monte) {
+            Write-Host "Ce dossier est un dossier ou un lecteur réseau, que Docker ne sait pas ouvrir : indiquez-le ci-dessous, ses sauvegardes seront recopiées sur ce PC." -ForegroundColor Yellow
+        }
         $autre = (Read-Host "Dossier qui contient les sauvegardes (sous-dossiers base et configuration ; Entrée pour abandonner)").Trim().Trim('"').TrimEnd('\')
     }
     if (-not $autre) { break }

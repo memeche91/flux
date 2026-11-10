@@ -6,7 +6,10 @@ from unittest import mock
 from django.test import TestCase
 
 from bibliotheque import lecture
-from bibliotheque.tests_audit import xlsx_chaines_partagees
+from bibliotheque.tests_audit import (
+    xlsx_chaines_partagees,
+    xlsx_graphique_et_liens_externes,
+)
 
 from . import importation
 from .importation import ImportImpossible, _lignes, importer
@@ -37,7 +40,7 @@ class ImportAnnuaireAuditTests(TestCase):
     def test_table_des_chaines_demesuree_refusee(self):
         contenu = xlsx_chaines_partagees([["Entreprise", "Ville"]] + [[f"Entreprise {n}", f"Ville {n}"] for n in range(300)])
         self.assertEqual(len(_lignes("annuaire.xlsx", contenu)), 301)
-        with mock.patch.object(lecture, "XML_LU_EN_ENTIER_MAX", 5_000), mock.patch("openpyxl.load_workbook") as chargement:
+        with mock.patch.object(lecture, "XML_LU_EN_ENTIER_MAX", 5_000), mock.patch.object(lecture, "ouvrir_classeur") as chargement:
             with self.assertRaisesMessage(ImportImpossible, "anormalement volumineux"):
                 _lignes("annuaire.xlsx", contenu)
         chargement.assert_not_called()
@@ -63,11 +66,23 @@ class ImportAnnuaireAuditTests(TestCase):
         self.assertEqual(len(_lignes("annuaire.xlsx", contenu)), 301)
         with (
             mock.patch.object(importation, "ANNUAIRE_DECOMPRESSE_MAX", 10_000),
-            mock.patch("openpyxl.load_workbook") as chargement,
+            mock.patch.object(lecture, "ouvrir_classeur") as chargement,
             self.assertRaisesMessage(ImportImpossible, "anormalement volumineux"),
         ):
             _lignes("annuaire.xlsx", contenu)
         chargement.assert_not_called()
+
+    def test_liens_externes_et_feuilles_de_graphique_jamais_lus(self):
+        # L'import tourne dans le serveur web, sans limite de mémoire : un lien externe de 20 Mo cité dix fois
+        # (fichier de 52 Ko) faisait monter gunicorn de 2 Go en 70 s. Ni liens externes ni graphiques ne sont lus.
+        from openpyxl.reader import drawings, workbook
+
+        contenu = xlsx_graphique_et_liens_externes(citations=2, cadres=2, references=3)
+        with mock.patch.object(workbook, "read_external_link") as liens_externes, mock.patch.object(drawings, "read_chart") as graphiques:
+            lignes = _lignes("annuaire.xlsx", contenu)
+        liens_externes.assert_not_called()
+        graphiques.assert_not_called()
+        self.assertEqual(lignes, [["N°", "Désignation", "PU HT"], ["8.1", "Châssis aluminium", "850"]])
 
     def test_csv_trop_long_refuse(self):
         contenu = "\n".join(["Entreprise;Ville"] + [f"Entreprise {n};Annecy" for n in range(60)]).encode()

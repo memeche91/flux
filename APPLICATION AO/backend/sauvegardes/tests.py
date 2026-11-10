@@ -194,6 +194,37 @@ class SauvegardeTests(OutilsSimules, TestCase):
         self.assertIn("non vérifiée", mail.outbox[0].subject)
         self.assertIn("n’a pas pu être vérifiée", etat()["alerte"])
 
+    @override_settings(EMAIL_ACTIF=True)
+    def test_courriel_copie_non_verifiee_conseil(self):
+        """Copie écrite mais restauration d'essai en échec : le conseil vise le disque de Docker du PC, jamais le
+        serveur ni le dossier des sauvegardes (où la copie vient d'être écrite)."""
+        Utilisateur.objects.create_superuser("admin", "admin@cabinet.fr", "mot-de-passe-solide-42")
+        self.outils.echecs["pg_restore"] = ("pg_restore: error: could not execute query: ERROR: could not extend file "
+                                            "\"base/16384/16390\": No space left on device")
+        for stockage_serveur in (True, False):
+            with self.subTest(stockage_serveur=stockage_serveur), override_settings(STOCKAGE_SERVEUR=stockage_serveur):
+                mail.outbox.clear()
+                sauvegarde = lancer("planification")
+                self.assertEqual(sauvegarde.statut, StatutSauvegarde.REUSSIE, sauvegarde.message)
+                self.assertFalse(sauvegarde.verifiee)
+                self.assertEqual(len(mail.outbox), 1)
+                courriel = mail.outbox[0]
+                self.assertEqual(courriel.subject, "D’Aplomb : sauvegarde non vérifiée")
+                self.assertIn("No space left on device", courriel.body)
+                self.assertIn("La copie a bien été écrite dans le dossier des sauvegardes", courriel.body)
+                self.assertIn("disque du PC de l’application qui contient Docker", courriel.body)
+                self.assertNotIn("joignable depuis le PC", courriel.body)
+                self.assertNotIn("dossier des sauvegardes est accessible", courriel.body)
+                self.assertNotIn("ne sont plus protégées", courriel.body)
+        # Un vrai échec en mode serveur garde le conseil sur le serveur de l'agence.
+        self.outils.echecs = {"pg_dump": "pg_dump: error: could not open output file: Host is down"}
+        mail.outbox.clear()
+        with override_settings(STOCKAGE_SERVEUR=True):
+            self.assertEqual(lancer("planification").statut, StatutSauvegarde.ECHEC)
+        self.assertEqual(mail.outbox[0].subject, "D’Aplomb : la sauvegarde a échoué")
+        self.assertIn("joignable depuis le PC de l’application", mail.outbox[0].body)
+        self.assertNotIn("contient Docker", mail.outbox[0].body)
+
     def test_restauration_d_essai_en_erreur(self):
         self.outils.echecs["pg_restore"] = "pg_restore: error: could not read from input file: end of file"
         sauvegarde = lancer("planification")
@@ -491,6 +522,29 @@ class AlerteTests(TestCase):
             reussie.verifiee = True
             reussie.message = f"Base : 2 Mo. Configuration : ATTENTION, {services.CLE_DIFFERENTE} : …"
             self.assertIn("La clé DJANGO_SECRET_KEY de l’application diffère", alerte(reussie, reussie, maintenant))
+
+    def test_echecs_de_nuit_sans_question_d_arret(self):
+        """Dernière réussite de plus de 36 heures et échec récent : la cause est l'échec affiché, pas un PC arrêté.
+        Si l'échec a lui-même plus de 36 heures, aucune sauvegarde n'a tourné depuis : la question reste posée."""
+        maintenant = timezone.now()
+        with override_settings(STOCKAGE_SERVEUR=True):
+            reussie = Sauvegarde.objects.create(statut=StatutSauvegarde.REUSSIE, verifiee=True,
+                                                debut=maintenant - datetime.timedelta(days=3),
+                                                fin=maintenant - datetime.timedelta(days=3) + datetime.timedelta(minutes=5))
+            echec = Sauvegarde.objects.create(
+                statut=StatutSauvegarde.ECHEC, debut=maintenant - datetime.timedelta(hours=10),
+                fin=maintenant - datetime.timedelta(hours=10) + datetime.timedelta(minutes=1),
+                message="Dossier des sauvegardes : \\\\SERVEUR\\DAplomb\\sauvegardes inaccessible (Host is down).")
+            texte = alerte(echec, reussie, maintenant)
+            self.assertEqual(texte, f"La dernière sauvegarde (le {services._date(echec.debut)}) a échoué : {echec.message} "
+                                    f"La dernière sauvegarde réussie date du {services._date(reussie.fin)}, il y a plus de 36 heures.")
+            self.assertNotIn("arrêtés la nuit", texte)
+            self.assertEqual(etat()["alerte"], texte)  # même texte par l'API (dernière terminée = l'échec)
+            # Échec vieux de 2 jours, rien depuis : le PC ou l'application étaient bien arrêtés.
+            echec.debut = maintenant - datetime.timedelta(days=2)
+            echec.fin = echec.debut + datetime.timedelta(minutes=1)
+            self.assertIn("il y a plus de 36 heures : le PC ou l’application étaient-ils arrêtés la nuit ?",
+                          alerte(echec, reussie, maintenant))
 
     def test_copie_ancienne_restauree(self):
         """Copie de 3 jours restaurée : ni « arrêtés la nuit ? » ni rien tant qu'elle a moins de 36 heures."""

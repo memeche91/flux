@@ -145,6 +145,8 @@ def decompression_excessive(source, extension: str) -> bool:
     Seule la taille annoncée par l'archive est lue (rien n'est décompressé, sauf [Content_Types].xml et les
     liens d'un classeur, de petite taille, et le classeur lui-même, lu au fil de l'eau) : une taille mensongère
     est sans danger, zipfile s'arrête à cette taille puis signale une archive endommagée.
+    Un classeur doit ensuite être ouvert par ouvrir_classeur : load_workbook lirait aussi liens externes et
+    feuilles de graphique autant de fois qu'ils sont cités, ce que cette vérification ne compte pas.
     source : chemin ou flux binaire d'un .docx, .xlsx ou .xlsm.
     """
     with zipfile.ZipFile(source) as archive:
@@ -160,7 +162,7 @@ def decompression_excessive(source, extension: str) -> bool:
         en_entier = en_flux = 0
         for info in entrees:
             nom = info.filename.lower()
-            # openpyxl analyse une partie autant de fois que le classeur la cite comme feuille.
+            # openpyxl analyse une partie, et ses liens (.rels), autant de fois que le classeur la cite comme feuille.
             taille = info.file_size * max(1, citations[nom])
             if nom in feuilles:
                 en_flux += taille
@@ -273,12 +275,13 @@ def _citations_feuilles(archive: zipfile.ZipFile) -> Counter | None:
     """Nombre de fois que chaque partie est citée comme feuille par le classeur (noms en minuscules).
 
     openpyxl analyse une feuille autant de fois que le classeur la cite (dimensions au chargement, puis
-    lignes) : une feuille sans ligne citée trente fois occupe le worker trente fois plus longtemps. Comme
-    openpyxl, tout enfant de <sheets> compte, quel que soit son nom : son r:id (ou id) désigne un lien du
-    classeur, quels que soient le type et le mode de ce lien. Tous les classeurs possibles (déclarés, et
-    xl/workbook.xml) sont lus, au fil de l'eau, en mémoire constante. Si les citations ne peuvent pas être
-    établies, le fichier n'est pas lu : None quand [Content_Types].xml, les liens d'un classeur ou les classeurs
-    sont démesurés, zipfile.BadZipFile quand ils sont illisibles.
+    lignes) : une feuille sans ligne citée trente fois occupe le worker trente fois plus longtemps. Il analyse
+    aussi en entier, à chaque citation, les liens de la feuille (« <dossier>/_rels/<nom>.rels ») : ils sont
+    comptés autant de fois qu'elle. Comme openpyxl, tout enfant de <sheets> compte, quel que soit son nom :
+    son r:id (ou id) désigne un lien du classeur, quels que soient le type et le mode de ce lien. Tous les
+    classeurs possibles (déclarés, et xl/workbook.xml) sont lus, au fil de l'eau, en mémoire constante. Si les
+    citations ne peuvent pas être établies, le fichier n'est pas lu : None quand [Content_Types].xml, les liens
+    d'un classeur ou les classeurs sont démesurés, zipfile.BadZipFile quand ils sont illisibles.
     """
     import xml.parsers.expat
 
@@ -300,7 +303,11 @@ def _citations_feuilles(archive: zipfile.ZipFile) -> Counter | None:
             for lien in arbre.iter() if arbre is not None else ():
                 cible = _cible_lien(lien, dossier)
                 if cible is not None:
-                    liens.setdefault(lien.get("Id") or "", set()).add(cible.lower())
+                    # La feuille et ses liens, chemin calculé comme openpyxl (get_rels_path).
+                    dossier_cible, nom_cible = posixpath.split(cible)
+                    liens.setdefault(lien.get("Id") or "", set()).update(
+                        {cible.lower(), posixpath.join(dossier_cible, "_rels", f"{nom_cible}.rels").lower()}
+                    )
             profondeur = 0
             dans_sheets = False
 
@@ -428,6 +435,7 @@ def _lire_docx(chemin: Path) -> ContenuDocument:
     document = Document(str(chemin))
     contenu = ContenuDocument()
     compteurs = [0] * 9
+    styles = _StylesDocx(document)
 
     for element in document.iter_inner_content():
         if isinstance(element, Table):
@@ -440,7 +448,8 @@ def _lire_docx(chemin: Path) -> ContenuDocument:
         texte = " ".join(element.text.split())
         if not texte:
             continue
-        nom_style = (element.style.name if element.style is not None else "") or ""
+        style = styles.de(element)
+        nom_style = (style.name if style is not None else "") or ""
         if _STYLE_SOMMAIRE.match(nom_style):
             continue
 
@@ -451,34 +460,88 @@ def _lire_docx(chemin: Path) -> ContenuDocument:
             for indice in range(niveau, 9):
                 compteurs[indice] = 0
             numero, titre = separer_numero(texte)
-            if not numero and _numerotation_automatique(element):
+            if not numero and _numerotation_automatique(element, style, styles):
                 numero = ".".join(str(c or 1) for c in compteurs[:niveau])
             contenu.blocs.append(Bloc("titre", texte=titre or texte, niveau=niveau, numero=numero))
         else:
-            contenu.blocs.append(Bloc("texte", texte=texte, gras=_est_gras(element)))
+            contenu.blocs.append(Bloc("texte", texte=texte, gras=_est_gras(element, style)))
     return contenu
 
 
-def _numerotation_automatique(paragraphe) -> bool:
+class _StylesDocx:
+    """Styles d'un .docx, résolus une fois chacun, comme python-docx.
+
+    python-docx parcourt tous les styles du fichier à chaque Paragraph.style (2 ms par paragraphe avec les
+    164 styles du modèle Word ; 85 s pour 3 000 paragraphes et 2 000 styles déclarés), puis à chaque étape
+    de Style.base_style. Un style « basé sur » lui-même, directement ou non, faisait en outre tourner sans
+    fin la recherche de la numérotation d'un titre.
+    """
+
+    def __init__(self, document):
+        from docx.enum.style import WD_STYLE_TYPE
+
+        self._styles = document.styles
+        self._type = WD_STYLE_TYPE.PARAGRAPH
+        self._elements: dict = {}
+        for element in self._styles.element.style_lst:
+            self._elements.setdefault(element.styleId, element)  # le premier de chaque identifiant, comme python-docx
+        self._resolus: dict = {}
+        self._numerotes: dict = {}
+
+    def de(self, paragraphe):
+        """Paragraph.style : le style déclaré s'il existe et s'applique aux paragraphes, sinon le style par défaut."""
+        ident = paragraphe._p.style or None  # identifiant vide : style par défaut, comme python-docx
+        if ident not in self._resolus:
+            from docx.styles.style import StyleFactory
+
+            element = self._elements.get(ident) if ident is not None else None
+            if element is not None and element.type == self._type:
+                self._resolus[ident] = StyleFactory(element)
+            else:
+                if None not in self._resolus:
+                    self._resolus[None] = self._styles.default(self._type)
+                self._resolus[ident] = self._resolus[None]
+        return self._resolus[ident]
+
+    def numerote(self, style) -> bool:
+        """Le style, ou l'un de ceux dont il hérite (« basé sur »), porte-t-il une numérotation ?
+
+        Résultat retenu pour chaque style de la chaîne ; une boucle d'héritage s'arrête au premier retour.
+        """
+        element = style.element if style is not None else None
+        chaine = []
+        resultat = False
+        while element is not None:
+            if element in self._numerotes:
+                resultat = bool(self._numerotes[element])  # None : boucle d'héritage, sans numérotation trouvée
+                break
+            self._numerotes[element] = None
+            chaine.append(element)
+            proprietes = element.pPr
+            if proprietes is not None and proprietes.numPr is not None:
+                resultat = True
+                break
+            base = element.basedOn
+            element = self._elements.get(base.val) if base is not None else None
+        for maillon in chaine:
+            self._numerotes[maillon] = resultat
+        return resultat
+
+
+def _numerotation_automatique(paragraphe, style, styles: _StylesDocx) -> bool:
     """Le titre est-il numéroté automatiquement par Word (numéro absent du texte) ?"""
     proprietes = paragraphe._p.pPr
     if proprietes is not None and proprietes.numPr is not None:
         numero_liste = proprietes.numPr.numId
         return numero_liste is None or numero_liste.val != 0
-    style = paragraphe.style
-    while style is not None:
-        proprietes = style.element.pPr
-        if proprietes is not None and proprietes.numPr is not None:
-            return True
-        style = style.base_style
-    return False
+    return styles.numerote(style)
 
 
-def _est_gras(paragraphe) -> bool:
+def _est_gras(paragraphe, style) -> bool:
     morceaux = [r for r in paragraphe.runs if r.text.strip()]
     if not morceaux:
         return False
-    style_gras = bool(paragraphe.style is not None and paragraphe.style.font.bold)
+    style_gras = bool(style is not None and style.font.bold)
     return all(r.bold or (r.bold is None and style_gras) for r in morceaux)
 
 
@@ -500,10 +563,29 @@ def _lignes_tableau_docx(tableau) -> list[list[str]]:
 # --- Excel et CSV -----------------------------------------------------------
 
 
-def _lire_xlsx(chemin: Path) -> ContenuDocument:
-    from openpyxl import load_workbook
+def ouvrir_classeur(source):
+    """Classeur ouvert par openpyxl en lecture seule (valeurs calculées), sans liens externes ni feuilles de graphique.
 
-    classeur = load_workbook(str(chemin), read_only=True, data_only=True)
+    Seules les valeurs des feuilles de calcul sont lues ici. load_workbook lirait en entier, et garderait en
+    mémoire, chaque lien externe autant de fois que <externalReferences> le cite, chaque feuille de graphique
+    (dessins et graphiques compris) autant de fois que <sheets> la cite, et chaque graphique autant de fois que
+    les cadres d'un dessin le désignent : decompression_excessive ne compte qu'une fois chacune de ces parties
+    (un fichier de 56 Ko faisait monter le worker de 3,6 Go). Ni les uns ni les autres ne sont donc lus.
+    source : chemin (.xlsx, .xlsm) ou flux binaire, vérifié d'abord par decompression_excessive.
+    """
+    from openpyxl.reader.excel import ExcelReader
+
+    class LecteurSansGraphiques(ExcelReader):
+        def read_chartsheet(self, sheet, rel):
+            """Feuille de graphique ignorée : ni elle, ni ses dessins, graphiques et images ne sont lus."""
+
+    lecteur = LecteurSansGraphiques(source, read_only=True, data_only=True, keep_links=False)
+    lecteur.read()
+    return lecteur.wb
+
+
+def _lire_xlsx(chemin: Path) -> ContenuDocument:
+    classeur = ouvrir_classeur(str(chemin))
     contenu = ContenuDocument()
     lues = 0  # budget commun à toutes les feuilles : classeur rempli exprès de lignes, ou de feuilles
     try:

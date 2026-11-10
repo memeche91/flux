@@ -291,20 +291,29 @@ function Chemin-Pc([string]$valeur, [string]$defaut) {
     return (Join-Path $PSScriptRoot ($valeur -replace '^\.\\', ''))
 }
 
-# Chemin à écrire dans .env pour Docker : un chemin relatif sans « .\ » (donnees\sauvegardes) serait pris pour un
-# nom de volume, et Docker refuserait tout le projet (plus rien ne démarrerait). Il devient .\donnees\sauvegardes.
+# Chemin à écrire dans .env pour Docker, qui ne lit comme dossier qu'un chemin complet (E:\…) ou commençant par
+# « . » : un chemin relatif sans « .\ » (donnees\sauvegardes) serait pris pour un nom de volume, et Docker refuserait
+# tout le projet (plus rien ne démarrerait). Il devient .\donnees\sauvegardes. \Sauvegardes, /Sauvegardes,
+# D:Sauvegardes et ~\Sauvegardes deviennent des chemins complets, lus de la même façon par Docker et par ce script.
 function Chemin-Docker([string]$valeur) {
-    if ($valeur -and $valeur -notmatch '^([A-Za-z]:|[\\/.~"])' -and -not $valeur.Contains("'")) { return ".\$valeur" }
-    return $valeur
+    if (-not $valeur -or $valeur -match '^([A-Za-z]:[\\/]|\\\\|//|\.)') { return $valeur }
+    if ($valeur -match '^[A-Za-z]:') { return $valeur.Substring(0, 2) + "\" + $valeur.Substring(2) }
+    if ($valeur -match '^[\\/]') { return [System.IO.Path]::GetPathRoot($PSScriptRoot).TrimEnd('\') + "\" + ($valeur -replace '^[\\/]+', '') }
+    if ($valeur -match '^~([\\/]|$)') { return $env:USERPROFILE + $valeur.Substring(1) }
+    return ".\$valeur"
 }
 
-# Dossier réseau (\\NAS\…) ou lecteur réseau (S:\…, vu par la session Windows mais pas par Docker Desktop).
+# Dossier réseau (\\NAS\…) ou lecteur réseau (S:\…, vu par la session Windows mais pas par Docker Desktop), même
+# déconnecté ou invisible depuis une fenêtre d'administrateur (lecteur mémorisé dans HKCU:\Network).
 function Est-Reseau([string]$chemin) {
     if ($chemin.StartsWith('\\') -or $chemin.StartsWith('//')) { return $true }
     try {
         $racine = [System.IO.Path]::GetPathRoot($chemin)
         if ($racine -match '^[A-Za-z]:') {
-            return (New-Object System.IO.DriveInfo ($racine.Substring(0, 1))).DriveType -eq [System.IO.DriveType]::Network
+            $lettre = $racine.Substring(0, 1)
+            $type = (New-Object System.IO.DriveInfo ($lettre)).DriveType
+            if ($type -eq [System.IO.DriveType]::Network) { return $true }
+            if ($type -eq [System.IO.DriveType]::NoRootDirectory -and (Test-Path -LiteralPath "HKCU:\Network\$lettre")) { return $true }
         }
     } catch { }
     return $false
@@ -513,6 +522,20 @@ foreach ($nom in @("STOCKAGE", "SERVEUR_CHEMIN_AFFICHE", "SERVEUR_ADRESSE", "SER
 foreach ($reglage in @(@("SAUVEGARDE_HEURE", "2:30"), @("SAUVEGARDE_JOURS", "14"), @("SAUVEGARDE_MOIS", "6"))) {
     if ($contenuEnv -notmatch "(?m)^$($reglage[0])=") { $contenuEnv = Definir-Variable $contenuEnv $reglage[0] $reglage[1] }
 }
+# Dossiers du PC écrits à la main dans .env : réécrits pour que Docker et ce script lisent le même dossier (voir
+# Chemin-Docker). Entre guillemets doubles, Docker interpréterait les \n, \t… du chemin : ils deviennent des
+# apostrophes droites. Un chemin qui contient une apostrophe s'écrit sans guillemets (Docker le lit tel quel) ;
+# dans DOSSIER_SAUVEGARDES_PC, il est refusé plus bas.
+foreach ($nomDossier in @("DOSSIER_SAUVEGARDES_PC", "DOSSIER_ARCHIVES_PC")) {
+    $cheminLu = Lire-Variable $contenuEnv $nomDossier
+    $cheminDocker = Chemin-Docker $cheminLu.Trim('"')
+    if ($cheminDocker -ne $cheminLu) {
+        $valeurDossier = Valeur-Env $cheminDocker
+        if ($cheminDocker.Contains("'")) { $valeurDossier = $cheminDocker }
+        $contenuEnv = Definir-Variable $contenuEnv $nomDossier $valeurDossier
+        Write-Host "Ligne $nomDossier de .env : $cheminDocker (au lieu de $cheminLu), chemin que Docker sait lire."
+    }
+}
 $stockage = (Lire-Variable $contenuEnv "STOCKAGE").ToLower()
 # Emplacement réellement utilisé jusqu'ici (volumes du serveur montés ou non) et dossier du serveur.
 $serveurAvant = (Lire-Variable $contenuEnv "COMPOSE_FILE") -match 'serveur'
@@ -627,15 +650,6 @@ if ($modeServeur) {
             "renommez ce dossier sans apostrophe (par exemple E:\Sauvegardes DAplomb), corrigez la ligne DOSSIER_SAUVEGARDES_PC= du`n" +
             "fichier .env (entre apostrophes droites : DOSSIER_SAUVEGARDES_PC='E:\Sauvegardes DAplomb'), puis relancez ce script.")
     }
-    if ($sauvegardesPc.StartsWith('"')) {
-        # Entre guillemets doubles, Docker Compose retire les \ du chemin : réécrit entre apostrophes droites.
-        $sauvegardesPc = $sauvegardesPc.Trim('"')
-        $contenuEnv = Definir-Variable $contenuEnv "DOSSIER_SAUVEGARDES_PC" (Valeur-Env $sauvegardesPc)
-    }
-    if ((Chemin-Docker $sauvegardesPc) -ne $sauvegardesPc) {
-        $sauvegardesPc = Chemin-Docker $sauvegardesPc
-        $contenuEnv = Definir-Variable $contenuEnv "DOSSIER_SAUVEGARDES_PC" (Valeur-Env $sauvegardesPc)
-    }
     # Docker Desktop ne sait pas monter un dossier réseau (\\NAS\Sauvegardes) ni un lecteur réseau (S:\…).
     if ($sauvegardesPc -and (Est-Reseau (Chemin-Pc $sauvegardesPc "donnees\sauvegardes"))) {
         Arreter ("DOSSIER_SAUVEGARDES_PC ($sauvegardesPc) ne peut pas être un dossier réseau (\\NAS\…) ni un lecteur réseau (S:\…) :`n" +
@@ -643,11 +657,7 @@ if ($modeServeur) {
             "ou un disque local ou externe (E:\…), puis relancez ce script.")
     }
     $archivesPc = Lire-Variable $contenuEnv "DOSSIER_ARCHIVES_PC"
-    if ((Chemin-Docker $archivesPc) -ne $archivesPc) {
-        $archivesPc = Chemin-Docker $archivesPc
-        $contenuEnv = Definir-Variable $contenuEnv "DOSSIER_ARCHIVES_PC" (Valeur-Env $archivesPc)
-    }
-    if ($archivesPc -and (Est-Reseau (Chemin-Pc $archivesPc.Trim('"') "donnees\archives"))) {
+    if ($archivesPc -and (Est-Reseau (Chemin-Pc $archivesPc "donnees\archives"))) {
         Arreter ("DOSSIER_ARCHIVES_PC ($archivesPc) ne peut pas être un dossier réseau (\\NAS\…) ni un lecteur réseau (S:\…) :`n" +
             "Docker ne sait pas l’ouvrir. Choisissez le stockage sur le serveur (videz la ligne STOCKAGE= du fichier .env),`n" +
             "ou un disque local ou externe (D:\…), puis relancez ce script.")

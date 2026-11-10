@@ -102,6 +102,54 @@ def xlsx_chaines_partagees(
     return flux.getvalue()
 
 
+def xlsx_graphique_et_liens_externes(citations: int = 1, cadres: int = 1, references: int = 1) -> bytes:
+    """Classeur « DPGF » avec une feuille de graphique citée `citations` fois par <sheets>, dont le dessin
+    désigne le même graphique par `cadres` cadres, et un lien externe cité `references` fois."""
+    from openpyxl import Workbook
+    from openpyxl.chart import BarChart, Reference
+
+    classeur = Workbook()
+    feuille = classeur.active
+    feuille.title = "DPGF"
+    feuille.append(["N°", "Désignation", "PU HT"])
+    feuille.append(["8.1", "Châssis aluminium", 850.0])
+    graphique = BarChart()
+    graphique.add_data(Reference(feuille, min_col=3, min_row=1, max_row=2))
+    classeur.create_chartsheet("Graphique").add_chart(graphique)
+    tampon = io.BytesIO()
+    classeur.save(tampon)
+    relations = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+    source = zipfile.ZipFile(tampon)
+    flux = io.BytesIO()
+    with zipfile.ZipFile(flux, "w", zipfile.ZIP_DEFLATED) as archive:
+        for nom in source.namelist():
+            texte = source.read(nom).decode()
+            if nom == "xl/workbook.xml":
+                position = texte.index('name="Graphique"')
+                citation = texte[texte.rindex("<sheet ", 0, position):texte.index("/>", position) + 2]
+                texte = texte.replace(citation, "".join(citation.replace('name="Graphique"', f'name="Graphique {n}"') for n in range(citations)))
+                texte = texte.replace("</sheets>", f'</sheets><externalReferences xmlns:r="{relations}">'
+                                      + '<externalReference r:id="rId9"/>' * references + "</externalReferences>")
+            elif nom == "xl/_rels/workbook.xml.rels":
+                texte = texte.replace("</Relationships>", f'<Relationship Id="rId9" Type="{relations}/externalLink" '
+                                      'Target="externalLinks/externalLink1.xml"/></Relationships>')
+            elif nom == "xl/drawings/drawing1.xml":
+                cadre = texte[texte.index("<absoluteAnchor>"):texte.index("</wsDr>")]
+                texte = texte.replace(cadre, cadre * cadres)
+            archive.writestr(nom, texte)
+        archive.writestr("xl/externalLinks/externalLink1.xml", (
+            '<externalLink xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" '
+            f'xmlns:r="{relations}"><externalBook r:id="rId1"><sheetNames><sheetName val="Prix"/></sheetNames>'
+            '<sheetDataSet><sheetData sheetId="0"><row r="1"><cell r="A1"><v>850</v></cell></row></sheetData>'
+            "</sheetDataSet></externalBook></externalLink>"
+        ))
+        archive.writestr("xl/externalLinks/_rels/externalLink1.xml.rels", (
+            '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+            f'<Relationship Id="rId1" Type="{relations}/externalLinkPath" Target="prix.xlsx" TargetMode="External"/></Relationships>'
+        ))
+    return flux.getvalue()
+
+
 class LectureAuditTests(SimpleTestCase):
     def setUp(self):
         self.dossier = Path(tempfile.mkdtemp(prefix="audit-lecture-"))
@@ -184,6 +232,77 @@ class LectureAuditTests(SimpleTestCase):
             with mock.patch.object(lecture, "XML_LU_EN_ENTIER_MAX", 5 * 1024 * 1024):
                 self.assertTrue(decompression_excessive(io.BytesIO(contenu), ".docx"))
             self.assertFalse(decompression_excessive(io.BytesIO(contenu), ".docx"))
+
+    def test_docx_heritage_de_styles_en_boucle_lu_sans_fin(self):
+        # Style de titre « basé sur » lui-même, ou deux styles basés l'un sur l'autre : la recherche de la
+        # numérotation tournait sans fin (worker occupé jusqu'à la limite de temps de la tâche). La numérotation
+        # héritée d'un style de base reste reconnue.
+        import signal
+
+        from docx import Document
+        from docx.oxml import OxmlElement
+        from docx.oxml.ns import qn
+
+        def document(bases: dict[str, str], numerote: str = "") -> Path:
+            fichier = Document()
+            for style_id, base in bases.items():
+                fichier.styles.element.get_by_id(style_id).get_or_add_basedOn().val = base
+            if numerote:
+                proprietes = fichier.styles.element.get_by_id(numerote).get_or_add_pPr()
+                numero = OxmlElement("w:numPr")
+                ident = OxmlElement("w:numId")
+                ident.set(qn("w:val"), "1")
+                numero.append(ident)
+                proprietes.append(numero)
+            fichier.add_heading("Généralités", level=1)
+            fichier.add_heading("Objet du marché", level=2)
+            chemin = self.dossier / "cctp.docx"
+            fichier.save(chemin)
+            return chemin
+
+        def trop_long(*_):
+            raise AssertionError("lecture sans fin")
+
+        ancien = signal.signal(signal.SIGALRM, trop_long)
+        self.addCleanup(signal.signal, signal.SIGALRM, ancien)
+        self.addCleanup(signal.alarm, 0)
+        for bases, numerote, numeros in (
+            ({"Heading1": "Heading1"}, "", ["", ""]),
+            ({"Heading1": "Heading2", "Heading2": "Heading1"}, "", ["", ""]),
+            ({"Heading1": "Heading2", "Heading2": "Heading1"}, "Heading2", ["1", "1.1"]),  # hérité dans la boucle
+            ({"Heading2": "Heading1"}, "Heading1", ["1", "1.1"]),
+        ):
+            signal.alarm(20)
+            blocs = lire_document(document(bases, numerote), self.dossier).blocs
+            signal.alarm(0)
+            self.assertEqual([(b.genre, b.numero, b.texte) for b in blocs],
+                             [("titre", numeros[0], "Généralités"), ("titre", numeros[1], "Objet du marché")])
+
+    def test_docx_styles_resolus_une_fois_par_document(self):
+        # python-docx parcourt tous les styles à chaque Paragraph.style : 85 s pour 2 000 styles et 3 000
+        # paragraphes. Chaque style n'est plus résolu qu'une fois.
+        from docx import Document
+        from docx.enum.style import WD_STYLE_TYPE
+        from docx.oxml.styles import CT_Styles
+
+        fichier = Document()
+        for numero in range(300):
+            fichier.styles.add_style(f"Style {numero}", WD_STYLE_TYPE.PARAGRAPH)
+        fichier.styles["Style 7"].font.bold = True
+        for numero in range(300):
+            fichier.add_paragraph(f"Article {numero} : châssis aluminium.", style="Normal" if numero % 2 else None)
+        fichier.add_paragraph("Clause en gras par son style", style="Style 7")
+        fichier.save(self.dossier / "cctp.docx")
+        with (
+            mock.patch.object(CT_Styles, "default_for", autospec=True, side_effect=CT_Styles.default_for) as defaut,
+            mock.patch.object(CT_Styles, "get_by_id", autospec=True, side_effect=CT_Styles.get_by_id) as par_id,
+        ):
+            blocs = lire_document(self.dossier / "cctp.docx", self.dossier).blocs
+        self.assertEqual(len(blocs), 301)
+        self.assertEqual((blocs[0].texte, blocs[0].gras), ("Article 0 : châssis aluminium.", False))
+        self.assertEqual((blocs[-1].texte, blocs[-1].gras), ("Clause en gras par son style", True))
+        self.assertLessEqual(defaut.call_count, 1)
+        self.assertEqual(par_id.call_count, 0)
 
     def test_docx_et_xlsx_ordinaires_toujours_lus(self):
         (self.dossier / "cctp.docx").write_bytes(_docx())
@@ -336,6 +455,61 @@ class LectureAuditTests(SimpleTestCase):
             with mock.patch.object(lecture, "PARTIES_SUIVIES_MAX", 0):  # liens non suivis : tout compté, citations comprises
                 self.assertFalse(decompression_excessive(classeur("worksheet", une), ".xlsx"))
                 self.assertTrue(decompression_excessive(classeur("worksheet", trois), ".xlsx"))
+
+    def test_xlsx_liens_d_une_feuille_comptes_a_chaque_citation(self):
+        # openpyxl analyse en entier les liens (.rels) d'une feuille à chaque citation de la feuille.
+        from openpyxl.packaging import relationship
+        from openpyxl.reader import excel
+
+        def classeur(citations: int) -> io.BytesIO:
+            flux = io.BytesIO(xlsx_chaines_partagees(
+                [["Châssis aluminium", "u"]],
+                feuilles_en_plus="".join(f'<sheet name="Annexe {n}" sheetId="{n + 2}" r:id="rId1"/>' for n in range(citations - 1)),
+            ))
+            with zipfile.ZipFile(flux, "a", zipfile.ZIP_DEFLATED) as archive:
+                archive.writestr("xl/worksheets/_rels/sheet1.xml.rels", (
+                    '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+                    + '<Relationship Id="a" Type="t" Target="x"/>' * 1_000 + "</Relationships>"
+                ))
+            return flux
+
+        with mock.patch.object(excel, "get_dependents", wraps=relationship.get_dependents) as liens:
+            lecture.ouvrir_classeur(classeur(3))
+        self.assertEqual([appel.args[1] for appel in liens.call_args_list].count("xl/worksheets/_rels/sheet1.xml.rels"), 3)
+        with mock.patch.object(lecture, "XML_LU_EN_ENTIER_MAX", 100_000):  # liens de la feuille : 41 Ko
+            self.assertFalse(decompression_excessive(classeur(1), ".xlsx"))
+            self.assertTrue(decompression_excessive(classeur(3), ".xlsx"))
+
+    def test_xlsx_liens_externes_et_feuilles_de_graphique_jamais_lus(self):
+        # load_workbook lit chaque lien externe autant de fois que <externalReferences> le cite, et chaque
+        # feuille de graphique (graphiques compris, gardés en mémoire) autant de fois que <sheets> la cite et
+        # que les cadres de son dessin désignent le graphique ; decompression_excessive compte ces parties
+        # une fois (56 Ko faisaient monter le worker de 3,6 Go). ouvrir_classeur ne les lit jamais.
+        from openpyxl import load_workbook
+        from openpyxl.chart import reader as lecteur_graphiques
+        from openpyxl.reader import drawings, workbook
+        from openpyxl.workbook.external_link import external
+
+        contenu = xlsx_graphique_et_liens_externes(citations=3, cadres=2, references=4)
+        with (
+            mock.patch.object(workbook, "read_external_link", wraps=external.read_external_link) as liens_externes,
+            mock.patch.object(drawings, "read_chart", wraps=lecteur_graphiques.read_chart) as graphiques,
+        ):
+            classeur = load_workbook(io.BytesIO(contenu), read_only=True, data_only=True)
+            self.assertEqual((liens_externes.call_count, graphiques.call_count), (4, 6))  # le danger, avec openpyxl seul
+            self.assertEqual(len(classeur._external_links), 4)
+            classeur.close()
+            liens_externes.reset_mock()
+            graphiques.reset_mock()
+
+            classeur = lecture.ouvrir_classeur(io.BytesIO(contenu))
+            self.assertEqual((liens_externes.call_count, graphiques.call_count), (0, 0))
+            self.assertEqual(classeur.sheetnames, ["DPGF"])
+            classeur.close()
+            (self.dossier / "dpgf.xlsx").write_bytes(contenu)
+            tableaux = lire_document(self.dossier / "dpgf.xlsx", self.dossier).tableaux
+            self.assertEqual([(t.titre, t.lignes[-1]) for t in tableaux], [("DPGF", ["8.1", "Châssis aluminium", 850])])
+            self.assertEqual((liens_externes.call_count, graphiques.call_count), (0, 0))
 
     def test_xlsx_citations_impossibles_a_etablir_refuse(self):
         # Liens du classeur dans un codage multi-octets, ou DTD (dont les entités démultiplient le texte) :
