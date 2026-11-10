@@ -53,6 +53,16 @@ LIGNES_PAR_CLASSEUR_MAX = 200_000  # lignes lues, toutes feuilles confondues
 COLONNES_MAX = 256  # une dimension déclarée « A1:XFD… » ferait compléter chaque ligne à 16 384 cellules
 PIXELS_OCR_MAX = 40_000_000  # une page A4 ou A3 garde ses 300 dpi ; une page A0 passe à environ 160 dpi
 MESSAGE_DECOMPRESSION = "Fichier anormalement volumineux une fois décompressé : il n’a pas été lu."
+# Contenu lu (caractères, plus un par cellule) : la suite (texte(), découpage en articles ou en lignes de prix)
+# tourne dans le worker, hors des plafonds de la lecture isolée. Une chaîne partagée d'un classeur citée par
+# des milliers de cellules n'occupe qu'une fois la mémoire de la lecture, mais serait recopiée à chaque cellule.
+# Un CCTP de 300 pages fait environ 1 million de caractères ; une DPGF de 5 000 lignes, moins.
+CONTENU_LU_MAX = 50_000_000
+MESSAGE_CONTENU = "Fichier anormalement volumineux une fois lu : il n’a pas été analysé."
+MESSAGE_LECTURE_INTERROMPUE = (
+    "Document trop volumineux ou malformé : lecture interrompue (limite de mémoire ou de temps). "
+    "Saisissez l’offre à la main ou demandez un autre fichier."
+)
 
 
 class FormatNonAnalyse(Exception):
@@ -61,6 +71,10 @@ class FormatNonAnalyse(Exception):
 
 class ErreurLecture(Exception):
     """Le fichier n'a pas pu être lu ou converti (protégé, endommagé…)."""
+
+
+class LectureInterrompue(ErreurLecture):
+    """Lecture isolée arrêtée : plafond de mémoire ou de temps atteint, ou processus de lecture tué."""
 
 
 @dataclass
@@ -108,6 +122,29 @@ class ContenuDocument:
 
 
 def lire_document(chemin: Path, dossier_travail: Path, *, tableaux_pdf: bool = False) -> ContenuDocument:
+    """Contenu d'un document reçu, lu dans un processus séparé plafonné en mémoire et en temps.
+
+    Les garde-fous de ce module (bombes zip, pages géantes…) écartent les pièges connus ; le processus séparé
+    (lecture_isolee) arrête tous les autres : un fichier qui épuiserait la mémoire ou bouclerait sans fin
+    donne LectureInterrompue, sans faire tomber le worker. ErreurLecture et FormatNonAnalyse sont retransmises
+    telles quelles. Lecture directe, dans ce processus, pendant les tests ou si LECTURE_ISOLEE est faux.
+    """
+    if not settings.LECTURE_ISOLEE:
+        return lire_document_direct(chemin, dossier_travail, tableaux_pdf=tableaux_pdf)
+    from .lecture_isolee import ErreurEnfant, LimiteDepassee, executer_isole
+
+    try:
+        return executer_isole(
+            "bibliotheque.lecture:lire_document_direct", chemin, dossier_travail, tableaux_pdf=tableaux_pdf, dossier=dossier_travail
+        )
+    except LimiteDepassee as erreur:
+        raise LectureInterrompue(MESSAGE_LECTURE_INTERROMPUE) from erreur
+    except ErreurEnfant as erreur:
+        raise ErreurLecture(f"Lecture impossible ({erreur.nom}) : le fichier est peut-être protégé ou endommagé.") from erreur
+
+
+def lire_document_direct(chemin: Path, dossier_travail: Path, *, tableaux_pdf: bool = False) -> ContenuDocument:
+    """Lecture proprement dite, dans le processus courant (processus séparé de lire_document, ou tests)."""
     extension = chemin.suffix.lower()
     converti_depuis = ""
     if extension in CONVERSIONS:
@@ -135,8 +172,25 @@ def lire_document(chemin: Path, dossier_travail: Path, *, tableaux_pdf: bool = F
         raise ErreurLecture(
             "Fichier illisible : il est peut-être protégé par un mot de passe ou endommagé."
         ) from erreur
+    if contenu_demesure(contenu):
+        raise ErreurLecture(MESSAGE_CONTENU)
     contenu.converti_depuis = converti_depuis
     return contenu
+
+
+def contenu_demesure(contenu: ContenuDocument) -> bool:
+    """Le contenu lu dépasse-t-il CONTENU_LU_MAX (caractères, plus un par cellule), chaque citation comptée ?"""
+    total = 0
+    lignes = [ligne for bloc in contenu.blocs for ligne in bloc.lignes] + [ligne for t in contenu.tableaux for ligne in t.lignes]
+    for bloc in contenu.blocs:
+        total += len(bloc.texte) + len(bloc.numero) + 1
+    for tableau in contenu.tableaux:
+        total += len(tableau.titre) + 1
+    for ligne in lignes:
+        total += len(ligne) + sum(len(valeur) for valeur in ligne if isinstance(valeur, str))
+        if total > CONTENU_LU_MAX:
+            return True
+    return total > CONTENU_LU_MAX
 
 
 def decompression_excessive(source, extension: str) -> bool:
@@ -164,7 +218,8 @@ def decompression_excessive(source, extension: str) -> bool:
             nom = info.filename.lower()
             # openpyxl analyse une partie, et ses liens (.rels), autant de fois que le classeur la cite comme feuille.
             taille = info.file_size * max(1, citations[nom])
-            if nom in feuilles:
+            # Des liens (.rels) sont toujours lus en entier, même déclarés comme feuille dans [Content_Types].xml.
+            if nom in feuilles and not nom.endswith(".rels"):
                 en_flux += taille
             elif nom in lues or nom.endswith((".xml", ".rels")):
                 en_entier += taille
@@ -176,27 +231,30 @@ def _xml_docx(archive: zipfile.ZipFile) -> int:
 
     python-docx ne regarde pas le nom d'une partie mais le type déclaré dans [Content_Types].xml (Override,
     sinon Default de l'extension) : « word/document.bin » déclaré comme document principal est lu en entier.
-    Sont comptées les parties nommées .xml ou .rels et celles dont le type déclaré est XML, quel que soit leur
-    nom. Dans le doute ([Content_Types].xml démesuré ou illisible), tout est compté.
+    Sont comptées les parties nommées .xml ou .rels et celles dont un type déclaré est XML, quel que soit leur
+    nom. python-docx ne lit que les enfants directs de <Types> de son espace de noms, et retient la dernière
+    déclaration : toutes les déclarations sont gardées ici, où qu'elles soient, et une seule déclaration XML
+    suffit (une déclaration « leurre » placée après la vraie ne fait plus oublier la partie).
+    Dans le doute ([Content_Types].xml démesuré ou illisible), tout est compté.
     """
     entrees = archive.infolist()
     try:
         types = _xml_court(archive, "[Content_Types].xml")
     except ValueError:
         return sum(i.file_size for i in entrees)
-    defauts: dict[str, str] = {}
-    surcharges: dict[str, str] = {}
+    defauts: dict[str, list[str]] = {}
+    surcharges: dict[str, list[str]] = {}
     for element in types.iter() if types is not None else ():
         if element.tag.endswith("Default"):
-            defauts[(element.get("Extension") or "").lower()] = element.get("ContentType") or ""
+            defauts.setdefault((element.get("Extension") or "").lower(), []).append(element.get("ContentType") or "")
         elif element.tag.endswith("Override"):
-            surcharges[(element.get("PartName") or "").lower()] = element.get("ContentType") or ""
+            surcharges.setdefault((element.get("PartName") or "").lower(), []).append(element.get("ContentType") or "")
     total = 0
     for info in entrees:
         nom = info.filename.lower()
         # Clés calculées comme python-docx : nom de partie « /<entrée> », extension sans le point, sans casse.
-        type_ = surcharges.get("/" + nom) or defauts.get(posixpath.splitext(nom)[1][1:], "")
-        if nom.endswith((".xml", ".rels")) or type_.lower().endswith("xml"):
+        declares = surcharges.get("/" + nom, []) + defauts.get(posixpath.splitext(nom)[1][1:], [])
+        if nom.endswith((".xml", ".rels")) or any(type_.lower().endswith("xml") for type_ in declares):
             total += info.file_size
     return total
 
@@ -257,9 +315,14 @@ def _parties_xlsx(archive: zipfile.ZipFile) -> tuple[set[str], set[str]]:
 
 
 def _cible_lien(lien, dossier: str) -> str | None:
-    """Entrée de l'archive désignée par un lien (élément d'un .rels), calculée comme openpyxl ; None sinon."""
+    """Entrée de l'archive désignée par un lien (élément d'un .rels), calculée comme openpyxl ; None sinon.
+
+    Tout élément porteur d'un Target compte, quelle que soit sa balise : openpyxl lit chaque enfant de
+    <Relationships> comme un lien sans regarder son nom (« <R Target=…/> » désigne une feuille comme
+    « <Relationship Target=…/> »). Les éléments imbriqués sont comptés en trop, sans danger.
+    """
     cible = lien.get("Target")
-    if not lien.tag.endswith("Relationship") or cible is None:
+    if cible is None:
         return None
     if lien.get("TargetMode") == "External":
         # openpyxl ne résout pas la cible d'un lien « External », mais la lit telle quelle si l'archive contient
@@ -546,15 +609,23 @@ def _est_gras(paragraphe, style) -> bool:
 
 
 def _lignes_tableau_docx(tableau) -> list[list[str]]:
+    """Lignes d'un tableau Word : une valeur par cellule (<w:tc>), le texte d'une cellule fusionnée une seule fois.
+
+    Sans _Row.cells de python-docx, qui renvoie une cellule fusionnée horizontalement autant de fois que son
+    w:gridSpan, valeur sans borne (10**12 épuisait la mémoire), et qui remonte récursivement de rangée en rangée
+    jusqu'au haut d'une fusion verticale, en recopiant son texte à chaque rangée (temps quadratique,
+    RecursionError au-delà d'environ 1 000 rangées fusionnées). Comme les cellules fusionnées d'un classeur
+    lu par openpyxl, une cellule qui prolonge une fusion verticale (vMerge « continue ») est vide : le texte
+    reste dans la cellule du haut.
+    """
+    from docx.table import _Cell
+
     lignes = []
-    for rangee in tableau.rows:
-        cellules: list[str] = []
-        precedente = None
-        for cellule in rangee.cells:
-            if cellule._tc is precedente:  # cellules fusionnées renvoyées plusieurs fois
-                continue
-            precedente = cellule._tc
-            cellules.append(" ".join(cellule.text.split()))
+    for rangee in tableau._tbl.tr_lst:
+        cellules = [
+            "" if tc.vMerge == "continue" else " ".join(_Cell(tc, tableau).text.split())
+            for tc in rangee.tc_lst
+        ]
         if any(cellules):
             lignes.append(cellules)
     return lignes

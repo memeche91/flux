@@ -222,6 +222,18 @@ GED_IP_FIABLE = env_bool("GED_IP_FIABLE", False)
 # Espace disque à garder libre (Go) : un dépôt qui l'entamerait est refusé.
 GED_DISQUE_LIBRE_MIN_GO = int(env("GED_DISQUE_LIBRE_MIN_GO") or "5")
 TESTS = len(sys.argv) > 1 and sys.argv[1] == "test"
+# Lecture des documents reçus (offres, bibliothèque, import de l'annuaire) dans un processus séparé, plafonné :
+# un fichier piégé qui déjouerait les garde-fous de bibliotheque/lecture.py est arrêté sans faire tomber le
+# worker ni le serveur web (bibliotheque/lecture_isolee.py). Lecture directe pendant les tests.
+LECTURE_ISOLEE = env_bool("LECTURE_ISOLEE", True) and not TESTS
+# Mémoire virtuelle (RLIMIT_AS) de ce processus, et de LibreOffice et Tesseract qu'il lance, chacun pour son
+# compte. Mesuré dans l'image : LibreOffice échoue sous 512 Mo pour un .doc de 18 Ko et sous 768 Mo pour un .doc
+# de 10 Mo ; Tesseract (page de 40 Mpx, 16 fils) tient en 256 Mo. Deux lectures simultanées (worker à 6 Go)
+# restent sous la limite du conteneur.
+LECTURE_MEMOIRE_MAX_MO = int(env("LECTURE_MEMOIRE_MAX_MO") or "2048")
+# Délai réel (secondes) d'une lecture, OCR compris ; c'est aussi le plafond de temps de calcul (RLIMIT_CPU).
+# Sous la limite douce de la lecture d'une offre (28 min) pour que l'offre reçoive un message clair.
+LECTURE_DELAI_MAX = int(env("LECTURE_DELAI_MAX") or "1500")
 # Dossier des archives de fin de chantier (monté depuis le PC ou le serveur du cabinet).
 DOSSIER_ARCHIVES = Path(env("DOSSIER_ARCHIVES", str(MEDIA_ROOT / "archives")))
 # Emplacement du dossier d'archives tel que le cabinet le voit sur le PC (affichage seulement).

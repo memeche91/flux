@@ -5,7 +5,7 @@ from pathlib import Path
 from celery import shared_task
 from django.db import transaction
 
-from bibliotheque.lecture import ErreurLecture, FormatNonAnalyse
+from bibliotheque.lecture import ErreurLecture, FormatNonAnalyse, LectureInterrompue
 
 from .lecture import bilan, lire_offre
 from .models import LigneOffre, Offre, StatutLecture
@@ -29,6 +29,9 @@ def _echec(offre_id: int, message: str) -> None:
 def appliquer_lecture(offre: Offre) -> None:
     try:
         lecture = lire_offre(Path(offre.fichier.path), offre.lot)
+    except LectureInterrompue as erreur:  # le message dit déjà de saisir l'offre à la main
+        _echec(offre.pk, str(erreur))
+        return
     except (FormatNonAnalyse, ErreurLecture) as erreur:
         _echec(offre.pk, f"{erreur} Saisissez le montant de l'offre.")
         return

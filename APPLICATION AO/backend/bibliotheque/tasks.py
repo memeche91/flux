@@ -6,10 +6,15 @@ from celery import shared_task
 
 from articles.services import indexer_document
 
-from .lecture import ErreurLecture, FormatNonAnalyse, lire_document
+from .lecture import ErreurLecture, FormatNonAnalyse, LectureInterrompue, lire_document
 from .models import DocumentReference, StatutAnalyse, TypeDocument
 
 logger = logging.getLogger(__name__)
+# Document de référence (CCTP, DPGF… du cabinet) : il est conservé, seule son analyse est abandonnée.
+LECTURE_INTERROMPUE = (
+    "Document trop volumineux ou malformé : lecture interrompue (limite de mémoire ou de temps). "
+    "Le fichier est conservé ; enregistrez-le de nouveau (Word, Excel ou PDF) pour qu'il soit analysé."
+)
 
 
 def _nombre(n: int) -> str:
@@ -38,7 +43,9 @@ def analyser_document(document_id: int) -> None:
             document.texte_extrait = ""
         except ErreurLecture as explication:
             document.statut_analyse = StatutAnalyse.ERREUR
-            document.message_analyse = str(explication)[:500]
+            document.message_analyse = (
+                LECTURE_INTERROMPUE if isinstance(explication, LectureInterrompue) else str(explication)
+            )[:500]
             document.texte_extrait = ""
         except Exception as erreur:  # fichier corrompu, protégé par mot de passe…
             logger.exception("Analyse impossible du document %s", document_id)

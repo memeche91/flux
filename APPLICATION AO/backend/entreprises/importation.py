@@ -7,6 +7,7 @@ import re
 import zipfile
 from dataclasses import dataclass, field
 
+from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.core.validators import validate_email
 from django.db import transaction
@@ -55,39 +56,32 @@ TROP_LONG = "Fichier trop long : un annuaire importé compte au plus 100 000 lig
 # Un annuaire réel de 10 000 lignes fait moins de 10 Mo décompressé.
 ANNUAIRE_DECOMPRESSE_MAX = 30 * 1024 * 1024
 TROP_VOLUMINEUX = "Fichier anormalement volumineux une fois décompressé : il n’a pas été importé."
+# Texte lu dans le classeur, chaque cellule comptée : une chaîne partagée citée par des milliers de cellules
+# n'est qu'une fois en mémoire, mais chaque ligne importée la reprend (lots, notes). Un annuaire réel de
+# 10 000 lignes en compte moins de 5 millions.
+ANNUAIRE_CARACTERES_MAX = 50_000_000
+# Lecture isolée du classeur (processus séparé et plafonné, réglage LECTURE_ISOLEE) : délai d'une requête web.
+ANNUAIRE_DELAI_MAX = 120
+LECTURE_INTERROMPUE = (
+    "Classeur trop volumineux ou malformé : lecture interrompue (limite de mémoire ou de temps). "
+    "Enregistrez-le de nouveau depuis Excel, ou en CSV."
+)
 
 
 def _lignes(nom: str, contenu: bytes) -> list[list[str]]:
     if nom.lower().endswith((".xlsx", ".xlsm")):
-        from bibliotheque.lecture import decompression_excessive, ouvrir_classeur
+        if not settings.LECTURE_ISOLEE:
+            return lignes_classeur(contenu)
+        from bibliotheque.lecture_isolee import ErreurEnfant, LimiteDepassee, executer_isole
 
+        # L'import tourne dans le serveur web, sans limite de mémoire propre : le classeur est lu dans un
+        # processus séparé et plafonné, quel que soit le piège qu'il contient.
         try:
-            with zipfile.ZipFile(io.BytesIO(contenu)) as archive:  # taille annoncée : rien n'est décompressé
-                if sum(i.file_size for i in archive.infolist()) > ANNUAIRE_DECOMPRESSE_MAX:
-                    raise ImportImpossible(TROP_VOLUMINEUX)
-            if decompression_excessive(io.BytesIO(contenu), ".xlsx"):
-                raise ImportImpossible(TROP_VOLUMINEUX)
-            # Sans liens externes ni feuilles de graphique : openpyxl les lirait autant de fois qu'ils sont cités.
-            classeur = ouvrir_classeur(io.BytesIO(contenu))
-            feuille = classeur.worksheets[0]
-            lignes: list[list[str]] = []
-            vides = 0
-            largeur = min(feuille.max_column or COLONNES_MAX, COLONNES_MAX)
-            for ligne in feuille.iter_rows(values_only=True, max_col=largeur):
-                cellules = [_cellule(v) for v in ligne]
-                vides = 0 if any(cellules) else vides + 1
-                if vides > LIGNES_VIDES_MAX:
-                    break
-                if len(lignes) >= LIGNES_MAX:
-                    raise ImportImpossible(TROP_LONG)
-                lignes.append(cellules)
-            return lignes
-        except ImportImpossible:
-            raise
-        except Exception:  # noqa: BLE001 - classeur protégé, ancien .xls renommé, fichier abîmé
-            raise ImportImpossible(
-                "Classeur illisible ou protégé par un mot de passe : enregistrez-le en .xlsx sans mot de passe, ou en CSV."
-            ) from None
+            return executer_isole("entreprises.importation:lignes_classeur", contenu, delai=ANNUAIRE_DELAI_MAX)
+        except LimiteDepassee:
+            raise ImportImpossible(LECTURE_INTERROMPUE) from None
+        except ErreurEnfant:
+            raise ImportImpossible(CLASSEUR_ILLISIBLE) from None
     if nom.lower().endswith((".csv", ".txt")):
         for encodage in ("utf-8-sig", "cp1252", "latin-1"):
             try:
@@ -112,6 +106,44 @@ def _lignes(nom: str, contenu: bytes) -> list[list[str]]:
             ) from None
         return lignes
     raise ImportImpossible("Format non reconnu : importez un fichier Excel (.xlsx) ou CSV.")
+
+
+CLASSEUR_ILLISIBLE = "Classeur illisible ou protégé par un mot de passe : enregistrez-le en .xlsx sans mot de passe, ou en CSV."
+
+
+def lignes_classeur(contenu: bytes) -> list[list[str]]:
+    """Lignes de la première feuille d'un classeur .xlsx (processus séparé de _lignes, ou tests)."""
+    from bibliotheque.lecture import decompression_excessive, ouvrir_classeur
+
+    try:
+        with zipfile.ZipFile(io.BytesIO(contenu)) as archive:  # taille annoncée : rien n'est décompressé
+            if sum(i.file_size for i in archive.infolist()) > ANNUAIRE_DECOMPRESSE_MAX:
+                raise ImportImpossible(TROP_VOLUMINEUX)
+        if decompression_excessive(io.BytesIO(contenu), ".xlsx"):
+            raise ImportImpossible(TROP_VOLUMINEUX)
+        # Sans liens externes ni feuilles de graphique : openpyxl les lirait autant de fois qu'ils sont cités.
+        classeur = ouvrir_classeur(io.BytesIO(contenu))
+        feuille = classeur.worksheets[0]
+        lignes: list[list[str]] = []
+        vides = 0
+        caracteres = 0
+        largeur = min(feuille.max_column or COLONNES_MAX, COLONNES_MAX)
+        for ligne in feuille.iter_rows(values_only=True, max_col=largeur):
+            cellules = [_cellule(v) for v in ligne]
+            vides = 0 if any(cellules) else vides + 1
+            if vides > LIGNES_VIDES_MAX:
+                break
+            if len(lignes) >= LIGNES_MAX:
+                raise ImportImpossible(TROP_LONG)
+            caracteres += sum(len(c) for c in cellules)
+            if caracteres > ANNUAIRE_CARACTERES_MAX:
+                raise ImportImpossible(TROP_VOLUMINEUX)
+            lignes.append(cellules)
+        return lignes
+    except (ImportImpossible, MemoryError):
+        raise  # MemoryError : plafond de la lecture isolée atteint, signalé comme tel par le processus parent
+    except Exception:  # noqa: BLE001 - classeur protégé, ancien .xls renommé, fichier abîmé
+        raise ImportImpossible(CLASSEUR_ILLISIBLE) from None
 
 
 def _cellule(valeur) -> str:
