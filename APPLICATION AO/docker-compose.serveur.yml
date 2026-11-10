@@ -17,10 +17,13 @@
 # Leurs réglages sont fixés à leur création : après un changement de mot de passe ou d'adresse,
 # relancez installer.ps1, qui les recrée (les fichiers du serveur ne sont pas touchés).
 #
-# Le service « ged » (fichiers internet et tunnel) reprend le service backend de docker-compose.yml :
-# il voit les volumes du serveur grâce aux lignes VOLUME_FICHIERS et VOLUME_ARCHIVES de .env.
+# Le service « ged » (fichiers internet et tunnel) voit les volumes du serveur grâce aux lignes
+# VOLUME_FICHIERS et VOLUME_ARCHIVES de .env. Seul le worker monte « sauvegardes ».
+#
+# iocharset=utf8 : les noms de fichiers accentués (Plan_façade.pdf) restent identiques vus de Windows
+# et vus de l'application, quel que soit le réglage par défaut du noyau de Docker Desktop.
 
-x-options-cifs: &options-cifs addr=${SERVEUR_ADRESSE:?Relancez installer.ps1 (adresse du serveur absente de .env)},username=${SERVEUR_UTILISATEUR:?Relancez installer.ps1 (compte du serveur absent de .env)},password=${SERVEUR_MOT_DE_PASSE:-},${SERVEUR_DOMAINE:+domain=${SERVEUR_DOMAINE},}vers=3.0,uid=0,gid=0,file_mode=0660,dir_mode=0770,nounix,noserverino
+x-options-cifs: &options-cifs addr=${SERVEUR_ADRESSE:?Relancez installer.ps1 (adresse du serveur absente de .env)},username=${SERVEUR_UTILISATEUR:?Relancez installer.ps1 (compte du serveur absent de .env)},password=${SERVEUR_MOT_DE_PASSE:-},${SERVEUR_DOMAINE:+domain=${SERVEUR_DOMAINE},}vers=3.0,uid=0,gid=0,file_mode=0660,dir_mode=0770,nounix,noserverino,iocharset=utf8
 
 x-environnement-serveur: &environnement-serveur
   STOCKAGE_SERVEUR: "1"
@@ -35,7 +38,6 @@ services:
     volumes:
       - serveur_fichiers:/donnees/fichiers
       - serveur_archives:/donnees/archives
-      - serveur_sauvegardes:/sauvegardes:ro
 
   worker:
     environment: *environnement-serveur

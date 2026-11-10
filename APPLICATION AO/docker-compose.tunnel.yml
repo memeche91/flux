@@ -28,6 +28,12 @@ services:
     # 5 s pour garder ouverte une connexion inactive de Caddy. Au plus 32 connexions à PostgreSQL.
     command: ["gunicorn", "config.wsgi:application", "--bind", "0.0.0.0:8000", "--workers", "2", "--worker-class", "gthread",
               "--threads", "16", "--timeout", "120", "--graceful-timeout", "30", "--keep-alive", "5"]
+    # Le portail ne garde que les fichiers et les archives (volumes du serveur avec le stockage sur le
+    # serveur, lignes VOLUME_FICHIERS et VOLUME_ARCHIVES de .env) : ni les modèles de voix, ni aucun
+    # autre montage du service backend. Docker Compose 2.24 ou plus récent (« !override »).
+    volumes: !override
+      - ${VOLUME_FICHIERS:-./donnees/fichiers}:/donnees/fichiers
+      - ${VOLUME_ARCHIVES:-${DOSSIER_ARCHIVES_PC:-./donnees/archives}}:/donnees/archives
     depends_on:
       backend:
         condition: service_started
@@ -38,5 +44,12 @@ services:
     command: ["tunnel", "--no-autoupdate", "run"]
     environment:
       TUNNEL_TOKEN: ${TUNNEL_TOKEN:?Renseignez TUNNEL_TOKEN dans .env (jeton du tunnel Cloudflare)}
+    # Journaux : au plus 5 fichiers de 10 Mo, comme les autres services (l'ancre « journal » de
+    # docker-compose.yml n'est pas visible depuis ce fichier).
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
     depends_on:
       - web

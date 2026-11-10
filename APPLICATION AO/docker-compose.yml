@@ -39,7 +39,7 @@ x-backend: &backend
     # Les fichiers importés restent visibles dans le dossier « donnees\fichiers » du PC.
     # Stockage sur le serveur : installer.ps1 renseigne VOLUME_FICHIERS et VOLUME_ARCHIVES dans .env
     # (volumes de docker-compose.serveur.yml), pour que le service « ged » des fichiers internet et
-    # tunnel, qui reprend ce service par « extends », voie lui aussi les fichiers du serveur.
+    # tunnel, qui reprend ces deux montages, voie lui aussi les fichiers du serveur.
     - &montage-fichiers ${VOLUME_FICHIERS:-./donnees/fichiers}:/donnees/fichiers
     - &montage-archives ${VOLUME_ARCHIVES:-${DOSSIER_ARCHIVES_PC:-./donnees/archives}}:/donnees/archives
     # Modèles de voix de l'assistant (transcription et lecture à voix haute).
@@ -77,12 +77,12 @@ services:
     environment:
       <<: *environnement
       INITIALISER: "1"
+    # Pas de dossier /sauvegardes : l'état des sauvegardes est lu dans la base. Seul le worker voit les
+    # copies de la base et du .env.
     volumes:
       - *montage-fichiers
       - *montage-archives
       - *montage-modeles
-      # État des sauvegardes affiché dans l'application (lecture seule : seul le worker les écrit).
-      - ${DOSSIER_SAUVEGARDES_PC:-./donnees/sauvegardes}:/sauvegardes:ro
     depends_on:
       base:
         condition: service_healthy

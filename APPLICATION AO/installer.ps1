@@ -113,7 +113,7 @@ function Adresse-Serveur([string]$nom) {
 function Options-Partage([string]$adresse, [string]$utilisateur, [string]$motDePasse, [string]$domaine) {
     $options = "addr=$adresse,username=$utilisateur,password=$motDePasse,"
     if ($domaine) { $options += "domain=$domaine," }
-    return $options + "vers=3.0,uid=0,gid=0,file_mode=0660,dir_mode=0770,nounix,noserverino"
+    return $options + "vers=3.0,uid=0,gid=0,file_mode=0660,dir_mode=0770,nounix,noserverino,iocharset=utf8"
 }
 
 # Connexion de Windows au partage avec le compte dédié, par l'adresse IP comme Docker : une connexion
