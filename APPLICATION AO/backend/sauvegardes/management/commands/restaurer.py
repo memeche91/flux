@@ -3,10 +3,15 @@
 D'ordinaire lancée par restaurer.ps1 ; sinon, dans le dossier de l'application, application arrêtée et base
 démarrée (docker compose up -d base redis) :
     docker compose run --rm --no-deps -T worker python manage.py restaurer 2026-11-09_0230.dump --confirmer
+puis docker compose up -d (sur un nouveau PC : installer.ps1).
 La base actuelle est d'abord copiée (base/avant-restauration_….dump), puis la copie est restaurée en une
 seule transaction (schéma public vidé puis copie rejouée) : en cas d'erreur, la base reste telle qu'elle était.
 Enfin, migrate met à jour la structure d'une copie faite par une version plus ancienne.
+
+Codes de retour (lus par restaurer.ps1) : 0 restauration complète ; 1 base inchangée ; 2 base remplacée mais
+migrate en échec ; 3 base restaurée, mais recopie des fichiers (--avec-fichiers) incomplète.
 """
+import errno
 import os
 from pathlib import Path
 
@@ -81,16 +86,31 @@ class Command(BaseCommand):
                 f"({exc.__class__.__name__} : {exc}). L’application ne démarrera pas avec cette base : "
                 f"restaurez une autre copie{conseil}.", returncode=2) from exc
         self._noter_sauvegarde_restauree(copie)
-        if avec_fichiers:
-            self._recopier_fichiers()
-        cle = cle_sauvegardee()
+        cle = cle_sauvegardee()  # avant la recopie des fichiers, qui peut s'arrêter en erreur
         if cle and cle != settings.SECRET_KEY:
             self.stdout.write(self.style.WARNING(
                 "La clé DJANGO_SECRET_KEY de l’application diffère de celle sauvegardée : les codes d’accès des entreprises "
                 f"à la GED ne fonctionneront pas. Copiez {destination_affichee()}\\configuration\\.env à la place du fichier "
                 ".env de l’application, puis relancez installer.ps1."))
+        if avec_fichiers:
+            # La base est déjà remplacée : code 3, pour que restaurer.ps1 ne dise pas « base inchangée ».
+            relancer = ("puis, avant de reprendre le travail, relancez restaurer.ps1 avec la même copie et acceptez la "
+                        "recopie des fichiers pour la terminer (rien n’est effacé).")
+            try:
+                non_recopies = self._recopier_fichiers()
+            except (ErreurSauvegarde, OSError) as exc:  # ErreurSauvegarde : disque plein (miroir)
+                plein = isinstance(exc, ErreurSauvegarde) or getattr(exc, "errno", None) == errno.ENOSPC
+                cause = "Libérez de la place sur le disque de l’application" if plein else "Corrigez la cause indiquée"
+                raise CommandError(
+                    f"Base restaurée depuis {copie.name}, mais la recopie des fichiers s’est arrêtée : "
+                    f"{str(exc).rstrip('.')}. {cause}, {relancer}", returncode=3) from exc
+            if non_recopies:
+                raise CommandError(
+                    f"Base restaurée depuis {copie.name}, mais la recopie des fichiers est incomplète : {non_recopies} "
+                    f"fichier(s) non recopié(s) (détail ci-dessus). Corrigez la cause indiquée, {relancer}", returncode=3)
         self.stdout.write(self.style.SUCCESS(
-            f"Base restaurée depuis {copie.name}. Redémarrez l’application (docker compose restart) avant de reprendre le travail."))
+            f"Base restaurée depuis {copie.name}. Démarrez l’application (docker compose up -d ; sur un nouveau PC : "
+            "installer.ps1) avant de reprendre le travail."))
 
     def _copier_base_actuelle(self, p: dict) -> Path:
         dossier_base = dossier() / "base"
@@ -117,14 +137,20 @@ class Command(BaseCommand):
             message=f"Copie de la base restaurée le {timezone.localtime():%d/%m/%Y à %H:%M} ; "
                     "le compte rendu de cette sauvegarde n’est pas dans la copie.")
 
-    def _recopier_fichiers(self) -> None:
+    def _recopier_fichiers(self) -> int:
+        """Recopie les fichiers et archives sauvegardés (sans rien effacer) ; renvoie le nombre de fichiers non recopiés."""
         maintenant = timezone.now()
+        non_recopies = 0
         for nom, cible in (("fichiers", Path(settings.MEDIA_ROOT)), ("archives", Path(settings.DOSSIER_ARCHIVES))):
             source = dossier() / nom
             if not source.is_dir():
                 self.stdout.write(f"{nom.capitalize()} : rien à recopier ({source} absent).")
                 continue
-            bilan = miroir(source, cible, maintenant, supprimer=False)
+            bilan = miroir(source, cible, maintenant, supprimer=False, libelle_destination="sur le disque de l’application")
             self.stdout.write(f"{nom.capitalize()} : {bilan.copies} fichier(s) recopié(s).")
             for erreur in bilan.erreurs[:10]:
                 self.stdout.write(self.style.WARNING(f"  non recopié : {erreur}"))
+            if len(bilan.erreurs) > 10:
+                self.stdout.write(self.style.WARNING(f"  … et {len(bilan.erreurs) - 10} autre(s)."))
+            non_recopies += len(bilan.erreurs)
+        return non_recopies

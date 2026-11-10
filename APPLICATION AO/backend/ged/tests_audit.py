@@ -229,6 +229,14 @@ class PortailSansSessionAuditTests(BaseAudit):
 
 class PortailReponsesAuditTests(BaseAudit):
     def test_piece_cachee_et_piece_inexistante_meme_reponse(self):
+        self.verifier_pieces_cachees()
+
+    def test_piece_cachee_et_piece_inexistante_meme_reponse_processus_public(self):
+        reglages = reglages_publics()
+        with override_settings(ROOT_URLCONF=reglages.ROOT_URLCONF, MIDDLEWARE=reglages.MIDDLEWARE):
+            self.verifier_pieces_cachees()
+
+    def verifier_pieces_cachees(self):
         cache_ = self.version(self.document("11-EXE-001", self.lot11))  # autre lot, lecture inter-lots fermée
         source = FichierSource.objects.create(version=cache_, fichier=ContentFile(b"dwg", name="plan.dwg"), nom_original="plan.dwg",
                                               taille=3, empreinte="0" * 64)
@@ -245,9 +253,20 @@ class PortailReponsesAuditTests(BaseAudit):
             a, b = client.get(cachee), client.get(inexistante)
             self.assertEqual((a.status_code, a.content), (b.status_code, b.content), cachee)
             self.assertEqual(a.status_code, 404)
-        a = client.post(f"/api/ged/portail/versions/{cache_.pk}/lecture")
-        b = client.post("/api/ged/portail/versions/999999/lecture")
-        self.assertEqual((a.status_code, a.content), (b.status_code, b.content))
+            self.assertEqual(a.json()["detail"], "Document introuvable ou plus accessible : rechargez la page.")  # pas « Not Found »
+        for cachee, inexistante, donnees in (
+            (f"/api/ged/portail/versions/{cache_.pk}/lecture", "/api/ged/portail/versions/999999/lecture", {}),
+            (f"/api/ged/portail/versions/{cache_.pk}/avis", "/api/ged/portail/versions/999999/avis", {"avis": "VSO"}),
+            (f"/api/ged/portail/documents/{cache_.document.pk}/versions", "/api/ged/portail/documents/999999/versions",
+             {"indice": "B", "fichier": SimpleUploadedFile("plan.pdf", b"%PDF-1.4 plan")}),
+        ):
+            a = client.post(cachee, dict(donnees))
+            if "fichier" in donnees:
+                donnees["fichier"].seek(0)
+            b = client.post(inexistante, dict(donnees))
+            self.assertEqual((a.status_code, a.content), (b.status_code, b.content), cachee)
+            self.assertEqual(a.status_code, 404, a.content)
+            self.assertNotIn(b"Not Found", a.content)
 
     def test_numero_de_page_enorme(self):
         self.version(self.document("08-EXE-001", self.lot08))

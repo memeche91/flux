@@ -3,8 +3,7 @@ from __future__ import annotations
 
 import io
 
-from django.http import Http404, HttpResponse
-from django.shortcuts import get_object_or_404
+from django.http import HttpResponse
 from django.utils import timezone
 from django.utils.http import content_disposition_header
 from ninja.errors import HttpError
@@ -29,8 +28,9 @@ from .services import accuser_lecture, deposer, donner_avis, journaliser, nouvel
 EVENEMENTS_VISIBLES_INTERVENANTS = [TypeEvenement.DEPOT, TypeEvenement.INDICE, TypeEvenement.VISA, TypeEvenement.ANNULATION, TypeEvenement.MODIFICATION]
 PAGES_JOURNAL_MAX = 100_000  # au-delà, le décalage SQL dépasserait un entier PostgreSQL (erreur 500)
 
-# Une pièce cachée à l'intervenant reçoit exactement la même réponse qu'une pièce inexistante
-# (Http404 → « Not Found », comme get_object_or_404) : on ne peut pas compter les pièces cachées.
+# Une pièce cachée à l'intervenant reçoit exactement la même réponse qu'une pièce inexistante (même message,
+# en français ; Http404 afficherait « Not Found » dans le portail) : on ne peut pas compter les pièces cachées.
+PIECE_INTROUVABLE = "Document introuvable ou plus accessible : rechargez la page."
 
 
 def _document_frais(document_id: int, acteur: Acteur) -> dict:
@@ -45,16 +45,16 @@ def lister(espace: EspaceChantier, acteur: Acteur) -> list[dict]:
 
 
 def document_visible(acteur: Acteur, espace: EspaceChantier, document_id: int) -> Document:
-    document = get_object_or_404(Document.objects.select_related("lot", "espace__projet"), pk=document_id, espace=espace)
-    if not peut_voir(acteur, document):
-        raise Http404
+    document = Document.objects.select_related("lot", "espace__projet").filter(pk=document_id, espace=espace).first()
+    if document is None or not peut_voir(acteur, document):
+        raise HttpError(404, PIECE_INTROUVABLE)
     return document
 
 
 def version_visible(acteur: Acteur, espace: EspaceChantier, version_id: int) -> Version:
-    version = get_object_or_404(Version.objects.select_related("document__lot", "document__espace__projet"), pk=version_id, document__espace=espace)
-    if not peut_voir(acteur, version.document):
-        raise Http404
+    version = Version.objects.select_related("document__lot", "document__espace__projet").filter(pk=version_id, document__espace=espace).first()
+    if version is None or not peut_voir(acteur, version.document):
+        raise HttpError(404, PIECE_INTROUVABLE)
     return version
 
 
@@ -126,18 +126,18 @@ def telecharger(acteur: Acteur, espace: EspaceChantier, version_id: int, *, quoi
 def telecharger_source(acteur: Acteur, espace: EspaceChantier, source_id: int):
     from .models import FichierSource
 
-    source = get_object_or_404(FichierSource.objects.select_related("version__document__espace"), pk=source_id, version__document__espace=espace)
-    if not peut_voir(acteur, source.version.document):
-        raise Http404
+    source = FichierSource.objects.select_related("version__document__espace").filter(pk=source_id, version__document__espace=espace).first()
+    if source is None or not peut_voir(acteur, source.version.document):
+        raise HttpError(404, PIECE_INTROUVABLE)
     return reponse_fichier(source.fichier, source.nom_original)
 
 
 def telecharger_avis(acteur: Acteur, espace: EspaceChantier, avis_id: int):
-    avis = get_object_or_404(AvisVersion.objects.select_related("version__document__espace"), pk=avis_id, version__document__espace=espace)
+    avis = AvisVersion.objects.select_related("version__document__espace").filter(pk=avis_id, version__document__espace=espace).first()
     from .droits import voit_avis
 
-    if not peut_voir(acteur, avis.version.document) or not voit_avis(acteur, avis.version):
-        raise Http404
+    if avis is None or not peut_voir(acteur, avis.version.document) or not voit_avis(acteur, avis.version):
+        raise HttpError(404, PIECE_INTROUVABLE)
     return reponse_fichier(avis.fichier, avis.nom_original or "avis")
 
 

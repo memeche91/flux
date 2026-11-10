@@ -4,6 +4,7 @@ from __future__ import annotations
 import csv
 import io
 import re
+import zipfile
 from dataclasses import dataclass, field
 
 from django.core.exceptions import ValidationError
@@ -48,6 +49,12 @@ LIGNES_VIDES_MAX = 1_000  # feuilles « formatées » sur un million de lignes :
 # Une dimension déclarée « A1:XFD… » ferait compléter chaque ligne à 16 384 cellules ; un export Outlook en a 92.
 COLONNES_MAX = 128
 TROP_LONG = "Fichier trop long : un annuaire importé compte au plus 100 000 lignes."
+# L'import tourne dans le serveur web (sans limite de mémoire propre, contrairement au worker) : un classeur est
+# borné bien plus bas que les documents lus par le worker. openpyxl garde en mémoire chaque élément parcouru,
+# même en lecture seule : au pire environ 25 fois la taille décompressée (513 Mo mesurés pour 20 Mo).
+# Un annuaire réel de 10 000 lignes fait moins de 10 Mo décompressé.
+ANNUAIRE_DECOMPRESSE_MAX = 30 * 1024 * 1024
+TROP_VOLUMINEUX = "Fichier anormalement volumineux une fois décompressé : il n’a pas été importé."
 
 
 def _lignes(nom: str, contenu: bytes) -> list[list[str]]:
@@ -57,8 +64,11 @@ def _lignes(nom: str, contenu: bytes) -> list[list[str]]:
         from bibliotheque.lecture import decompression_excessive
 
         try:
+            with zipfile.ZipFile(io.BytesIO(contenu)) as archive:  # taille annoncée : rien n'est décompressé
+                if sum(i.file_size for i in archive.infolist()) > ANNUAIRE_DECOMPRESSE_MAX:
+                    raise ImportImpossible(TROP_VOLUMINEUX)
             if decompression_excessive(io.BytesIO(contenu), ".xlsx"):
-                raise ImportImpossible("Fichier anormalement volumineux une fois décompressé : il n’a pas été importé.")
+                raise ImportImpossible(TROP_VOLUMINEUX)
             classeur = load_workbook(io.BytesIO(contenu), read_only=True, data_only=True)
             feuille = classeur.worksheets[0]
             lignes: list[list[str]] = []
@@ -89,9 +99,19 @@ def _lignes(nom: str, contenu: bytes) -> list[list[str]]:
         try:
             dialecte = csv.Sniffer().sniff(texte[:5000], delimiters=";,\t")
         except csv.Error:
-            dialecte = csv.excel
-            dialecte.delimiter = ";"
-        return [[c.strip() for c in ligne] for ligne in csv.reader(io.StringIO(texte), dialecte)]
+            # Dialecte propre : modifier csv.excel changerait le séparateur par défaut de tout le processus.
+            dialecte = type("PointVirgule", (csv.excel,), {"delimiter": ";"})
+        lignes = []
+        try:
+            for ligne in csv.reader(io.StringIO(texte), dialecte):
+                if len(lignes) >= LIGNES_MAX:
+                    raise ImportImpossible(TROP_LONG)
+                lignes.append([c.strip() for c in ligne[:COLONNES_MAX]])
+        except csv.Error:  # guillemet jamais refermé, champ démesuré
+            raise ImportImpossible(
+                "Fichier CSV illisible (guillemet non refermé ou cellule démesurée) : enregistrez-le de nouveau depuis Excel."
+            ) from None
+        return lignes
     raise ImportImpossible("Format non reconnu : importez un fichier Excel (.xlsx) ou CSV.")
 
 

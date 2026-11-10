@@ -2,6 +2,7 @@
 (subprocess.run remplacé), ainsi que l'instantané et le comptage des lignes."""
 import contextlib
 import datetime
+import errno
 import json
 import os
 import shutil
@@ -23,6 +24,7 @@ from comptes.models import Utilisateur
 from . import services
 from .miroir import DELAI_SUPPRESSION, miroir
 from .models import Sauvegarde, StatutSauvegarde
+from .postgres import ErreurSauvegarde
 from .services import INTERROMPUE, alerte, etat, lancer, rotation, sur_le_meme_disque
 from .tasks import _sauvegardes_interrompues, sauvegarder
 
@@ -417,6 +419,14 @@ class MiroirTests(TestCase):
         self.assertEqual(bilan.supprimes, 0)
         self.assertTrue((self.copie / "en-plus.pdf").exists())
 
+    def test_disque_plein(self):
+        with mock.patch("sauvegardes.miroir.shutil.copyfile", side_effect=OSError(errno.ENOSPC, "No space left on device")):
+            with self.assertRaisesMessage(ErreurSauvegarde, "plus de place dans le dossier des sauvegardes (0 fichiers copiés)."):
+                self.passe()
+            with self.assertRaisesMessage(ErreurSauvegarde, "plus de place sur le disque de l’application (0 fichiers copiés)."):
+                self.passe(libelle_destination="sur le disque de l’application")
+        self.assertFalse([chemin for chemin in self.copie.rglob("*") if chemin.is_file()])  # aucun .partiel laissé
+
 
 class RotationTests(TestCase):
     def test_quotidiennes_et_mensuelles(self):
@@ -644,6 +654,60 @@ class CommandesTests(OutilsSimules, TestCase):
         self.assertIn(f"Base restaurée depuis {nom}, mais sa mise à jour de structure (migrate) a échoué", texte)
         self.assertIn('relation "ged_nouveau" already exists', texte)
         self.assertRegex(texte, r"restaurez une autre copie, par exemple avant-restauration_[\d_-]+\.dump")
+
+    def restaurer_avec_fichiers(self, nom: str, sortie: StringIO, **remplacements):
+        with mock.patch("sauvegardes.management.commands.restaurer.call_command") as migrer, \
+                mock.patch("sauvegardes.management.commands.restaurer.connections"), override_settings(SECRET_KEY="autre-cle"), \
+                mock.patch("sauvegardes.miroir.shutil.copyfile", **remplacements):
+            try:
+                call_command("restaurer", nom, "--confirmer", "--avec-fichiers", stdout=sortie)
+            finally:
+                migrer.assert_called_once_with("migrate", interactive=False, verbosity=0)
+
+    def test_restaurer_avec_fichiers(self):
+        lancer("essai")  # fichiers et archives copiés dans la sauvegarde
+        nom = Path(Sauvegarde.objects.get().fichier).name
+        shutil.rmtree(self.fichiers / "ged")
+        (self.archives / "Chantier.zip").unlink()
+        (self.fichiers / "nouveau.pdf").write_bytes(b"%PDF nouveau")  # absent de la sauvegarde : gardé
+        sortie = StringIO()
+        self.restaurer_avec_fichiers(nom, sortie, wraps=shutil.copyfile)
+        self.assertEqual((self.fichiers / "ged" / "3" / "plan.pdf").read_bytes(), b"%PDF plan")
+        self.assertEqual((self.archives / "Chantier.zip").read_bytes(), b"PK archive")
+        self.assertTrue((self.fichiers / "nouveau.pdf").exists())
+        self.assertIn("Fichiers : 1 fichier(s) recopié(s).", sortie.getvalue())
+        self.assertIn("Archives : 1 fichier(s) recopié(s).", sortie.getvalue())
+        self.assertIn(f"Base restaurée depuis {nom}. Démarrez l’application (docker compose up -d ; sur un nouveau PC : "
+                      "installer.ps1)", sortie.getvalue())
+        self.assertNotIn("restart", sortie.getvalue())
+
+    def test_restaurer_recopie_des_fichiers_interrompue(self):
+        """Base déjà remplacée : code 3 (pas 1, « base inchangée » pour restaurer.ps1), cause et suite expliquées."""
+        lancer("essai")
+        nom = Path(Sauvegarde.objects.get().fichier).name
+        shutil.rmtree(self.fichiers / "ged")
+        Sauvegarde.objects.create(declenchee_par="planification")  # telle qu'elle était dans la copie
+        sortie = StringIO()
+        with self.assertRaises(CommandError) as erreur:
+            self.restaurer_avec_fichiers(nom, sortie, side_effect=OSError(errno.ENOSPC, "No space left on device"))
+        self.assertEqual(erreur.exception.returncode, 3)
+        texte = str(erreur.exception)
+        self.assertIn(f"Base restaurée depuis {nom}, mais la recopie des fichiers s’est arrêtée : plus de place sur le "
+                      "disque de l’application (0 fichiers copiés). Libérez de la place sur le disque de l’application, "
+                      "puis, avant de reprendre le travail, relancez restaurer.ps1 avec la même copie", texte)
+        self.assertNotIn("dossier des sauvegardes", texte)
+        self.assertIn("DJANGO_SECRET_KEY de l’application diffère", sortie.getvalue())  # affiché avant la recopie
+        self.assertFalse(Sauvegarde.objects.filter(statut=StatutSauvegarde.EN_COURS).exists())
+        self.assertFalse(list(self.fichiers.rglob("*.partiel")))
+        # Fichier illisible ou impossible à écrire : la recopie continue, mais la commande ne se dit pas réussie.
+        sortie = StringIO()
+        with self.assertRaises(CommandError) as erreur:
+            self.restaurer_avec_fichiers(nom, sortie, side_effect=PermissionError(errno.EACCES, "Permission denied"))
+        self.assertEqual(erreur.exception.returncode, 3)
+        self.assertIn("la recopie des fichiers est incomplète : 1 fichier(s) non recopié(s) (détail ci-dessus). "
+                      "Corrigez la cause indiquée, puis", str(erreur.exception))
+        self.assertIn("non recopié : ged/3/plan.pdf : Permission denied", sortie.getvalue())
+        self.assertNotIn("Base restaurée depuis", sortie.getvalue())
 
 
 class ReglagesTests(TestCase):

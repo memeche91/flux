@@ -143,6 +143,45 @@ class LectureAuditTests(SimpleTestCase):
             lire_document(chemin, self.dossier)
         lire.assert_not_called()
 
+    def test_docx_partie_principale_au_nom_libre_comptee_par_son_type(self):
+        # python-docx lit la partie désignée par les liens selon son type déclaré, quel que soit son nom :
+        # « word/document.bin » déclaré document principal (Override, ou Default de l'extension .bin).
+        principal = "application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"
+        w = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+
+        def document(declaration: str, paragraphes: bytes) -> bytes:
+            flux = io.BytesIO()
+            with zipfile.ZipFile(flux, "w", zipfile.ZIP_DEFLATED) as archive:
+                archive.writestr("[Content_Types].xml", (
+                    '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+                    '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+                    f"{declaration}</Types>"
+                ))
+                archive.writestr("_rels/.rels", (
+                    '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+                    '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/'
+                    'officeDocument" Target="word/document.bin"/></Relationships>'
+                ))
+                with archive.open("word/document.bin", "w") as partie:
+                    partie.write(f'<w:document xmlns:w="{w}"><w:body>'.encode())
+                    partie.write(paragraphes)
+                    partie.write(b"</w:body></w:document>")
+            return flux.getvalue()
+
+        for declaration in (
+            f'<Override PartName="/word/document.bin" ContentType="{principal}"/>',
+            f'<Default Extension="bin" ContentType="{principal}"/>',
+        ):
+            from docx import Document
+
+            texte = b"<w:p><w:r><w:t>Lot 08</w:t></w:r></w:p>"
+            self.assertEqual(Document(io.BytesIO(document(declaration, texte))).paragraphs[0].text, "Lot 08")  # lue en entier
+            contenu = document(declaration, b"<w:p/>" * (8 * 1024 * 1024 // 6))  # 8 Mo, environ 10 Ko compressés
+            self.assertLess(len(contenu), 100_000)
+            with mock.patch.object(lecture, "XML_LU_EN_ENTIER_MAX", 5 * 1024 * 1024):
+                self.assertTrue(decompression_excessive(io.BytesIO(contenu), ".docx"))
+            self.assertFalse(decompression_excessive(io.BytesIO(contenu), ".docx"))
+
     def test_docx_et_xlsx_ordinaires_toujours_lus(self):
         (self.dossier / "cctp.docx").write_bytes(_docx())
         (self.dossier / "dpgf.xlsx").write_bytes(_xlsx())

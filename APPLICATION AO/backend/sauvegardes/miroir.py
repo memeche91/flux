@@ -149,10 +149,12 @@ def _suppressions_differees(destination: Path, presents: dict, manifeste: Path, 
 
 
 def miroir(source: Path, destination: Path, maintenant: datetime.datetime, manifeste: Path | None = None,
-           exclus: tuple[Path, ...] = (), supprimer: bool = True) -> BilanMiroir:
+           exclus: tuple[Path, ...] = (), supprimer: bool = True,
+           libelle_destination: str = "dans le dossier des sauvegardes") -> BilanMiroir:
     """Copie `source` dans `destination` ; avec `supprimer`, efface après 30 jours ce qui a disparu de `source`.
 
     `exclus` : dossiers à ne pas parcourir (dossier d'archives ou de sauvegardes rangé dans la source).
+    `libelle_destination` : où manque la place quand le disque de `destination` est plein (message d'erreur).
     """
     bilan = BilanMiroir()
     erreurs_lecture: list[str] = []
@@ -173,7 +175,7 @@ def miroir(source: Path, destination: Path, maintenant: datetime.datetime, manif
             continue  # supprimé de l'application pendant la copie
         except OSError as exc:
             if exc.errno == errno.ENOSPC:
-                raise ErreurSauvegarde(f"plus de place dans le dossier des sauvegardes ({bilan.copies} fichiers copiés).") from exc
+                raise ErreurSauvegarde(f"plus de place {libelle_destination} ({bilan.copies} fichiers copiés).") from exc
             bilan.erreurs.append(f"{relatif} : {exc.strerror or exc}")
             continue
         bilan.copies += 1

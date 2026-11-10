@@ -10,7 +10,7 @@
 #   SERVEUR_ADRESSE         adresse IP du serveur (Docker ne connaît pas les noms du réseau Windows)
 #   SERVEUR_PARTAGE         nom du partage, suivi d'un sous-dossier éventuel (DAplomb, Donnees/DAplomb)
 #   SERVEUR_UTILISATEUR     compte Windows dédié, SERVEUR_DOMAINE son domaine (facultatif)
-#   SERVEUR_MOT_DE_PASSE    son mot de passe (sans virgule ni guillemet)
+#   SERVEUR_MOT_DE_PASSE    son mot de passe (sans virgule, guillemet ni apostrophe)
 #   SERVEUR_CHEMIN_AFFICHE  chemin affiché dans l'application, par exemple \\SERVEUR\DAplomb
 #
 # Docker monte ces volumes au démarrage des services : le serveur doit être allumé et joignable.

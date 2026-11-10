@@ -143,10 +143,13 @@ export default function CarteSauvegarde() {
   async function lancer() {
     setEnvoi(true);
     setErreurLancement(null);
+    setFin("");
     try {
       const resultat = await api<EtatSauvegardes>("/sauvegardes", { method: "POST" });
       setEtat(resultat);
       setErreur(null);
+      // Échec immédiat (service des tâches injoignable) : la réponse arrive déjà terminée.
+      if (!resultat.en_cours) setFin(messageFin(resultat.derniere));
     } catch (probleme) {
       setErreurLancement(messageDe(probleme, "La sauvegarde n’a pas pu être lancée."));
     } finally {
@@ -233,7 +236,10 @@ export default function CarteSauvegarde() {
               <dt className="text-xs text-attenue">Sauvegarde automatique</dt>
               <dd className="flex flex-col gap-1">
                 <span className="font-semibold">{etat.heure ? `Chaque nuit à ${etat.heure}` : "Chaque nuit"}</span>
-                <span className="text-xs text-attenue">Le PC doit rester allumé, avec l’application démarrée.</span>
+                <span className="text-xs text-attenue">
+                  Le PC doit rester allumé et la session Windows ouverte (verrouillez-la, ne vous déconnectez pas). Si le PC était éteint, la
+                  sauvegarde est faite à son démarrage.
+                </span>
               </dd>
             </div>
           </dl>

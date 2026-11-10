@@ -67,6 +67,7 @@ Ne lancez pas installer.ps1 avant : il créerait une base vide et une nouvelle c
 
 Commande équivalente, application arrêtée (base démarrée : docker compose up -d base redis) :
   docker compose run --rm --no-deps -T worker python manage.py restaurer AAAA-MM-JJ_HHMM.dump --confirmer [--avec-fichiers]
+puis démarrez l’application : docker compose up -d (sur un nouveau PC : installer.ps1).
 La base actuelle est d’abord copiée dans base\\avant-restauration_….dump.
 """
 

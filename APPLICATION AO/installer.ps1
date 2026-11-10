@@ -242,8 +242,8 @@ function Configurer-Serveur {
         return $false
     }
     if ($motDePasse -match "[,'`"]") {
-        Write-Host "Ce mot de passe contient une virgule ou un guillemet, que Docker ne sait pas transmettre au serveur :" -ForegroundColor Yellow
-        Write-Host "donnez au compte dédié un mot de passe sans virgule ni guillemet, puis recommencez." -ForegroundColor Yellow
+        Write-Host "Ce mot de passe contient une virgule, un guillemet ou une apostrophe, que D’Aplomb ne sait pas enregistrer pour Docker :" -ForegroundColor Yellow
+        Write-Host "donnez au compte dédié un mot de passe sans virgule, guillemet ni apostrophe, puis recommencez." -ForegroundColor Yellow
         return $false
     }
     $compteWindows = $utilisateur

@@ -151,7 +151,7 @@ def decompression_excessive(source, extension: str) -> bool:
         if sum(i.file_size for i in entrees) > DOCX_DECOMPRESSE_MAX:
             return True
         if extension.lower() == ".docx":
-            return sum(i.file_size for i in entrees if i.filename.lower().endswith((".xml", ".rels"))) > XML_LU_EN_ENTIER_MAX
+            return _xml_docx(archive) > XML_LU_EN_ENTIER_MAX
         lues, feuilles = _parties_xlsx(archive)
         en_entier = en_flux = 0
         for info in entrees:
@@ -161,6 +161,36 @@ def decompression_excessive(source, extension: str) -> bool:
             elif nom in lues or nom.endswith((".xml", ".rels")):
                 en_entier += info.file_size
         return en_entier > XML_LU_EN_ENTIER_MAX or en_flux > FEUILLES_MAX
+
+
+def _xml_docx(archive: zipfile.ZipFile) -> int:
+    """Taille décompressée des parties d'un .docx que python-docx analyse en entier.
+
+    python-docx ne regarde pas le nom d'une partie mais le type déclaré dans [Content_Types].xml (Override,
+    sinon Default de l'extension) : « word/document.bin » déclaré comme document principal est lu en entier.
+    Sont comptées les parties nommées .xml ou .rels et celles dont le type déclaré est XML, quel que soit leur
+    nom. Dans le doute ([Content_Types].xml démesuré ou illisible), tout est compté.
+    """
+    entrees = archive.infolist()
+    try:
+        types = _xml_court(archive, "[Content_Types].xml")
+    except ValueError:
+        return sum(i.file_size for i in entrees)
+    defauts: dict[str, str] = {}
+    surcharges: dict[str, str] = {}
+    for element in types.iter() if types is not None else ():
+        if element.tag.endswith("Default"):
+            defauts[(element.get("Extension") or "").lower()] = element.get("ContentType") or ""
+        elif element.tag.endswith("Override"):
+            surcharges[(element.get("PartName") or "").lower()] = element.get("ContentType") or ""
+    total = 0
+    for info in entrees:
+        nom = info.filename.lower()
+        # Clés calculées comme python-docx : nom de partie « /<entrée> », extension sans le point, sans casse.
+        type_ = surcharges.get("/" + nom) or defauts.get(posixpath.splitext(nom)[1][1:], "")
+        if nom.endswith((".xml", ".rels")) or type_.lower().endswith("xml"):
+            total += info.file_size
+    return total
 
 
 PARTIES_SUIVIES_MAX = 1000  # liens suivis de proche en proche dans un classeur ; au-delà, tout est compté

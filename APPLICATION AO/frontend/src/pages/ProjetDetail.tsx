@@ -50,7 +50,7 @@ export default function ProjetDetail() {
   async function supprimerLot(id: number, libelle: string) {
     if (
       !window.confirm(
-        `Supprimer le lot ${libelle} et tout son contenu (CCTP, DPGF, pièces jointes) ? Un lot qui a des documents dans la GED ne peut pas être supprimé ; un lot qui a des offres ou des consultations ne peut l’être que par l’administrateur.`,
+        `Supprimer le lot ${libelle} et tout son contenu : CCTP, DPGF, acte d’engagement, pièces jointes, ainsi que les offres reçues (et leur analyse) et les consultations d’entreprises de ce lot (dans ce cas, suppression réservée à l’administrateur) ? Un lot qui a des documents dans la GED ne peut pas être supprimé.`,
       )
     )
       return;

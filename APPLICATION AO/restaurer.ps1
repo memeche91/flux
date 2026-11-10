@@ -179,6 +179,11 @@ if ($LASTEXITCODE -ne 0) {
 Write-Host "Docker Desktop est prêt."
 docker volume inspect application-ao_base_donnees 2>&1 | Out-Null
 $baseExistait = ($LASTEXITCODE -eq 0)
+# Nouveau PC : l'application n'y a jamais été démarrée en entier (par installer.ps1, ou après une restauration
+# réussie). Le volume des modèles de l'assistant n'est créé que par ce démarrage complet : après une tentative de
+# restauration ratée, qui a créé le volume de la base, le passage suivant se termine donc encore par installer.ps1.
+docker volume inspect application-ao_modeles_ia 2>&1 | Out-Null
+$nouveauPc = (-not $baseExistait) -or ($LASTEXITCODE -ne 0)
 
 Ecrire-Etape "Configuration de l’application (.env)"
 $cheminEnv = Join-Path $PSScriptRoot ".env"
@@ -245,6 +250,10 @@ if ($LASTEXITCODE -ne 0) { Arreter "La construction de l’application a échou�
 Ecrire-Etape "Choix de la sauvegarde"
 # Liste lue par le service worker : il voit le dossier des sauvegardes comme la sauvegarde de chaque nuit
 # (dossier du PC ou partage du serveur), sans autre réglage.
+# Fichiers sur le PC avec un .env déjà présent : le dossier monté n'est pas forcément celui des sauvegardes à
+# restaurer (nouveau PC où installer.ps1 a été lancé avant ce script, disque externe qui a changé de lettre…).
+# Il est indiqué avant la liste, et un autre dossier peut être choisi.
+$demander = (-not $serveur) -and (-not $dossier)
 while ($true) {
     $sortie = docker compose run --rm --no-deps -T worker sh -c 'cd /sauvegardes/base 2>/dev/null && stat -c %n:%s *.dump 2>/dev/null'
     $copies = @()
@@ -255,14 +264,30 @@ while ($true) {
             $copies += New-Object PSObject -Property @{ Nom = $nomCopie; Taille = $tailleCopie; Datee = ($nomCopie -match '^\d{4}-\d{2}-\d{2}_\d{4}') }
         }
     }
-    if ($copies.Count -gt 0 -or $serveur) { break }
-    # Fichiers sur le PC : dossier monté vide ou absent (disque externe qui a changé de lettre, .env neuf…).
+    if ($serveur -or ($copies.Count -gt 0 -and -not $demander)) { break }
     $monte = Lire-Variable $contenuEnv "DOSSIER_SAUVEGARDES_PC"
     if (-not $monte) { $monte = "donnees\sauvegardes" }
-    Write-Host "Aucune sauvegarde trouvée dans le dossier des sauvegardes du PC ($monte, sous-dossier base)." -ForegroundColor Yellow
-    $autre = (Read-Host "Dossier qui contient les sauvegardes (sous-dossiers base et configuration ; Entrée pour abandonner)").Trim().Trim('"').TrimEnd('\')
+    if ($copies.Count -gt 0) {
+        $recente = $copies | Where-Object { $_.Datee } | Sort-Object Nom -Descending | Select-Object -First 1
+        $precision = ""
+        if ($recente) { $precision = ", la plus récente du $(Libelle-Copie $recente.Nom)" }
+        Write-Host "Sauvegardes lues dans $monte (ligne DOSSIER_SAUVEGARDES_PC de .env) : $($copies.Count) copie(s)$precision."
+        Write-Host "Si les sauvegardes à restaurer sont ailleurs (nouveau PC où installer.ps1 a déjà été lancé, disque externe…),"
+        Write-Host "indiquez leur dossier : il devient le dossier des sauvegardes de l’application."
+        $autre = (Read-Host "Autre dossier des sauvegardes (Entrée : garder celui-ci)").Trim().Trim('"').TrimEnd('\')
+    } else {
+        # Dossier monté vide ou absent (disque externe qui a changé de lettre, .env neuf…).
+        Write-Host "Aucune sauvegarde trouvée dans le dossier des sauvegardes du PC ($monte, sous-dossier base)." -ForegroundColor Yellow
+        $autre = (Read-Host "Dossier qui contient les sauvegardes (sous-dossiers base et configuration ; Entrée pour abandonner)").Trim().Trim('"').TrimEnd('\')
+    }
     if (-not $autre) { break }
-    Utiliser-Dossier-Sauvegardes (Connecter-Dossier $autre "base")
+    $autre = Connecter-Dossier $autre "base"
+    if (Test-Path -LiteralPath (Join-Path $autre "base")) {
+        Utiliser-Dossier-Sauvegardes $autre
+        $demander = $false
+    } else {
+        Write-Host "Sous-dossier base introuvable dans $autre : indiquez le dossier qui contient les sous-dossiers base et configuration." -ForegroundColor Yellow
+    }
     Deconnecter-Partage
 }
 # Les plus récentes d'abord ; les copies faites avant une restauration ensuite.
@@ -299,6 +324,8 @@ $cleActuelle = Lire-Variable $contenuEnv "DJANGO_SECRET_KEY"
 if ($cleSauvegardee -and $cleSauvegardee -cne $cleActuelle) {
     Write-Host "La clé DJANGO_SECRET_KEY du fichier .env diffère de celle enregistrée avec les sauvegardes :" -ForegroundColor Yellow
     Write-Host "avec la clé actuelle, les codes d’accès des entreprises à la GED ne fonctionneraient plus." -ForegroundColor Yellow
+    Write-Host "Si ce .env a été créé par installer.ps1 sur ce PC, les copies faites depuis (sauvegarde de contrôle comprise)" -ForegroundColor Yellow
+    Write-Host "sont celles de sa base neuve : la copie choisie (du $libelle) doit être plus ancienne, sinon annulez et relancez ce script." -ForegroundColor Yellow
     if ((Read-Host "Reprendre la clé de la sauvegarde dans .env ? (O/N, O par défaut)") -notmatch '^\s*[nN]') {
         $contenuEnv = Definir-Variable $contenuEnv "DJANGO_SECRET_KEY" $cleSauvegardee
         Enregistrer-Env $contenuEnv
@@ -342,14 +369,23 @@ if ($avecFichiers) { $arguments += "--avec-fichiers" }
 $codeRestauration = $LASTEXITCODE
 $restauree = ($codeRestauration -eq 0)
 if ($codeRestauration -eq 2) {
-    Write-Host "La base a été remplacée, mais sa mise à jour de structure a échoué (détail ci-dessus)." -ForegroundColor Red
-    Write-Host "Relancez restaurer.ps1 et choisissez la copie « avant-restauration_… » pour revenir à la base d’avant, ou une autre copie." -ForegroundColor Red
-} elseif (-not $restauree) {
+    # Base remplacée mais pas à jour : l'application, qui applique migrate au démarrage, échouerait en boucle.
+    $conseil = ""
+    if (-not $nouveauPc) { $conseil = " (par exemple « avant-restauration_… », la base d’avant)" }
+    Arreter ("La base a été remplacée, mais sa mise à jour de structure a échoué (détail ci-dessus) : l’application n’est pas redémarrée.`n" +
+        "Relancez restaurer.ps1 et choisissez une autre copie$conseil.")
+}
+if (-not $restauree) {
+    if ($nouveauPc) {
+        # Nouveau PC : démarrer l'application sur la base vide ferait croire l'installation terminée.
+        Arreter ("La restauration a échoué (détail ci-dessus) : l’application n’est pas démarrée.`n" +
+            "Relancez restaurer.ps1 (choisissez une autre copie si besoin) : il lancera ensuite installer.ps1 pour terminer la mise en place.")
+    }
     Write-Host "La restauration a échoué (détail ci-dessus) : la base est restée telle qu’elle était." -ForegroundColor Red
 }
 
 Ecrire-Etape "Redémarrage de l’application"
-if ($restauree -and -not $baseExistait) {
+if ($restauree -and $nouveauPc) {
     # Nouveau PC : l'installateur termine la mise en place (carte graphique, modèles de l'assistant, sauvegarde).
     Write-Host "Nouveau PC : installer.ps1 termine la mise en place." -ForegroundColor Cyan
     & (Join-Path $PSScriptRoot "installer.ps1")
