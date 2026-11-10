@@ -486,8 +486,8 @@ def convertir(source: Path, format_cible: str, dossier: Path) -> Path:
         str(copie),
     ]
     try:
-        # Fichiers temporaires de LibreOffice (copie du document, socket) dans le dossier de travail, supprimé quelle
-        # que soit l'issue : LibreOffice tué par un plafond ou un délai ne les efface pas lui-même.
+        # Fichiers temporaires de LibreOffice (copie du document) dans le dossier de travail, supprimé quelle que soit
+        # l'issue ; le socket OSL_PIPE, toujours créé dans /tmp, est retiré par lecture_isolee après un arrêt forcé.
         temporaire = dossier / "tmp"
         temporaire.mkdir(exist_ok=True)
         subprocess.run(commande, check=True, capture_output=True, timeout=settings.CONVERSION_DELAI_MAX,
@@ -742,17 +742,22 @@ def _lire_pdf(chemin: Path, dossier: Path, tableaux_pdf: bool) -> ContenuDocumen
 
     with pdfplumber.open(str(chemin)) as pdf:
         for indice, page in enumerate(pdf.pages):
-            texte = page.extract_text() or ""
-            if texte.strip():
-                lignes_par_page.append(texte.splitlines())
-                if tableaux_pdf:
-                    for numero, tableau in enumerate(page.extract_tables(), start=1):
-                        contenu.tableaux.append(Tableau(f"Page {indice + 1} – tableau {numero}", tableau))
-            elif page.images:
-                pages_scannees.append(indice)
-                lignes_par_page.append(None)
-            else:
-                lignes_par_page.append([])
+            try:
+                texte = page.extract_text() or ""
+                if texte.strip():
+                    lignes_par_page.append(texte.splitlines())
+                    if tableaux_pdf:
+                        for numero, tableau in enumerate(page.extract_tables(), start=1):
+                            contenu.tableaux.append(Tableau(f"Page {indice + 1} – tableau {numero}", tableau))
+                elif page.images:
+                    pages_scannees.append(indice)
+                    lignes_par_page.append(None)
+                else:
+                    lignes_par_page.append([])
+            finally:
+                # pdfplumber garde sinon les caractères et la mise en page de chaque page (environ 10 Mo par page de
+                # texte) : un CCTP de 300 pages dépassait le plafond de mémoire de la lecture isolée.
+                page.close()
 
     if pages_scannees:
         if shutil.which(settings.TESSERACT_BIN):

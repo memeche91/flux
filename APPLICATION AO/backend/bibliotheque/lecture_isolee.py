@@ -67,6 +67,40 @@ class ErreurEnfant(Exception):
         self.nom = nom
 
 
+def _sockets_libreoffice() -> set[str]:
+    """Sockets OSL_PIPE de LibreOffice, toujours créés dans /tmp (TMPDIR ne les déplace pas)."""
+    import glob
+
+    return set(glob.glob(f"/tmp/OSL_PIPE_{os.getuid()}_SingleOfficeIPC_*"))
+
+
+def _retirer_sockets_orphelins(chemins: set[str], attente: float = 5.0) -> None:
+    """Retire les sockets laissés par un LibreOffice tué, dès que plus personne n'y écoute : le noyau ne les
+    ferme qu'à la fin effective du processus, un peu après le SIGKILL. Un socket qui répond encore au bout de
+    l'attente (conversion lancée en même temps par une autre lecture) est gardé."""
+    import contextlib
+    import socket
+
+    restants = set(chemins)
+    limite = time.monotonic() + attente
+    while restants:
+        for chemin in sorted(restants):
+            prise = socket.socket(socket.AF_UNIX)
+            try:
+                prise.connect(chemin)
+            except ConnectionRefusedError:
+                with contextlib.suppress(OSError):
+                    os.unlink(chemin)
+                restants.discard(chemin)
+            except OSError:  # déjà retiré, ou pas à nous
+                restants.discard(chemin)
+            finally:
+                prise.close()
+        if not restants or time.monotonic() >= limite:
+            return
+        time.sleep(0.1)
+
+
 def executer_isole(cible: str, *args, dossier: Path | None = None, memoire_mo: int | None = None,
                    delai: int | None = None, cpu: int | None = None, **kwargs):
     """Résultat de cible(*args, **kwargs), calculé dans un processus séparé et plafonné.
@@ -91,6 +125,7 @@ def executer_isole(cible: str, *args, dossier: Path | None = None, memoire_mo: i
         ]
         debut = time.monotonic()
         journal = bytearray()
+        sockets_avant = _sockets_libreoffice()
         # Groupe de processus propre : LibreOffice, Tesseract… sont arrêtés avec l'enfant. Sortie d'erreur lue
         # au fil de l'eau dans un tube, dont seule la fin est gardée : un fichier piégé qui ferait écrire des
         # avertissements sans fin ne remplit pas le disque.
@@ -102,6 +137,8 @@ def executer_isole(cible: str, *args, dossier: Path | None = None, memoire_mo: i
             termine = _attendre(enfant, delai, journal)
         finally:
             _arreter(enfant, journal)
+            if enfant.returncode != 0:
+                _retirer_sockets_orphelins(_sockets_libreoffice() - sockets_avant)
         duree = time.monotonic() - debut
         code = enfant.returncode
         if not termine:

@@ -134,6 +134,22 @@ def pdf_texte(lignes: list[str]) -> bytes:
     ])
 
 
+def pdf_pages(pages: list[list[str]]) -> bytes:
+    """PDF A4 de plusieurs pages de texte (police standard)."""
+    flux = ["BT /F1 11 Tf 14 TL 72 770 Td " + " ".join(f"({ligne}) Tj T*" for ligne in lignes) + " ET" for lignes in pages]
+    n = len(pages)
+    objets = [
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        f"<< /Type /Pages /Kids [{' '.join(f'{4 + 2 * i} 0 R' for i in range(n))}] /Count {n} >>",
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+    ]
+    for i, contenu in enumerate(flux):
+        objets.append(f"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> "
+                      f"/Contents {5 + 2 * i} 0 R >>")
+        objets.append(f"<< /Length {len(contenu)} >>\nstream\n{contenu}\nendstream")
+    return _pdf(objets)
+
+
 def pdf_page_geante() -> bytes:
     """Page de 200 × 200 pouces (la plus grande permise) portant une image : lue comme une page scannée (656 octets)."""
     return _pdf([
@@ -202,6 +218,35 @@ def _xlsx_ordinaire() -> bytes:
 
 
 class LectureDirecteTests(SimpleTestCase):
+    def test_pages_pdf_liberees_une_a_une(self):
+        # Sans page.close(), pdfplumber garde chaque page lue (environ 10 Mo par page de texte dense).
+        import pdfplumber.page
+
+        dossier = Path(tempfile.mkdtemp(prefix="lecture-directe-tests-"))
+        self.addCleanup(shutil.rmtree, dossier, ignore_errors=True)
+        chemin = dossier / "cctp.pdf"
+        lots = ["Gros oeuvre", "Charpente", "Couverture", "Menuiseries", "Platrerie", "Electricite", "Plomberie",
+                "Chauffage", "Carrelage", "Peinture", "Serrurerie", "Facades"]
+        chemin.write_bytes(pdf_pages([[f"Lot {lot}", f"Prescriptions du lot {lot.lower()}"] for lot in lots]))
+        lire, fermer, evenements = pdfplumber.page.Page.extract_text, pdfplumber.page.Page.close, []
+
+        def lire_trace(page, *args, **kwargs):
+            evenements.append(("lue", page.page_number))
+            return lire(page, *args, **kwargs)
+
+        def fermer_trace(page):
+            evenements.append(("libérée", page.page_number))
+            return fermer(page)
+
+        with mock.patch.object(pdfplumber.page.Page, "extract_text", autospec=True, side_effect=lire_trace), \
+                mock.patch.object(pdfplumber.page.Page, "close", autospec=True, side_effect=fermer_trace):
+            contenu = lire_document_direct(chemin, dossier)
+        # Chaque page est libérée avant de lire la suivante (pdfplumber les libère encore toutes en fin de lecture).
+        self.assertEqual(evenements[:24], [(etat, n) for n in range(1, 13) for etat in ("lue", "libérée")])
+        texte = "\n".join(bloc.texte for bloc in contenu.blocs)
+        self.assertIn("Lot Gros oeuvre", texte)
+        self.assertIn("Prescriptions du lot facades", texte)
+
     def test_lecture_directe_pendant_les_tests(self):
         self.assertFalse(settings.LECTURE_ISOLEE)
         dossier = Path(tempfile.mkdtemp(prefix="lecture-directe-tests-"))
@@ -335,6 +380,29 @@ class LectureIsoleeTests(SimpleTestCase):
         self.assertIn("dernier message", journaux.output[0])
         self.assertLess(len(journaux.output[0]), 6000)
         self.assertEqual(list(self.dossier.iterdir()), [])  # rien d'écrit sur le disque
+
+    def test_sockets_libreoffice_orphelins_retires(self):
+        import socket
+        import threading
+
+        from .lecture_isolee import _retirer_sockets_orphelins
+
+        prefixe = f"/tmp/OSL_PIPE_{os.getuid()}_SingleOfficeIPC_test{os.getpid()}"
+        orphelin, mourant, actif = (Path(prefixe + nom) for nom in ("orphelin", "mourant", "actif"))
+        prises = []
+        for chemin in (orphelin, mourant, actif):
+            prise = socket.socket(socket.AF_UNIX)
+            prise.bind(str(chemin))
+            prise.listen()
+            prises.append(prise)
+            self.addCleanup(chemin.unlink, missing_ok=True)
+            self.addCleanup(prise.close)
+        prises[0].close()  # le fichier reste, plus personne n'écoute
+        threading.Timer(0.5, prises[1].close).start()  # LibreOffice tué, pas encore tout à fait arrêté
+        _retirer_sockets_orphelins({str(orphelin), str(mourant), str(actif)}, attente=2)
+        self.assertFalse(orphelin.exists())
+        self.assertFalse(mourant.exists())
+        self.assertTrue(actif.exists())  # une autre conversion en cours
 
     def test_resultat_relu_sans_objet_inattendu(self):
         with self.assertRaises(pickle.UnpicklingError):
