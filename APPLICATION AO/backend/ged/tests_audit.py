@@ -140,7 +140,9 @@ class BaseAudit(TestCase):
 
     def connecter(self, code, client=None) -> Client:
         client = client or Client()
-        reponse = client.post("/api/ged/acces", json.dumps({"code": code}), content_type="application/json")
+        # Comme le portail : jeton CSRF demandé d'abord, puis renvoyé avec le code.
+        jeton = client.get("/api/ged/portail/csrf").json()["csrftoken"]
+        reponse = client.post("/api/ged/acces", json.dumps({"code": code}), content_type="application/json", HTTP_X_CSRFTOKEN=jeton)
         self.assertEqual(reponse.status_code, 200, reponse.content)
         return client
 
@@ -206,10 +208,18 @@ class PortailSansSessionAuditTests(BaseAudit):
 
     @skipUnless((RACINE_PROJET / "frontend" / "Caddyfile").exists(), "Caddyfile absent (image du backend)")
     def test_caddy_et_gunicorn(self):
+        import re
+
         caddy = (RACINE_PROJET / "frontend" / "Caddyfile").read_text(encoding="utf-8")
-        self.assertIn("request_buffers 16KB", caddy)
-        self.assertIn("max_size 64KB", caddy)
-        self.assertLess(caddy.index("handle @sans_session"), caddy.index("handle @api_ged"))
+        public = caddy[caddy.index("(ged_public)"):]
+        self.assertIn("max_size 64KB", public)
+        # Saisie du code et déconnexion : corps reçu en entier par Caddy avant d'être transmis.
+        bloc = re.search(r"\n\thandle @sans_session \{(.*?)\n\t\}", public, re.S).group(1)
+        self.assertIn("request_buffers 16KB", bloc)
+        self.assertRegex(public, r"@sans_session path /api/ged/acces /api/ged/portail/deconnexion\n")
+        # La déconnexion n'est jamais relayée par le bloc sans tampon, quel que soit l'ordre des blocs.
+        portail = re.search(r"\n\t@api_ged \{(.*?)\n\t\}", public, re.S).group(1)
+        self.assertIn("not path /api/ged/portail/deconnexion", portail)
         for nom in ("docker-compose.internet.yml", "docker-compose.tunnel.yml"):
             compose = (RACINE_PROJET / nom).read_text(encoding="utf-8")
             self.assertIn('"--threads", "16"', compose, nom)
@@ -465,7 +475,9 @@ class NotificationsAuditTests(BaseAudit):
         cache.delete(f"ged:notifications:{self.espace.pk}")
         with mock.patch("ged.notifications.get_connection", return_value=Connexion(arret_apres=None)):
             tasks.notifier_espace(self.espace.pk)
-        self.assertEqual(sorted(partis), ["eco@cabinet.fr", "jean@martin.fr", "paul@durand.fr"])  # chacun une seule fois
+        # Chacun une seule fois. Compte rendu pour information : la maîtrise d'œuvre l'aura dans le
+        # récapitulatif du matin (seul ce qui est à viser lui part tout de suite).
+        self.assertEqual(sorted(partis), ["jean@martin.fr", "paul@durand.fr"])
         evenement.refresh_from_db()
         self.assertFalse(evenement.a_notifier)
 
@@ -477,5 +489,6 @@ class NotificationsAuditTests(BaseAudit):
         self.assertTrue(Evenement.objects.get().a_notifier)
         cache.delete(f"ged:notifications:{self.espace.pk}")
         tasks.notifier_espace(self.espace.pk)
-        self.assertEqual(len(mail.outbox), 3)
-        self.assertEqual(Notification.objects.filter(envoyee_le__isnull=False).count(), 3)
+        self.assertEqual(sorted(m.to[0] for m in mail.outbox), ["jean@martin.fr", "paul@durand.fr"])
+        self.assertEqual(Notification.objects.filter(envoyee_le__isnull=False).count(), 2)
+        self.assertFalse(Evenement.objects.get().a_notifier)

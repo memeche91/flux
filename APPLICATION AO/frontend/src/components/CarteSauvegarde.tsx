@@ -15,21 +15,47 @@ const lireEtat = () => api<EtatSauvegardes>("/sauvegardes/etat");
 
 const messageDe = (probleme: unknown, defaut: string) => (probleme instanceof Error && probleme.message ? probleme.message : defaut);
 
-/** « 2 h 05 », comme l'heure de la sauvegarde de chaque nuit renvoyée par le serveur. */
+/** Dates et heures lues à l’heure de Paris, comme l’heure de la sauvegarde de chaque nuit et les dates
+ * citées dans les alertes du serveur, même si Windows est réglé sur un autre fuseau. */
+const PARTIES_PARIS = new Intl.DateTimeFormat("fr-FR", {
+  timeZone: "Europe/Paris",
+  year: "numeric",
+  month: "numeric",
+  day: "numeric",
+  hour: "numeric",
+  minute: "numeric",
+  hourCycle: "h23",
+});
+const MOIS = ["janvier", "février", "mars", "avril", "mai", "juin", "juillet", "août", "septembre", "octobre", "novembre", "décembre"];
+
+function aParis(date: Date) {
+  const parties = Object.fromEntries(PARTIES_PARIS.formatToParts(date).map((p) => [p.type, p.value]));
+  return {
+    annee: Number(parties.year),
+    mois: Number(parties.month),
+    jour: Number(parties.day),
+    heures: Number(parties.hour),
+    minutes: Number(parties.minute),
+  };
+}
+
+/** « 2 h 05 », comme l’heure de la sauvegarde de chaque nuit renvoyée par le serveur. */
 function heureDe(date: Date): string {
-  return `${date.getHours()} h ${String(date.getMinutes()).padStart(2, "0")}`;
+  const { heures, minutes } = aParis(date);
+  return `${heures} h ${String(minutes).padStart(2, "0")}`;
 }
 
 /** « aujourd’hui à 2 h 31 », « hier à 2 h 31 », « le 1er novembre 2026 à 2 h 31 ». */
 function formaterMoment(iso: string): string {
   const date = new Date(iso);
-  const jour = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
-  const ecart = Math.round((jour(new Date()) - jour(date)) / 86_400_000);
+  const jourDe = (d: ReturnType<typeof aParis>) => Date.UTC(d.annee, d.mois - 1, d.jour);
+  const moment = aParis(date);
+  const ecart = Math.round((jourDe(aParis(new Date())) - jourDe(moment)) / 86_400_000);
   const heure = heureDe(date);
   if (ecart === 0) return `aujourd’hui à ${heure}`;
   if (ecart === 1) return `hier à ${heure}`;
-  const numero = date.getDate() === 1 ? "1er" : String(date.getDate());
-  return `le ${numero} ${date.toLocaleDateString("fr-FR", { month: "long" })} ${date.getFullYear()} à ${heure}`;
+  const numero = moment.jour === 1 ? "1er" : String(moment.jour);
+  return `le ${numero} ${MOIS[moment.mois - 1]} ${moment.annee} à ${heure}`;
 }
 
 const majuscule = (texte: string) => texte.charAt(0).toUpperCase() + texte.slice(1);
@@ -37,10 +63,12 @@ const majuscule = (texte: string) => texte.charAt(0).toUpperCase() + texte.slice
 /** Le serveur réunit ses alertes en un seul texte. L'avertissement « même disque que l'application »
  * (toujours placé en dernier) est un conseil d'installation : il est affiché en couleur attention, le
  * reste (jamais sauvegardé, dernière réussite trop ancienne, échec, copie non vérifiée) en danger. Si
- * sa formulation change, tout le texte reste affiché en danger. */
-const DEBUT_MEME_DISQUE = /Les sauvegardes [^.!?]*même disque/;
+ * sa formulation change, tout le texte reste affiché en danger. La dernière occurrence est retenue,
+ * puisque l’avertissement est placé en dernier (après le message d’échec éventuel, qui est libre). */
+const DEBUT_MEME_DISQUE = /Les sauvegardes [^.!?]*même disque/g;
 function separerAlerte(alerte: string): { grave: string; disque: string } {
-  const indice = alerte.search(DEBUT_MEME_DISQUE);
+  let indice = -1;
+  for (const occurrence of alerte.matchAll(DEBUT_MEME_DISQUE)) indice = occurrence.index;
   if (indice < 0) return { grave: alerte.trim(), disque: "" };
   return { grave: alerte.slice(0, indice).trim(), disque: alerte.slice(indice).trim() };
 }

@@ -107,7 +107,8 @@
 	# avant de le transmettre. Un envoi au compte-gouttes (un octet par seconde) n'occupe donc jamais
 	# un fil du service « ged ». Les autres envois sont refusés par Django, sans lecture du corps,
 	# quand la session ouverte avec un code est absente (ged/protection.py).
-	# Ce bloc doit rester avant « handle @api_ged » : les blocs à matcher nommé gardent leur ordre.
+	# Les deux blocs de relais qui suivent ont des chemins disjoints (la déconnexion est exclue du
+	# second) : leur ordre est sans effet.
 	handle @sans_session {
 		reverse_proxy ged:8000 {
 			request_buffers 16KB
@@ -119,7 +120,10 @@
 		}
 	}
 
-	@api_ged path /api/ged/portail /api/ged/portail/*
+	@api_ged {
+		path /api/ged/portail /api/ged/portail/*
+		not path /api/ged/portail/deconnexion
+	}
 	handle @api_ged {
 		reverse_proxy ged:8000 {
 			header_up X-Ip-Client {client_ip}

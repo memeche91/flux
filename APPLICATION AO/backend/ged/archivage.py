@@ -482,9 +482,9 @@ def purger(archive: ProjetArchive) -> int:
             espace.statut = StatutEspace.CLOS
             espace.save(update_fields=["statut"])
             espace.intervenants.update(actif=False)
-            # Adresses IP et navigateurs des intervenants : données personnelles, sans utilité une fois
-            # le chantier archivé (l'archive les exclut déjà). Le journal garde dates, acteurs et opérations.
-            Evenement.objects.filter(espace=espace).update(adresse_ip=None, navigateur="")
+        # Adresses IP et navigateurs des intervenants : données personnelles, sans utilité une fois
+        # le chantier archivé (l'archive les exclut déjà). Le journal garde dates, acteurs et opérations.
+        Evenement.objects.filter(espace__projet=projet).update(adresse_ip=None, navigateur="")
         archive.fichiers_purges_le = timezone.now()
         archive.purge_prevue_le = None
         archive.octets_liberes = octets
