@@ -686,7 +686,7 @@ export interface DerniereSauvegarde {
   fin: string | null;
   statut: StatutSauvegarde;
   statut_libelle: string;
-  /** Taille en octets (0 tant que la sauvegarde n’est pas terminée). */
+  /** Taille en octets de la copie de la base (0 tant que la copie n’est pas faite). */
   taille: number;
   /** Copie de la base vérifiée par une restauration d’essai. */
   verifiee: boolean;
@@ -695,6 +695,7 @@ export interface DerniereSauvegarde {
 
 export interface SauvegardeReussie {
   fin: string | null;
+  /** Taille en octets de la copie de la base. */
   taille: number;
   verifiee: boolean;
 }

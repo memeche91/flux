@@ -1,8 +1,9 @@
 /** Carte « Sauvegarde » du tableau de bord : dernière sauvegarde réussie, destination, heure de la
  * sauvegarde de chaque nuit et alertes. L'administrateur peut lancer une sauvegarde immédiate ;
- * l'état est relu toutes les 5 s tant qu'une sauvegarde est en cours. */
+ * l'état est relu toutes les 5 min et au retour sur l’onglet, et toutes les 5 s tant qu'une sauvegarde
+ * est en cours. */
 import { CircleAlert, CircleCheck, DatabaseBackup, LoaderCircle, TriangleAlert } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { api } from "../api/client";
 import type { DerniereSauvegarde, EtatSauvegardes } from "../api/types";
@@ -10,6 +11,9 @@ import { useAuth } from "../auth/AuthContext";
 import { formaterTaille } from "../lib/format";
 
 const INTERVALLE_SUIVI_MS = 5000;
+/** Relecture régulière hors sauvegarde en cours : une page laissée ouverte la nuit montre au matin la
+ * sauvegarde de la nuit (ou son échec) avec une date relative à jour, et une erreur passagère s’efface. */
+const INTERVALLE_RELECTURE_MS = 5 * 60_000;
 
 const lireEtat = () => api<EtatSauvegardes>("/sauvegardes/etat");
 
@@ -87,19 +91,41 @@ export default function CarteSauvegarde() {
   const [envoi, setEnvoi] = useState(false);
   const [erreurLancement, setErreurLancement] = useState<string | null>(null);
 
-  useEffect(() => {
-    let actif = true;
-    lireEtat()
+  // Lectures numérotées : une réponse arrivée après une réponse plus récente (relecture régulière qui
+  // croise le suivi ou le lancement d’une sauvegarde) est ignorée, pour ne pas réafficher un état dépassé.
+  const lectures = useRef({ lancees: 0, minimum: 0 });
+
+  /** Relit l’état ; `actif()` devient faux quand l’effet qui a demandé la lecture est terminé. Ne rejette jamais. */
+  function relire(actif: () => boolean): Promise<void> {
+    const numero = ++lectures.current.lancees;
+    return lireEtat()
       .then((resultat) => {
-        if (!actif) return;
+        if (!actif() || numero < lectures.current.minimum) return;
+        lectures.current.minimum = numero;
         setEtat(resultat);
         setErreur(null);
       })
       .catch((probleme: unknown) => {
-        if (actif) setErreur(messageDe(probleme, "État des sauvegardes indisponible."));
+        if (actif() && numero >= lectures.current.minimum) setErreur(messageDe(probleme, "État des sauvegardes indisponible."));
       });
+  }
+
+  // Lecture au montage, puis toutes les 5 min et au retour sur l’onglet : la sauvegarde de la nuit est
+  // repérée (en_cours passe à vrai et le suivi ci-dessous prend le relais) même si la page est restée ouverte.
+  useEffect(() => {
+    let actif = true;
+    const estActif = () => actif;
+    const relecture = () => void relire(estActif);
+    relecture();
+    const minuterie = window.setInterval(relecture, INTERVALLE_RELECTURE_MS);
+    const surVisibilite = () => {
+      if (document.visibilityState === "visible") relecture();
+    };
+    document.addEventListener("visibilitychange", surVisibilite);
     return () => {
       actif = false;
+      window.clearInterval(minuterie);
+      document.removeEventListener("visibilitychange", surVisibilite);
     };
   }, []);
 
@@ -111,18 +137,9 @@ export default function CarteSauvegarde() {
     let minuterie: number | undefined;
     const programmer = () => {
       minuterie = window.setTimeout(() => {
-        lireEtat()
-          .then((resultat) => {
-            if (!actif) return;
-            setEtat(resultat);
-            setErreur(null);
-          })
-          .catch((probleme: unknown) => {
-            if (actif) setErreur(messageDe(probleme, "État des sauvegardes indisponible."));
-          })
-          .finally(() => {
-            if (actif) programmer();
-          });
+        void relire(() => actif).then(() => {
+          if (actif) programmer();
+        });
       }, INTERVALLE_SUIVI_MS);
     };
     programmer();
@@ -146,6 +163,8 @@ export default function CarteSauvegarde() {
     setFin("");
     try {
       const resultat = await api<EtatSauvegardes>("/sauvegardes", { method: "POST" });
+      // État relu juste après le lancement : les lectures parties avant cette réponse sont dépassées.
+      lectures.current.minimum = ++lectures.current.lancees;
       setEtat(resultat);
       setErreur(null);
       // Échec immédiat (service des tâches injoignable) : la réponse arrive déjà terminée.
@@ -205,7 +224,7 @@ export default function CarteSauvegarde() {
                   <>
                     <span>
                       <span className="font-semibold">{reussie.fin ? majuscule(formaterMoment(reussie.fin)) : "Date inconnue"}</span>
-                      {reussie.taille > 0 && <span className="text-attenue"> · {formaterTaille(reussie.taille)}</span>}
+                      {reussie.taille > 0 && <span className="text-attenue"> · base de données : {formaterTaille(reussie.taille)}</span>}
                     </span>
                     <span className={`flex items-center gap-1.5 text-sm ${reussie.verifiee ? "text-succes" : "text-attention"}`}>
                       {reussie.verifiee ? (
@@ -237,8 +256,8 @@ export default function CarteSauvegarde() {
               <dd className="flex flex-col gap-1">
                 <span className="font-semibold">{etat.heure ? `Chaque nuit à ${etat.heure}` : "Chaque nuit"}</span>
                 <span className="text-xs text-attenue">
-                  Le PC doit rester allumé et la session Windows ouverte (verrouillez-la, ne vous déconnectez pas). Si le PC était éteint, la
-                  sauvegarde est faite à son démarrage.
+                  Le PC doit rester allumé, sans mise en veille, et la session Windows ouverte (verrouillez-la, ne vous déconnectez
+                  pas). S’il était éteint ou en veille, la sauvegarde est faite à son démarrage ou à son réveil.
                 </span>
               </dd>
             </div>

@@ -127,17 +127,28 @@ function Chemin-Complet([string]$chemin) {
 
 # Fichiers sur le PC : le service worker lit les sauvegardes dans le dossier que Docker monte (ligne
 # DOSSIER_SAUVEGARDES_PC de .env, sinon donnees\sauvegardes). Le dossier indiqué devient ce dossier ; un
-# dossier réseau, que Docker ne peut pas monter, est d'abord recopié dans donnees\sauvegardes.
+# dossier réseau, que Docker ne peut pas monter, ou un chemin avec apostrophe, que Docker ne sait pas lire
+# dans .env, est d'abord recopié dans donnees\sauvegardes.
 function Utiliser-Dossier-Sauvegardes([string]$dossier) {
     if (-not (Test-Path -LiteralPath (Join-Path $dossier "base"))) {
         Write-Host "Sous-dossier base introuvable dans $dossier." -ForegroundColor Yellow
         return
     }
     $dossierLocal = Join-Path $PSScriptRoot "donnees\sauvegardes"
-    if ($dossier.StartsWith('\\')) {
-        Write-Host "Copie des sauvegardes de $dossier dans $dossierLocal (Docker ne peut pas lire un dossier réseau)…"
+    if ($dossier.StartsWith('\\') -or ($dossier.Contains("'") -and (Chemin-Complet $dossier) -ne (Chemin-Complet $dossierLocal))) {
+        Write-Host "Copie des sauvegardes de $dossier dans $dossierLocal (Docker ne peut pas lire un dossier réseau ni un chemin avec apostrophe)…"
         robocopy $dossier $dossierLocal /E /XO /R:2 /W:5 /NP /NFL /NDL /NJH | Out-Host
         if ($LASTEXITCODE -ge 8) { Arreter "La copie des sauvegardes a échoué (code robocopy $LASTEXITCODE)." }
+        # Le .env doit être celui des sauvegardes indiquées, même plus ancien (/XO garderait celui de la sauvegarde
+        # de contrôle d'installer.ps1, avec sa nouvelle clé : la différence de clé ne serait pas signalée).
+        $envSource = Join-Path $dossier "configuration\.env"
+        if (Test-Path -LiteralPath $envSource) {
+            try {
+                Copy-Item -LiteralPath $envSource -Destination (Join-Path $dossierLocal "configuration\.env") -Force -ErrorAction Stop
+            } catch {
+                Arreter "Copie du fichier configuration\.env des sauvegardes impossible : $($_.Exception.Message)"
+            }
+        }
         $dossier = $dossierLocal
     }
     $monte = (Lire-Variable $script:contenuEnv "DOSSIER_SAUVEGARDES_PC").Trim('"')
@@ -295,7 +306,17 @@ $copies = @(@($copies | Where-Object { $_.Datee } | Sort-Object Nom -Descending)
 if ($copies.Count -eq 0) {
     $ou = "le dossier des sauvegardes du PC"
     if ($serveur) { $ou = "$(Lire-Variable $contenuEnv 'SERVEUR_CHEMIN_AFFICHE')\sauvegardes" }
-    Arreter "Aucune sauvegarde trouvée dans $ou (sous-dossier base). Vérifiez que le dossier est accessible, ou lancez d’abord installer.ps1."
+    $conseil = "Vérifiez que le dossier est accessible (message de Docker éventuel ci-dessus)."
+    if ($serveur) {
+        $conseil = "Vérifiez que le serveur est allumé et que le compte dédié (lignes SERVEUR_… de .env) a toujours accès au dossier (message de Docker éventuel ci-dessus)."
+    }
+    if ($nouveauPc) {
+        # Nouveau PC : installer.ps1 créerait une base vide, dont la sauvegarde de contrôle serait ensuite la copie la plus récente.
+        $conseil += "`nNe lancez pas installer.ps1 avant d’avoir restauré : il créerait une base vide."
+    } else {
+        $conseil += "`nSi aucune sauvegarde n’a encore été faite, lancez d’abord installer.ps1."
+    }
+    Arreter "Aucune sauvegarde trouvée dans $ou (sous-dossier base). $conseil"
 }
 $choix = $null
 if ($Sauvegarde) {
@@ -374,6 +395,12 @@ if ($codeRestauration -eq 2) {
     if (-not $nouveauPc) { $conseil = " (par exemple « avant-restauration_… », la base d’avant)" }
     Arreter ("La base a été remplacée, mais sa mise à jour de structure a échoué (détail ci-dessus) : l’application n’est pas redémarrée.`n" +
         "Relancez restaurer.ps1 et choisissez une autre copie$conseil.")
+}
+if ($codeRestauration -eq 3) {
+    # Base restaurée, recopie des fichiers incomplète : pas de reprise du travail avant la fin de la recopie.
+    Arreter ("La base a été restaurée, mais la recopie des fichiers est incomplète (détail ci-dessus) : l’application n’est pas redémarrée.`n" +
+        "Corrigez la cause indiquée, puis relancez restaurer.ps1 avec la même copie ($libelle : $($choix.Nom)) et acceptez la recopie des fichiers (rien n’est effacé).`n" +
+        "Si la cause ne peut pas être corrigée, installer.ps1 démarre l’application sans les fichiers non recopiés.")
 }
 if (-not $restauree) {
     if ($nouveauPc) {

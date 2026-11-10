@@ -492,6 +492,21 @@ class AlerteTests(TestCase):
             reussie.message = f"Base : 2 Mo. Configuration : ATTENTION, {services.CLE_DIFFERENTE} : …"
             self.assertIn("La clé DJANGO_SECRET_KEY de l’application diffère", alerte(reussie, reussie, maintenant))
 
+    def test_copie_ancienne_restauree(self):
+        """Copie de 3 jours restaurée : ni « arrêtés la nuit ? » ni rien tant qu'elle a moins de 36 heures."""
+        maintenant = timezone.now()
+        with override_settings(STOCKAGE_SERVEUR=False, DOSSIER_SAUVEGARDES_PC="E:\\Sauvegardes"):
+            debut = maintenant - datetime.timedelta(days=3)
+            restauree = Sauvegarde.objects.create(
+                statut=StatutSauvegarde.REUSSIE, verifiee=True, debut=debut, fin=debut,
+                message=f"{services.COPIE_RESTAUREE} le 10/11/2026 à 14:05 ; le compte rendu de cette sauvegarde n’est pas dans la copie.")
+            texte = alerte(restauree, restauree, maintenant)
+            self.assertEqual(texte, f"La base a été restaurée depuis la copie du {services._date(debut)} et aucune sauvegarde n’a "
+                                    "réussi depuis : lancez-en une avec le bouton « Sauvegarder maintenant » (compte administrateur) "
+                                    "pour protéger ce qui a été saisi depuis la restauration.")
+            self.assertNotIn("arrêtés la nuit", texte)
+            self.assertEqual(alerte(restauree, restauree, debut + datetime.timedelta(hours=2)), "")
+
     def test_meme_disque(self):
         for chemin, attendu in (("", True), ("./donnees/sauvegardes", True), ("C:\\Sauvegardes", True), ("c:/sauvegardes", True),
                                 ("D:\\Sauvegardes", False), ("\\\\SERVEUR\\DAplomb", False), ('"E:\\Copies"', False)):
@@ -627,6 +642,25 @@ class CommandesTests(OutilsSimules, TestCase):
         self.assertFalse(Path(script).exists())  # script temporaire (toute la base) supprimé
         self.assertIn("DJANGO_SECRET_KEY de l’application diffère", sortie.getvalue())
         self.assertFalse(Sauvegarde.objects.filter(statut=StatutSauvegarde.EN_COURS).exists())
+
+    def test_restaurer_copie_ancienne_alerte(self):
+        """Copie de 3 jours restaurée sur le même PC : l'alerte parle de la restauration, pas d'un arrêt la nuit,
+        et disparaît à la sauvegarde suivante."""
+        lancer("essai")
+        nom = Path(Sauvegarde.objects.get().fichier).name
+        Sauvegarde.objects.all().delete()  # la base restaurée ne contient que ce qui était dans la copie
+        Sauvegarde.objects.create(declenchee_par="planification", debut=timezone.now() - datetime.timedelta(days=3))
+        with mock.patch("sauvegardes.management.commands.restaurer.call_command"), \
+                mock.patch("sauvegardes.management.commands.restaurer.connections"):
+            call_command("restaurer", nom, "--confirmer", stdout=StringIO())
+        restauree = Sauvegarde.objects.get()
+        self.assertTrue(restauree.message.startswith(services.COPIE_RESTAUREE))
+        texte = etat()["alerte"]
+        self.assertTrue(texte.startswith("La base a été restaurée depuis la copie du "), texte)
+        self.assertIn("« Sauvegarder maintenant »", texte)
+        self.assertNotIn("arrêtés la nuit", texte)
+        self.assertEqual(lancer("essai").statut, StatutSauvegarde.REUSSIE)
+        self.assertEqual(etat()["alerte"], "")
 
     def test_restaurer_echec_base_inchangee(self):
         lancer("essai")

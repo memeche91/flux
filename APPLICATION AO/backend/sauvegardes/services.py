@@ -40,6 +40,9 @@ MOTIF_COPIE = re.compile(r"^(\d{4})-(\d{2})-(\d{2})_(\d{2})(\d{2})(?:-(\d+))?\.d
 CLE_VERROU = 7_041_946  # verrou consultatif PostgreSQL propre à la sauvegarde
 # Repère du compte rendu : l'alerte de l'application le cherche dans le message de la dernière sauvegarde.
 CLE_DIFFERENTE = "la clé DJANGO_SECRET_KEY du .env de l’application diffère de celle des sauvegardes"
+# Début du compte rendu de la sauvegarde contenue dans une copie restaurée (commande restaurer) : sa date
+# est celle de la copie, pas celle de la restauration.
+COPIE_RESTAUREE = "Copie de la base restaurée"
 LISEZ_MOI = """D’Aplomb — sauvegardes
 =====================
 
@@ -486,7 +489,13 @@ def alerte(derniere_terminee: Sauvegarde | None, derniere_reussie: Sauvegarde | 
         messages.append(f"La dernière sauvegarde (le {_date(derniere_terminee.debut)}) a échoué : {_premiere_partie(derniere_terminee.message)}")
     if derniere_reussie is not None:
         fin = derniere_reussie.fin or derniere_reussie.debut
-        if maintenant - fin > DELAI_ALERTE:
+        if maintenant - fin > DELAI_ALERTE and derniere_reussie.message.startswith(COPIE_RESTAUREE):
+            # Copie ancienne remise en place par restaurer : les nuits suivantes ont bien été sauvegardées
+            # (copies gardées dans base\), seul ce qui a été saisi depuis la restauration n'est pas protégé.
+            messages.append(f"La base a été restaurée depuis la copie du {_date(fin)} et aucune sauvegarde n’a réussi "
+                            "depuis : lancez-en une avec le bouton « Sauvegarder maintenant » (compte administrateur) "
+                            "pour protéger ce qui a été saisi depuis la restauration.")
+        elif maintenant - fin > DELAI_ALERTE:
             messages.append(f"La dernière sauvegarde réussie date du {_date(fin)}, il y a plus de 36 heures : "
                             "le PC ou l’application étaient-ils arrêtés la nuit ?")
         if derniere_terminee is not None and derniere_terminee.pk == derniere_reussie.pk and not derniere_reussie.verifiee:

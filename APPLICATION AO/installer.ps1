@@ -217,6 +217,12 @@ function Configurer-Serveur {
         Write-Host "Chemin non reconnu : il commence par \\, suivi du nom du serveur et du nom du partage." -ForegroundColor Yellow
         return $false
     }
+    if ($chemin.Contains("'")) {
+        # Valeur-Env l'écrirait entre apostrophes : .env deviendrait illisible pour Docker Compose.
+        Write-Host "Ce chemin contient une apostrophe ('), que Docker ne sait pas lire dans .env : partagez le dossier de D’Aplomb" -ForegroundColor Yellow
+        Write-Host "sous un nom sans apostrophe (par exemple \\SERVEUR\DAplomb), puis recommencez." -ForegroundColor Yellow
+        return $false
+    }
     $nomServeur = $parties[0]
     $partage = ($parties[1..($parties.Count - 1)]) -join '/'
     $adresse = Adresse-Serveur $nomServeur
@@ -596,6 +602,12 @@ if ($modeServeur) {
     $contenuEnv = Definir-Variable $contenuEnv "VOLUME_FICHIERS" ""
     $contenuEnv = Definir-Variable $contenuEnv "VOLUME_ARCHIVES" ""
     $sauvegardesPc = Lire-Variable $contenuEnv "DOSSIER_SAUVEGARDES_PC"
+    if ($sauvegardesPc.Contains("'")) {
+        # Entre apostrophes, comme les autres chemins, la valeur rendrait .env illisible pour Docker Compose.
+        Arreter ("DOSSIER_SAUVEGARDES_PC contient une apostrophe ($sauvegardesPc), que Docker ne sait pas lire dans .env :`n" +
+            "renommez ce dossier sans apostrophe (par exemple E:\Sauvegardes DAplomb), corrigez la ligne DOSSIER_SAUVEGARDES_PC= du`n" +
+            "fichier .env (entre apostrophes droites : DOSSIER_SAUVEGARDES_PC='E:\Sauvegardes DAplomb'), puis relancez ce script.")
+    }
     if ($sauvegardesPc.StartsWith('"')) {
         # Entre guillemets doubles, Docker Compose retire les \ du chemin : réécrit entre apostrophes droites.
         $sauvegardesPc = $sauvegardesPc.Trim('"')
@@ -651,7 +663,8 @@ if ($modeServeur) {
             $actuel = docker volume inspect $volume --format "{{json .Options}}" 2>$null
             if ($LASTEXITCODE -ne 0 -or -not (Texte-Sortie $actuel)) { continue }
             $options = (Texte-Sortie $actuel) | ConvertFrom-Json
-            if ($options.o -ne "$($attendu.o)".Replace('$$', '$') -or $options.device -ne "$($attendu.device)".Replace('$$', '$')) {
+            # -cne : un mot de passe qui ne change que par des majuscules ou minuscules doit aussi recréer le volume.
+            if ($options.o -cne "$($attendu.o)".Replace('$$', '$') -or $options.device -cne "$($attendu.device)".Replace('$$', '$')) {
                 Write-Host "Réglages du serveur modifiés : le volume $nom est recréé (les fichiers du serveur ne sont pas touchés)."
                 $conteneurs = @(docker ps -aq --filter "volume=$volume")
                 if ($conteneurs.Count -gt 0) { docker rm -f $conteneurs | Out-Null }

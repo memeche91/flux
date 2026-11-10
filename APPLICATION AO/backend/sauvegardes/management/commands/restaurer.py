@@ -26,7 +26,7 @@ from sauvegardes import postgres
 from sauvegardes.miroir import SUFFIXE_PARTIEL, miroir
 from sauvegardes.models import Sauvegarde, StatutSauvegarde
 from sauvegardes.postgres import ErreurSauvegarde
-from sauvegardes.services import cle_secrete, destination_affichee, dossier, verrou
+from sauvegardes.services import COPIE_RESTAUREE, cle_secrete, destination_affichee, dossier, verrou
 
 
 def trouver_copie(chemin: str) -> Path:
@@ -134,7 +134,7 @@ class Command(BaseCommand):
             relatif = copie.name
         Sauvegarde.objects.filter(statut=StatutSauvegarde.EN_COURS).update(
             statut=StatutSauvegarde.REUSSIE, verifiee=True, fin=F("debut"), fichier=relatif[:255], taille=copie.stat().st_size,
-            message=f"Copie de la base restaurée le {timezone.localtime():%d/%m/%Y à %H:%M} ; "
+            message=f"{COPIE_RESTAUREE} le {timezone.localtime():%d/%m/%Y à %H:%M} ; "
                     "le compte rendu de cette sauvegarde n’est pas dans la copie.")
 
     def _recopier_fichiers(self) -> int:
