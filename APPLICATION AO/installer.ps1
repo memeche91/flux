@@ -38,9 +38,10 @@ function Nouveau-Secret([int]$longueur) {
 
 # Lecture et écriture d'une ligne NOM=valeur du fichier .env.
 function Lire-Variable([string]$contenu, [string]$nom) {
-    $trouve = [regex]::Match($contenu, "(?m)^$nom=([^\r\n]*)")
-    if ($trouve.Success) {
-        $valeur = $trouve.Groups[1].Value.Trim()
+    # Ligne présente plusieurs fois : Docker Compose garde la dernière, ce script aussi.
+    $trouves = [regex]::Matches($contenu, "(?m)^$nom=([^\r\n]*)")
+    if ($trouves.Count -gt 0) {
+        $valeur = $trouves[$trouves.Count - 1].Groups[1].Value.Trim()
         # Valeur entre apostrophes droites : Docker Compose la lit telle quelle (espaces, \, $ et # compris).
         if ($valeur.Length -ge 2 -and $valeur.StartsWith("'") -and $valeur.EndsWith("'")) { $valeur = $valeur.Substring(1, $valeur.Length - 2) }
         return $valeur
@@ -296,8 +297,9 @@ function Chemin-Pc([string]$valeur, [string]$defaut) {
 # une apostrophe, un guillemet, un # (commentaire) ou un \ final seraient mal lus par Docker. Message vide si correct.
 function Probleme-Dossier([string]$valeur) {
     if (-not $valeur) { return "" }
-    if ($valeur -match "['`"#]") { return "ne doit contenir ni apostrophe, ni guillemet, ni # (pas de commentaire sur la ligne)" }
-    if ($valeur -notmatch '^([A-Za-z]:\\[^\\/]|\.\\[^\\/])') { return "doit être un dossier complet, par exemple E:\Sauvegardes DAplomb (pas la racine d’un disque), ou commencer par .\" }
+    if ($valeur -match '^(\\\\|//)') { return "ne peut pas être un dossier réseau (\\NAS\…) : Docker ne sait pas l’ouvrir ; choisissez un disque du PC (E:\…), ou le stockage sur le serveur de l’agence (videz la ligne STOCKAGE=)" }
+    if ($valeur -match "['`"#`$]") { return "ne doit contenir ni apostrophe, ni guillemet, ni #, ni `$ (pas de commentaire sur la ligne)" }
+    if ($valeur -notmatch '^([A-Za-z]:\\[^\\/]|\.\\[^\\/])') { return "doit être un dossier complet, par exemple E:\Dossier (pas la racine d’un disque), ou commencer par .\" }
     if ($valeur -match '[\\/]$') { return "ne doit pas se terminer par \" }
     return ""
 }
@@ -527,8 +529,17 @@ foreach ($nomDossier in @("DOSSIER_SAUVEGARDES_PC", "DOSSIER_ARCHIVES_PC")) {
     $probleme = Probleme-Dossier $cheminLu
     if ($probleme) {
         Arreter ("Ligne $nomDossier de .env (« $cheminLu ») : le dossier $probleme.`n" +
-            "Corrigez cette ligne avec le Bloc-notes (exemple : $nomDossier=E:\Sauvegardes DAplomb, ou videz-la), puis relancez ce script.")
+            "Corrigez cette ligne avec le Bloc-notes (exemple : $nomDossier=$(@{ DOSSIER_SAUVEGARDES_PC = 'E:\Sauvegardes DAplomb'; DOSSIER_ARCHIVES_PC = 'D:\Archives chantiers' }[$nomDossier]), ou videz-la), puis relancez ce script.")
     }
+}
+# Archives et sauvegardes : deux dossiers distincts, aucun dans l'autre (sinon chaque sauvegarde recopierait les
+# précédentes dans les archives, avec les clés de .env, et le disque se remplirait).
+$dossierArchivesPc = [System.IO.Path]::GetFullPath((Chemin-Pc (Lire-Variable $contenuEnv "DOSSIER_ARCHIVES_PC") "donnees\archives")).TrimEnd('\') + '\'
+$dossierSauvegardesPc = [System.IO.Path]::GetFullPath((Chemin-Pc (Lire-Variable $contenuEnv "DOSSIER_SAUVEGARDES_PC") "donnees\sauvegardes")).TrimEnd('\') + '\'
+if ($dossierArchivesPc.StartsWith($dossierSauvegardesPc, [System.StringComparison]::OrdinalIgnoreCase) -or
+    $dossierSauvegardesPc.StartsWith($dossierArchivesPc, [System.StringComparison]::OrdinalIgnoreCase)) {
+    Arreter ("DOSSIER_ARCHIVES_PC et DOSSIER_SAUVEGARDES_PC doivent être deux dossiers distincts, aucun dans l’autre`n" +
+        "(par exemple D:\Archives chantiers et E:\Sauvegardes DAplomb) : corrigez .env avec le Bloc-notes, puis relancez ce script.")
 }
 $stockage = (Lire-Variable $contenuEnv "STOCKAGE").ToLower()
 # Emplacement réellement utilisé jusqu'ici (volumes du serveur montés ou non) et dossier du serveur.

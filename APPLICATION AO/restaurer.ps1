@@ -49,9 +49,10 @@ function Arreter([string]$message) {
 
 # Lecture et écriture d'une ligne NOM=valeur du fichier .env (mêmes règles que installer.ps1).
 function Lire-Variable([string]$contenu, [string]$nom) {
-    $trouve = [regex]::Match($contenu, "(?m)^$nom=([^\r\n]*)")
-    if ($trouve.Success) {
-        $valeur = $trouve.Groups[1].Value.Trim()
+    # Ligne présente plusieurs fois : Docker Compose garde la dernière, ce script aussi.
+    $trouves = [regex]::Matches($contenu, "(?m)^$nom=([^\r\n]*)")
+    if ($trouves.Count -gt 0) {
+        $valeur = $trouves[$trouves.Count - 1].Groups[1].Value.Trim()
         if ($valeur.Length -ge 2 -and $valeur.StartsWith("'") -and $valeur.EndsWith("'")) { $valeur = $valeur.Substring(1, $valeur.Length - 2) }
         return $valeur
     }
@@ -151,8 +152,9 @@ function Est-Reseau([string]$chemin) {
 # une apostrophe, un guillemet, un # (commentaire) ou un \ final seraient mal lus par Docker. Message vide si correct.
 function Probleme-Dossier([string]$valeur) {
     if (-not $valeur) { return "" }
-    if ($valeur -match "['`"#]") { return "ne doit contenir ni apostrophe, ni guillemet, ni # (pas de commentaire sur la ligne)" }
-    if ($valeur -notmatch '^([A-Za-z]:\\[^\\/]|\.\\[^\\/])') { return "doit être un dossier complet, par exemple E:\Sauvegardes DAplomb (pas la racine d’un disque), ou commencer par .\" }
+    if ($valeur -match '^(\\\\|//)') { return "ne peut pas être un dossier réseau (\\NAS\…) : Docker ne sait pas l’ouvrir ; choisissez un disque du PC (E:\…), ou le stockage sur le serveur de l’agence (videz la ligne STOCKAGE=)" }
+    if ($valeur -match "['`"#`$]") { return "ne doit contenir ni apostrophe, ni guillemet, ni #, ni `$ (pas de commentaire sur la ligne)" }
+    if ($valeur -notmatch '^([A-Za-z]:\\[^\\/]|\.\\[^\\/])') { return "doit être un dossier complet, par exemple E:\Dossier (pas la racine d’un disque), ou commencer par .\" }
     if ($valeur -match '[\\/]$') { return "ne doit pas se terminer par \" }
     return ""
 }
@@ -193,6 +195,14 @@ function Utiliser-Dossier-Sauvegardes([string]$dossier) {
     $complet = Chemin-Complet $dossier
     $probleme = ""
     if ($complet -ne (Chemin-Complet $dossierLocal)) { $probleme = Probleme-Dossier $complet }
+    # Archives et sauvegardes : deux dossiers distincts, aucun dans l'autre.
+    $archivesPc = Lire-Variable $script:contenuEnv "DOSSIER_ARCHIVES_PC"
+    if (-not $archivesPc) { $archivesPc = "donnees\archives" }
+    $a = (Chemin-Complet $archivesPc) + '\'
+    $c = $complet + '\'
+    if (-not $probleme -and ($a.StartsWith($c, [System.StringComparison]::OrdinalIgnoreCase) -or $c.StartsWith($a, [System.StringComparison]::OrdinalIgnoreCase))) {
+        $probleme = "ne doit être ni le dossier des archives (DOSSIER_ARCHIVES_PC), ni dedans, ni le contenir"
+    }
     if ($probleme) {
         Arreter ("Dossier des sauvegardes « $complet » : il $probleme. $(Abandon)`n" +
             "Recopiez les sauvegardes dans un dossier comme E:\Sauvegardes DAplomb, puis relancez ce script.")
@@ -280,7 +290,7 @@ if (-not $serveur) {
         $probleme = Probleme-Dossier $cheminLu
         if ($probleme) {
             Arreter ("Ligne $nomDossier de .env (« $cheminLu ») : le dossier $probleme. $(Abandon)`n" +
-                "Corrigez cette ligne avec le Bloc-notes (exemple : $nomDossier=E:\Sauvegardes DAplomb, ou videz-la), puis relancez ce script.")
+                "Corrigez cette ligne avec le Bloc-notes (exemple : $nomDossier=$(@{ DOSSIER_SAUVEGARDES_PC = 'E:\Sauvegardes DAplomb'; DOSSIER_ARCHIVES_PC = 'D:\Archives chantiers' }[$nomDossier]), ou videz-la), puis relancez ce script.")
         }
     }
     # Archives sur un dossier ou un lecteur réseau, que Docker ne sait pas ouvrir : la restauration ne pourrait pas
@@ -396,7 +406,7 @@ if ($copies.Count -eq 0) {
     if ($serveur) {
         $conseil = "Vérifiez que le serveur est allumé et que le compte dédié (lignes SERVEUR_… de .env) a toujours accès au dossier (message de Docker éventuel ci-dessus)."
         if ($nouveauPc) {
-            $conseil += "`nSi son mot de passe a changé : corrigez la ligne SERVEUR_MOT_DE_PASSE= de .env (entre apostrophes droites : SERVEUR_MOT_DE_PASSE='…'), puis relancez ce script."
+            $conseil += "`nSi son mot de passe a changé : corrigez la ligne SERVEUR_MOT_DE_PASSE= de .env (entre apostrophes droites : SERVEUR_MOT_DE_PASSE='…' ; mot de passe sans virgule, guillemet ni apostrophe, qui ne se termine pas par \), puis relancez ce script."
         } else {
             $conseil += "`nSi son mot de passe a changé : relancez d’abord installer.ps1, qui le redemande, puis relancez ce script."
         }

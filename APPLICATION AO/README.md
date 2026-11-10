@@ -65,7 +65,7 @@ L'installateur :
 
 - **Fichiers importés** : dossier `donnees\fichiers`, classés par type, puis par lot (par exemple `bibliotheque\CCTP\08\...`). Avec le stockage sur le serveur de l’agence : sous-dossier `fichiers` du dossier partagé (par exemple `\\SERVEUR\DAplomb\fichiers`).
 - **Base de données** : volume Docker `application-ao_base_donnees`, toujours sur ce PC (invisible dans l’Explorateur) ; sa copie vérifiée est faite chaque nuit dans le dossier des sauvegardes.
-- **Archives de fin de chantier** : dossier `donnees\archives` (ou le dossier choisi dans `.env`, ligne `DOSSIER_ARCHIVES_PC`, par exemple `D:\Archives chantiers`, sur un disque du PC : pas de dossier ni de lecteur réseau) ; avec le serveur de l’agence : `\\SERVEUR\DAplomb\archives`.
+- **Archives de fin de chantier** : dossier `donnees\archives` (ou le dossier choisi dans `.env`, ligne `DOSSIER_ARCHIVES_PC`, par exemple `D:\Archives chantiers` sans guillemets, mêmes règles que pour les sauvegardes, sur un disque du PC : pas de dossier ni de lecteur réseau) ; avec le serveur de l’agence : `\\SERVEUR\DAplomb\archives`.
 - **Sauvegardes de chaque nuit** : dossier `donnees\sauvegardes` (ou ligne `DOSSIER_SAUVEGARDES_PC` de `.env`) ; avec le serveur de l’agence : `\\SERVEUR\DAplomb\sauvegardes`.
 - **Journal des connexions à la GED depuis Internet** : dossier `donnees\journaux`.
 
@@ -133,7 +133,7 @@ En cas d’échec, les administrateurs (comptes administrateur actifs avec une a
 
 - Le PC doit être allumé et la session Windows ouverte (Docker Desktop) à l’heure prévue. S’il était éteint, la sauvegarde est faite à son démarrage suivant.
 - Sauvegarder tout de suite : depuis l’application (administrateur), ou `docker compose exec worker python manage.py sauvegarder`. `installer.ps1` en fait une à la fin de chaque passage et affiche le résultat.
-- Fichiers sur le PC : placez les sauvegardes sur un autre disque, toujours branché (ligne `DOSSIER_SAUVEGARDES_PC` de `.env`, par exemple `DOSSIER_SAUVEGARDES_PC='E:\Sauvegardes DAplomb'`, chemin sans apostrophe), puis relancez `installer.ps1`. Sinon, une panne du disque emporterait l’application **et** ses sauvegardes. Un dossier réseau (`\\NAS\…`) ou un lecteur réseau (`S:\…`) n’est pas accepté (Docker ne sait pas l’ouvrir) : choisissez plutôt le stockage sur le serveur de l’agence.
+- Fichiers sur le PC : placez les sauvegardes sur un autre disque, toujours branché (ligne `DOSSIER_SAUVEGARDES_PC` de `.env`, par exemple `DOSSIER_SAUVEGARDES_PC=E:\Sauvegardes DAplomb`, sans guillemets : chemin complet ou commençant par `.\`, ni apostrophe, ni guillemet, ni `#`, ni `$`, pas de `\` final ni racine de disque seule, et distinct du dossier des archives ; sinon `installer.ps1` s’arrête et indique la ligne à corriger), puis relancez `installer.ps1`. Sinon, une panne du disque emporterait l’application **et** ses sauvegardes. Un dossier réseau (`\\NAS\…`) ou un lecteur réseau (`S:\…`) n’est pas accepté (Docker ne sait pas l’ouvrir) : choisissez plutôt le stockage sur le serveur de l’agence.
 
 ### Restaurer une sauvegarde
 
