@@ -97,8 +97,13 @@ services:
     <<: *backend
     command: ["celery", "-A", "config", "worker", "--beat", "--schedule=/donnees/modeles-ia/planification-celery", "--loglevel=info", "--concurrency=2"]
     # Plafond de mémoire : un document hors normes (OCR d'une page géante) ne peut pas épuiser la
-    # mémoire de Docker et faire tomber la base de données ou l'assistant.
+    # mémoire de Docker et faire tomber la base de données ou l'assistant. Chaque document est en outre lu
+    # dans un processus séparé plafonné à LECTURE_MEMOIRE_MAX_MO (2 Go par défaut) : deux lectures
+    # simultanées (--concurrency=2) restent sous ces 6 Go. Baisser ce réglage si la concurrence augmente.
     mem_limit: 6g
+    # Petit processus init (PID 1) : LibreOffice ou Tesseract arrêtés avec une lecture interrompue sont
+    # récoltés au lieu de rester à l'état de zombie jusqu'au redémarrage du conteneur.
+    init: true
     volumes:
       - *montage-fichiers
       - *montage-archives

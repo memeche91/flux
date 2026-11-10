@@ -343,9 +343,49 @@ class LectureAuditTests(SimpleTestCase):
         lignes = lire_document(chemin, self.dossier).tableaux[0].lignes
         self.assertLess(__import__("time").monotonic() - debut, 5)
         self.assertEqual(len(lignes), 2000)
-        self.assertEqual(lignes[:2], [["Lot 08 – Menuiseries", "Article 0", "u"], ["", "Article 1", "u"]])
-        self.assertEqual(lignes[-1], ["", "Total"])
-        self.assertEqual(sum(valeur == "Lot 08 – Menuiseries" for ligne in lignes for valeur in ligne), 1)
+        # La cellule fusionnée garde son texte sur chaque rangée (DPGF : désignation commune à plusieurs lignes de
+        # prix), sans recopie : le même objet str est repris.
+        self.assertEqual(lignes[:2], [["Lot 08 – Menuiseries", "Article 0", "u"], ["Lot 08 – Menuiseries", "Article 1", "u"]])
+        self.assertEqual(lignes[-1], ["Lot 08 – Menuiseries", "Total"])
+        self.assertEqual(len({id(ligne[0]) for ligne in lignes}), 1)
+
+    def test_dpgf_word_a_designation_fusionnee_garde_ses_lignes_de_prix(self):
+        # DPGF Word : désignation fusionnée verticalement sur deux localisations. Chaque rangée garde la désignation,
+        # donc chaque ligne de prix est lue (une désignation vide faisait sauter la ligne et son montant).
+        from docx import Document
+
+        from articles.prix import extraire_lignes_prix
+
+        w = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"'
+
+        def cellule(texte: str, proprietes: str = "") -> str:
+            return f"<w:tc><w:tcPr>{proprietes}</w:tcPr><w:p><w:r><w:t>{texte}</w:t></w:r></w:p></w:tc>"
+
+        def rangee(*cellules: str) -> str:
+            return "<w:tr>" + "".join(cellules) + "</w:tr>"
+
+        rangees = [
+            rangee(*(cellule(t) for t in ("N°", "Désignation", "U", "Qté", "PU", "Montant"))),
+            rangee(cellule("8.1", '<w:vMerge w:val="restart"/>'), cellule("Fenêtre aluminium", '<w:vMerge w:val="restart"/>'),
+                   cellule("u"), cellule("2"), cellule("500"), cellule("1000")),
+            rangee(cellule("", "<w:vMerge/>"), cellule("", "<w:vMerge/>"), cellule("u"), cellule("1"), cellule("700"), cellule("700")),
+            rangee(cellule("8.2"), cellule("Porte d'entrée"), cellule("u"), cellule("1"), cellule("1000"), cellule("1000")),
+        ]
+        corps = (
+            f'<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document {w}><w:body><w:tbl>'
+            "<w:tblGrid>" + "<w:gridCol/>" * 6 + "</w:tblGrid>" + "".join(rangees) + "</w:tbl></w:body></w:document>"
+        )
+        gabarit = io.BytesIO()
+        Document().save(gabarit)
+        chemin = self.dossier / "dpgf.docx"
+        with zipfile.ZipFile(gabarit) as source, zipfile.ZipFile(chemin, "w", zipfile.ZIP_DEFLATED) as cible:
+            for info in source.infolist():
+                cible.writestr(info.filename, corps.encode() if info.filename == "word/document.xml" else source.read(info))
+        tableaux = lire_document(chemin, self.dossier).tableaux
+        self.assertEqual(tableaux[0].lignes[2][:2], ["8.1", "Fenêtre aluminium"])
+        lignes = extraire_lignes_prix(tableaux)
+        self.assertEqual(len(lignes), 3)
+        self.assertEqual([l.designation for l in lignes].count("Fenêtre aluminium"), 2)
 
     def test_docx_styles_resolus_une_fois_par_document(self):
         # python-docx parcourt tous les styles à chaque Paragraph.style : 85 s pour 2 000 styles et 3 000

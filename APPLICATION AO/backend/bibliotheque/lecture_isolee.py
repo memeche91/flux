@@ -18,6 +18,7 @@ import logging
 import os
 import pickle
 import resource
+import select
 import signal
 import subprocess
 import sys
@@ -50,6 +51,8 @@ TYPES_RESULTAT = {
     ("builtins", "bytearray"),
 }
 CODE_MEMOIRE = 3  # code de sortie de l'enfant après une MemoryError (rien n'est écrit, la mémoire manque)
+JOURNAL_GARDE = 4000  # fin de la sortie d'erreur de l'enfant gardée pour le journal (le reste est lu et oublié)
+FICHIER_ECRIT_MAX = 1024 * 1024 * 1024  # taille d'un fichier écrit par l'enfant ou ses outils (RLIMIT_FSIZE)
 
 
 class LimiteDepassee(Exception):
@@ -79,7 +82,7 @@ def executer_isole(cible: str, *args, dossier: Path | None = None, memoire_mo: i
     cpu = delai if cpu is None else cpu
     with tempfile.TemporaryDirectory(prefix="lecture-isolee-", dir=dossier) as echange:
         echange = Path(echange)
-        requete, resultat, journal = echange / "requete.pickle", echange / "resultat.pickle", echange / "journal.txt"
+        requete, resultat = echange / "requete.pickle", echange / "resultat.pickle"
         with open(requete, "wb") as fichier:
             pickle.dump((cible, args, kwargs), fichier, protocol=pickle.HIGHEST_PROTOCOL)
         commande = [
@@ -87,16 +90,18 @@ def executer_isole(cible: str, *args, dossier: Path | None = None, memoire_mo: i
             str(int(memoire_mo * 1024 * 1024)), str(int(cpu)), str(requete), str(resultat),
         ]
         debut = time.monotonic()
-        with open(journal, "wb") as sortie:
-            # Groupe de processus propre : LibreOffice, Tesseract… sont arrêtés avec l'enfant.
-            enfant = subprocess.Popen(
-                commande, cwd=settings.BASE_DIR, stdin=subprocess.DEVNULL, stdout=sortie, stderr=sortie,
-                start_new_session=True, env={**os.environ, "DJANGO_SETTINGS_MODULE": os.environ.get("DJANGO_SETTINGS_MODULE", "config.settings")},
-            )
-            try:
-                termine = _attendre(enfant, delai)
-            finally:
-                _arreter(enfant)
+        journal = bytearray()
+        # Groupe de processus propre : LibreOffice, Tesseract… sont arrêtés avec l'enfant. Sortie d'erreur lue
+        # au fil de l'eau dans un tube, dont seule la fin est gardée : un fichier piégé qui ferait écrire des
+        # avertissements sans fin ne remplit pas le disque.
+        enfant = subprocess.Popen(
+            commande, cwd=settings.BASE_DIR, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            start_new_session=True, env={**os.environ, "DJANGO_SETTINGS_MODULE": os.environ.get("DJANGO_SETTINGS_MODULE", "config.settings")},
+        )
+        try:
+            termine = _attendre(enfant, delai, journal)
+        finally:
+            _arreter(enfant, journal)
         duree = time.monotonic() - debut
         code = enfant.returncode
         if not termine:
@@ -111,7 +116,8 @@ def executer_isole(cible: str, *args, dossier: Path | None = None, memoire_mo: i
                 raison = f"arrêtée (code {code})"
             # Code positif inattendu : peut-être un défaut de l'installation plutôt que du fichier.
             niveau = logging.ERROR if code > 0 and code != CODE_MEMOIRE else logging.WARNING
-            logger.log(niveau, "Lecture isolée %s %s après %.1f s (plafond %s Mo).%s", cible, raison, duree, memoire_mo, _fin(journal))
+            fin = journal.decode("utf-8", errors="replace").strip()
+            logger.log(niveau, "Lecture isolée %s %s après %.1f s (plafond %s Mo).%s", cible, raison, duree, memoire_mo, f"\n{fin}" if fin else "")
             raise LimiteDepassee(raison)
         with open(resultat, "rb") as fichier:
             reponse = _Depickleur(fichier).load()
@@ -126,30 +132,53 @@ def executer_isole(cible: str, *args, dossier: Path | None = None, memoire_mo: i
     raise ErreurEnfant(nom, message)
 
 
-def _attendre(enfant: subprocess.Popen, delai: float) -> bool:
+def _attendre(enfant: subprocess.Popen, delai: float, journal: bytearray) -> bool:
     """L'enfant s'est-il terminé dans le délai ? Il n'est pas encore récolté (WNOWAIT) : son numéro de groupe
     reste réservé, _arreter peut tuer ce qu'il a laissé derrière lui sans risquer de viser un autre groupe."""
     limite = time.monotonic() + delai
     pause = 0.005
+    ouvert = True
     while True:
         try:
             if os.waitid(os.P_PID, enfant.pid, os.WEXITED | os.WNOHANG | os.WNOWAIT) is not None:
                 return True
-        except ChildProcessError:  # déjà récolté ailleurs
-            return True
+        except ChildProcessError:
+            # Récolté sans nous (SIGCHLD ignoré par le processus) : on suit sa présence dans /proc.
+            if not Path(f"/proc/{enfant.pid}").exists():
+                return True
         if time.monotonic() >= limite:
             return False
-        time.sleep(pause)
+        if ouvert:
+            ouvert = _lire_journal(enfant, journal, pause)
+        else:
+            time.sleep(pause)
         pause = min(pause * 2, 0.1)
 
 
-def _arreter(enfant: subprocess.Popen) -> None:
-    """Tue tout le groupe de l'enfant (lui-même s'il tourne encore, LibreOffice, Tesseract…), puis le récolte."""
+def _lire_journal(enfant: subprocess.Popen, journal: bytearray, attente: float) -> bool:
+    """Lit ce que l'enfant a écrit (au plus attente secondes d'attente) ; False quand le tube est fermé."""
+    if not select.select([enfant.stdout], [], [], attente)[0]:
+        return True
+    morceau = os.read(enfant.stdout.fileno(), 65536)
+    journal += morceau
+    del journal[:-JOURNAL_GARDE]
+    return bool(morceau)
+
+
+def _arreter(enfant: subprocess.Popen, journal: bytearray) -> None:
+    """Tue tout le groupe de l'enfant (lui-même s'il tourne encore, LibreOffice, Tesseract…), le récolte,
+    puis lit la fin de sa sortie d'erreur."""
     try:
         os.killpg(enfant.pid, signal.SIGKILL)
     except (ProcessLookupError, PermissionError):
         pass
     enfant.wait()
+    try:
+        for _ in range(100):  # le tube contient au plus 64 Ko : quelques lectures suffisent
+            if not _lire_journal(enfant, journal, 0):
+                break
+    finally:
+        enfant.stdout.close()
 
 
 def _nom_signal(numero: int) -> str:
@@ -157,14 +186,6 @@ def _nom_signal(numero: int) -> str:
         return signal.Signals(numero).name
     except ValueError:
         return str(numero)
-
-
-def _fin(journal: Path) -> str:
-    try:
-        texte = journal.read_bytes()[-2000:].decode("utf-8", errors="replace").strip()
-    except OSError:
-        return ""
-    return f"\n{texte}" if texte else ""
 
 
 class _Depickleur(pickle.Unpickler):
@@ -177,10 +198,15 @@ class _Depickleur(pickle.Unpickler):
 # --- Enfant ---------------------------------------------------------------------------------------------
 
 
-def _reponse_exception(erreur: BaseException) -> tuple:
+def _reponse_exception(erreur: BaseException, memoire: int) -> tuple | None:
+    """Exception à transmettre au parent ; None si c'est le plafond de mémoire qui a été atteint."""
+    if _causee_par_la_memoire(erreur):
+        return None
     for classe in type(erreur).__mro__:
         if (classe.__module__, classe.__qualname__) in EXCEPTIONS_TRANSMISES:
             return ("metier", classe.__module__, classe.__qualname__, str(erreur))
+    if _pres_du_plafond(memoire):
+        return None
     import traceback
 
     trace = "".join(traceback.format_exception(erreur))[-5000:]
@@ -195,6 +221,23 @@ def _causee_par_la_memoire(erreur: BaseException) -> bool:
         vues.add(id(erreur))
         erreur = erreur.__cause__ or erreur.__context__
     return False
+
+
+def _pres_du_plafond(memoire: int) -> bool:
+    """La mémoire virtuelle de l'enfant a-t-elle atteint la moitié du plafond ?
+
+    Une bibliothèque C à court de mémoire signale souvent une erreur quelconque plutôt qu'une MemoryError
+    (libxml2, par lxml : « XMLSyntaxError: unknown error » pour 90 Mo de liens d'une feuille). Un fichier
+    simplement abîmé échoue bien plus bas (environ 330 Mo, bibliothèques de lecture chargées).
+    """
+    if memoire <= 0:
+        return False
+    try:
+        with open("/proc/self/status") as statut:
+            pic = next(int(ligne.split()[1]) * 1024 for ligne in statut if ligne.startswith("VmPeak:"))
+    except (OSError, StopIteration, ValueError):
+        return False
+    return pic >= memoire // 2
 
 
 def _plafonner(ressource: int, souple: int, dur: int) -> None:
@@ -212,6 +255,7 @@ def _enfant(memoire: int, cpu: int, requete: Path, resultat: Path) -> None:
     if cpu > 0:
         _plafonner(resource.RLIMIT_CPU, cpu, cpu + 5)  # SIGXCPU, puis SIGKILL 5 s plus tard
     _plafonner(resource.RLIMIT_CORE, 0, 0)  # pas de fichier « core » après un plantage
+    _plafonner(resource.RLIMIT_FSIZE, FICHIER_ECRIT_MAX, FICHIER_ECRIT_MAX)  # conversion, image d'une page, résultat
     reponse = None
     try:
         import django
@@ -225,8 +269,7 @@ def _enfant(memoire: int, cpu: int, requete: Path, resultat: Path) -> None:
         pass  # la mémoire manque : rien n'est écrit (et la pile, qui retient la mémoire prise, est libérée ici)
     except BaseException as erreur:  # noqa: BLE001 - tout est transmis au parent
         try:
-            # Exception née d'une MemoryError (import, lxml…) : c'est le plafond qui a été atteint.
-            reponse = None if _causee_par_la_memoire(erreur) else _reponse_exception(erreur)
+            reponse = _reponse_exception(erreur, memoire)
         except MemoryError:
             reponse = None
     if reponse is None:

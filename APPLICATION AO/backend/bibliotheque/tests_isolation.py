@@ -83,6 +83,24 @@ def lever_une_exception_inattendue(*_args, **_options):
     raise KeyError("partie absente")
 
 
+def remplir_puis_echouer(mo: int):
+    """Comme libxml2 à court de mémoire : beaucoup de mémoire prise, puis une erreur quelconque."""
+    tampon = bytearray(mo * 1024 * 1024)
+    raise ValueError(f"unknown error ({len(tampon)} octets)")
+
+
+def bavarder_puis_mourir(mo: int):
+    """Écrit mo Mo d'avertissements sur la sortie d'erreur, puis meurt."""
+    import sys
+
+    ligne = "Avertissement : objet PDF incohérent\n" * 1000
+    for _ in range(mo * 1024 * 1024 // len(ligne)):
+        sys.stderr.write(ligne)
+    sys.stderr.write("dernier message\n")
+    sys.stderr.flush()
+    os.kill(os.getpid(), signal.SIGKILL)
+
+
 def rendre_un_objet_inattendu():
     return Path("/")
 
@@ -225,6 +243,17 @@ class LectureIsoleeTests(SimpleTestCase):
         self.assertEqual([t.titre for t in classeur], ["DPGF", "Annexe"])
         self.assertEqual(list(self.dossier.glob("lecture-isolee-*")), [])  # fichiers d'échange supprimés
 
+    def test_lecture_meme_si_sigchld_est_ignore(self):
+        # Processus qui ignore SIGCHLD : le noyau récolte l'enfant de lui-même, waitid échoue (ECHILD).
+        chemin = self.fichier("cctp.docx", _docx_ordinaire())
+        ancien = signal.signal(signal.SIGCHLD, signal.SIG_IGN)
+        try:
+            self.assertEqual(lire_document(chemin, self.dossier), lire_document_direct(chemin, self.dossier))
+            with self.assertRaises(LimiteDepassee):
+                executer_isole("bibliotheque.tests_isolation:calculer_sans_fin", delai=2, cpu=60)
+        finally:
+            signal.signal(signal.SIGCHLD, ancien)
+
     def test_exceptions_metier_retransmises_telles_quelles(self):
         for chemin, classe, message in (
             (self.fichier("notes.txt", b"texte"), FormatNonAnalyse, "Format .txt non pris en charge."),
@@ -295,6 +324,17 @@ class LectureIsoleeTests(SimpleTestCase):
         self.assertIs(type(contexte.exception), ErreurLecture)
         self.assertEqual(str(contexte.exception), "Lecture impossible (KeyError) : le fichier est peut-être protégé ou endommagé.")
         self.assertIsInstance(contexte.exception.__cause__, ErreurEnfant)
+        # Erreur quelconque après avoir pris plus de la moitié du plafond : c'est le plafond qui a été atteint.
+        with self.assertRaisesMessage(LimiteDepassee, "mémoire"):
+            executer_isole("bibliotheque.tests_isolation:remplir_puis_echouer", 400, memoire_mo=768)
+
+    def test_sortie_d_erreur_lue_au_fil_de_l_eau_sans_remplir_le_disque(self):
+        # 200 Mo d'avertissements : lus au fil de l'eau, seule la fin est gardée pour le journal.
+        with self.assertLogs("bibliotheque.lecture_isolee", "WARNING") as journaux, self.assertRaises(LimiteDepassee):
+            executer_isole("bibliotheque.tests_isolation:bavarder_puis_mourir", 200, dossier=self.dossier)
+        self.assertIn("dernier message", journaux.output[0])
+        self.assertLess(len(journaux.output[0]), 6000)
+        self.assertEqual(list(self.dossier.iterdir()), [])  # rien d'écrit sur le disque
 
     def test_resultat_relu_sans_objet_inattendu(self):
         with self.assertRaises(pickle.UnpicklingError):

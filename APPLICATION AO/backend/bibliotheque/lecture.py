@@ -12,6 +12,7 @@ from __future__ import annotations
 import csv
 import posixpath
 import re
+import os
 import shutil
 import subprocess
 import zipfile
@@ -185,9 +186,14 @@ def lire_document_direct(chemin: Path, dossier_travail: Path, *, tableaux_pdf: b
 
 
 def contenu_demesure(contenu: ContenuDocument) -> bool:
-    """Le contenu lu dépasse-t-il CONTENU_LU_MAX (caractères, plus un par cellule), chaque citation comptée ?"""
+    """Le contenu lu dépasse-t-il CONTENU_LU_MAX (caractères, plus un par cellule), chaque citation comptée ?
+
+    Les lignes d'un tableau Word, à la fois dans blocs et dans tableaux, ne sont comptées qu'une fois.
+    """
     total = 0
-    lignes = [ligne for bloc in contenu.blocs for ligne in bloc.lignes] + [ligne for t in contenu.tableaux for ligne in t.lignes]
+    lignes = list({id(ligne): ligne for ligne in (
+        [ligne for bloc in contenu.blocs for ligne in bloc.lignes] + [ligne for t in contenu.tableaux for ligne in t.lignes]
+    )}.values())
     for bloc in contenu.blocs:
         total += len(bloc.texte) + len(bloc.numero) + 1
     for tableau in contenu.tableaux:
@@ -480,7 +486,12 @@ def convertir(source: Path, format_cible: str, dossier: Path) -> Path:
         str(copie),
     ]
     try:
-        subprocess.run(commande, check=True, capture_output=True, timeout=settings.CONVERSION_DELAI_MAX)
+        # Fichiers temporaires de LibreOffice (copie du document, socket) dans le dossier de travail, supprimé quelle
+        # que soit l'issue : LibreOffice tué par un plafond ou un délai ne les efface pas lui-même.
+        temporaire = dossier / "tmp"
+        temporaire.mkdir(exist_ok=True)
+        subprocess.run(commande, check=True, capture_output=True, timeout=settings.CONVERSION_DELAI_MAX,
+                       env={**os.environ, "TMPDIR": str(temporaire)})
     except subprocess.TimeoutExpired as erreur:
         raise ErreurLecture("La conversion du fichier a pris trop de temps.") from erreur
     except subprocess.CalledProcessError as erreur:
@@ -615,23 +626,33 @@ def _est_gras(paragraphe, style) -> bool:
 
 
 def _lignes_tableau_docx(tableau) -> list[list[str]]:
-    """Lignes d'un tableau Word : une valeur par cellule (<w:tc>), le texte d'une cellule fusionnée une seule fois.
+    """Lignes d'un tableau Word : une valeur par cellule (<w:tc>), en temps linéaire.
 
     Sans _Row.cells de python-docx, qui renvoie une cellule fusionnée horizontalement autant de fois que son
     w:gridSpan, valeur sans borne (10**12 épuisait la mémoire), et qui remonte récursivement de rangée en rangée
-    jusqu'au haut d'une fusion verticale, en recopiant son texte à chaque rangée (temps quadratique,
-    RecursionError au-delà d'environ 1 000 rangées fusionnées). Comme les cellules fusionnées d'un classeur
-    lu par openpyxl, une cellule qui prolonge une fusion verticale (vMerge « continue ») est vide : le texte
-    reste dans la cellule du haut.
+    jusqu'au haut d'une fusion verticale (temps quadratique, RecursionError au-delà d'environ 1 000 rangées).
+    Une cellule qui prolonge une fusion verticale (vMerge « continue ») reprend le texte de la cellule du haut,
+    comme avant : dans une DPGF, le n° ou la désignation fusionnés sur plusieurs rangées restent sur chaque
+    ligne de prix. Le texte du haut est retenu par position dans la grille (grid_before plus la somme des
+    gridSpan, comme python-docx) et le même objet str est repris, sans recopie.
     """
     from docx.table import _Cell
 
     lignes = []
+    hauts_precedents: dict[int, str] = {}
     for rangee in tableau._tbl.tr_lst:
-        cellules = [
-            "" if tc.vMerge == "continue" else " ".join(_Cell(tc, tableau).text.split())
-            for tc in rangee.tc_lst
-        ]
+        hauts: dict[int, str] = {}
+        cellules = []
+        decalage = rangee.grid_before
+        for tc in rangee.tc_lst:
+            if tc.vMerge == "continue":
+                texte = hauts_precedents.get(decalage, "")
+            else:
+                texte = " ".join(_Cell(tc, tableau).text.split())
+            hauts[decalage] = texte
+            cellules.append(texte)
+            decalage += tc.grid_span
+        hauts_precedents = hauts
         if any(cellules):
             lignes.append(cellules)
     return lignes
