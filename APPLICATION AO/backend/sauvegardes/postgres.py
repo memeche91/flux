@@ -1,14 +1,16 @@
 """Outils PostgreSQL 16 de la sauvegarde : pg_dump, restauration d'essai, restauration.
 
-Les outils (pg_dump, pg_restore, createdb, dropdb) sont installés dans l'image du backend depuis le
-dépôt officiel PostgreSQL (même version que la base). Le mot de passe passe par PGPASSWORD, jamais
-par la ligne de commande : il n'apparaît ni dans la liste des processus ni dans les messages.
+Les outils (pg_dump, pg_restore, createdb, dropdb, psql : paquet postgresql-client-16) sont installés dans
+l'image du backend depuis le dépôt officiel PostgreSQL (même version que la base). Le mot de passe passe
+par PGPASSWORD, jamais par la ligne de commande : il n'apparaît ni dans la liste des processus ni dans
+les messages.
 """
 from __future__ import annotations
 
 import contextlib
 import os
 import subprocess
+import tempfile
 from pathlib import Path
 
 from django.conf import settings
@@ -147,6 +149,23 @@ def verifier(fichier: Path, p: dict, attendus: dict[str, int]) -> tuple[int, int
 
 
 def restaurer(fichier: Path, p: dict) -> None:
-    """Remplace le contenu de la base de l'application par la copie (tout ou rien : une seule transaction)."""
-    executer(["pg_restore", "--clean", "--if-exists", "--no-owner", "--no-privileges", "--single-transaction",
-              f"--dbname={p['dbname']}", str(fichier)], p)
+    """Remplace le contenu de la base de l'application par la copie (tout ou rien : une seule transaction).
+
+    Le schéma public est vidé entièrement avant de rejouer la copie : une table ajoutée par une mise à jour
+    plus récente que la copie disparaît (migrate la recrée ensuite). pg_restore --clean ne supprime que les
+    objets présents dans la copie, et échoue dès qu'une table plus récente fait référence à l'une d'elles.
+    1. pg_restore convertit la copie en script SQL (fichier temporaire) : une copie tronquée ou abîmée
+       échoue ici, avant que la base soit touchée ;
+    2. psql rejoue « DROP SCHEMA public CASCADE ; CREATE SCHEMA public ; script » en une seule transaction,
+       annulée à la première erreur. Pas de tube entre les deux : psql validerait une copie tronquée.
+    """
+    descripteur, nom = tempfile.mkstemp(prefix="restauration-", suffix=".sql")  # droits 0600 : contient toute la base
+    os.close(descripteur)
+    script = Path(nom)
+    try:
+        executer(["pg_restore", "--no-owner", "--no-privileges", f"--file={script}", str(fichier)], p)
+        executer(["psql", "-X", "-q", "-v", "ON_ERROR_STOP=1", "--single-transaction", f"--dbname={p['dbname']}",
+                  "-c", "SET client_min_messages = warning", "-c", "DROP SCHEMA public CASCADE", "-c", "CREATE SCHEMA public",
+                  "-f", str(script)], p)
+    finally:
+        script.unlink(missing_ok=True)

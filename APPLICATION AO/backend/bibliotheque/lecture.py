@@ -10,6 +10,7 @@ Le résultat (ContenuDocument) est ensuite découpé en articles ou en lignes de
 from __future__ import annotations
 
 import csv
+import posixpath
 import re
 import shutil
 import subprocess
@@ -26,12 +27,29 @@ EXTENSIONS_ACCEPTEES = {".pdf", ".docx", ".doc", ".odt", ".rtf", ".xlsx", ".xlsm
 CONVERSIONS = {".doc": "docx", ".odt": "docx", ".rtf": "docx", ".xls": "xlsx", ".ods": "xlsx"}
 
 # Garde-fous contre les fichiers fabriqués pour épuiser la mémoire du worker (bombes zip, page géante).
-# Un .docx est chargé en entier en mémoire (python-docx) ; un .xlsx est lu au fil de l'eau, sauf sa
-# table des chaînes partagées, son classeur et ses styles (openpyxl, même en lecture seule).
+# Un .docx est chargé en entier en mémoire (python-docx). D'un .xlsx, openpyxl ne lit au fil de l'eau
+# que les feuilles de calcul : il lit tout le reste en entier, même en lecture seule.
 XML_LU_EN_ENTIER_MAX = 100 * 1024 * 1024
-DOCX_DECOMPRESSE_MAX = 500 * 1024 * 1024
+DOCX_DECOMPRESSE_MAX = 500 * 1024 * 1024  # toute l'archive décompressée (.docx, .xlsx et .xlsm)
 TYPE_CHAINES_PARTAGEES = "application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"
-LIGNES_PAR_FEUILLE_MAX = 200_000
+TYPE_FEUILLE = "application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"
+TYPES_CLASSEUR = {
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.template.main+xml",
+    "application/vnd.ms-excel.sheet.macroEnabled.main+xml",
+    "application/vnd.ms-excel.template.macroEnabled.main+xml",
+}
+LIEN_FEUILLE = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet"
+# Parties qu'openpyxl lit en entier sous un nom fixe (les autres sont repérées par leur type ou par les liens).
+PARTIES_LUES_PAR_NOM = {
+    "[Content_Types].xml", "xl/workbook.xml", "xl/styles.xml", "xl/theme/theme1.xml", "docProps/core.xml", "docProps/custom.xml",
+}
+XML_COURT_MAX = 5 * 1024 * 1024  # [Content_Types].xml et liens (.rels) lus pour repérer les feuilles
+# Feuilles lues au fil de l'eau : openpyxl garde pourtant en mémoire chaque élément XML parcouru (environ
+# 90 octets pour « <x/> », 4 octets du fichier). Au pire, 100 Mo de feuilles prennent 2,5 Go.
+FEUILLES_MAX = 100 * 1024 * 1024
+LIGNES_PAR_CLASSEUR_MAX = 200_000  # lignes lues, toutes feuilles confondues
+COLONNES_MAX = 256  # une dimension déclarée « A1:XFD… » ferait compléter chaque ligne à 16 384 cellules
 PIXELS_OCR_MAX = 40_000_000  # une page A4 ou A3 garde ses 300 dpi ; une page A0 passe à environ 160 dpi
 MESSAGE_DECOMPRESSION = "Fichier anormalement volumineux une fois décompressé : il n’a pas été lu."
 
@@ -121,40 +139,101 @@ def lire_document(chemin: Path, dossier_travail: Path, *, tableaux_pdf: bool = F
 
 
 def decompression_excessive(source, extension: str) -> bool:
-    """Bombe zip : les parties lues en entier dépassent-elles la limite une fois décompressées ?
+    """Bombe zip : l'archive, ou ses parties lues en entier, dépassent-elles la limite une fois décompressées ?
 
-    Seule la taille annoncée par l'archive est lue (rien n'est décompressé) : une taille mensongère
-    est sans danger, zipfile s'arrête à cette taille puis signale une archive endommagée.
+    Seule la taille annoncée par l'archive est lue (rien n'est décompressé, sauf [Content_Types].xml et les
+    liens d'un classeur, de petite taille) : une taille mensongère est sans danger, zipfile s'arrête à cette
+    taille puis signale une archive endommagée.
     source : chemin ou flux binaire d'un .docx, .xlsx ou .xlsm.
     """
     with zipfile.ZipFile(source) as archive:
         entrees = archive.infolist()
+        if sum(i.file_size for i in entrees) > DOCX_DECOMPRESSE_MAX:
+            return True
         if extension.lower() == ".docx":
-            xml = sum(i.file_size for i in entrees if i.filename.lower().endswith((".xml", ".rels")))
-            return xml > XML_LU_EN_ENTIER_MAX or sum(i.file_size for i in entrees) > DOCX_DECOMPRESSE_MAX
-        lues = {"xl/sharedstrings.xml", "xl/workbook.xml", "xl/styles.xml"} | _chaines_partagees(archive)
-        return sum(i.file_size for i in entrees if i.filename.lower() in lues) > XML_LU_EN_ENTIER_MAX
+            return sum(i.file_size for i in entrees if i.filename.lower().endswith((".xml", ".rels"))) > XML_LU_EN_ENTIER_MAX
+        lues, feuilles = _parties_xlsx(archive)
+        en_entier = en_flux = 0
+        for info in entrees:
+            nom = info.filename.lower()
+            if nom in feuilles:
+                en_flux += info.file_size
+            elif nom in lues or nom.endswith((".xml", ".rels")):
+                en_entier += info.file_size
+        return en_entier > XML_LU_EN_ENTIER_MAX or en_flux > FEUILLES_MAX
 
 
-def _chaines_partagees(archive: zipfile.ZipFile) -> set[str]:
-    """Table des chaînes partagées déclarée dans [Content_Types].xml (openpyxl la cherche ainsi)."""
+PARTIES_SUIVIES_MAX = 1000  # liens suivis de proche en proche dans un classeur ; au-delà, tout est compté
+
+
+def _parties_xlsx(archive: zipfile.ZipFile) -> tuple[set[str], set[str]]:
+    """Parties d'un classeur lues en entier par openpyxl, quel que soit leur nom, et feuilles lues au fil de l'eau.
+
+    Lues en entier : le classeur et la table des chaînes (repérés par leur type dans [Content_Types].xml),
+    les parties à nom fixe, et les parties désignées par les liens du classeur, de proche en proche
+    (feuilles de graphique, liens externes, dessins…), dont le nom est libre. Une feuille déclarée dans
+    [Content_Types].xml n'est pas comptée, sauf si elle est aussi lue en entier. Dans le doute
+    ([Content_Types].xml ou liens démesurés, illisibles), tout est compté. Noms en minuscules.
+    """
+    tout = {i.filename.lower() for i in archive.infolist()}
+    if sum(i.file_size for i in archive.infolist() if i.filename.lower().endswith(".rels")) > XML_LU_EN_ENTIER_MAX:
+        return tout, set()  # liens comptés de toute façon : inutile de les lire
+    try:
+        types = _xml_court(archive, "[Content_Types].xml")
+        declarees = [
+            # Nom calculé comme openpyxl (PartName[1:]) : « //xl/x » désigne l'entrée « /xl/x ».
+            ((element.get("PartName") or "")[1:], element.get("ContentType"))
+            for element in (types.iter() if types is not None else ())
+            if element.tag.endswith("Override")
+        ]
+        a_suivre = [partie for partie, type_ in declarees if type_ in TYPES_CLASSEUR] + ["xl/workbook.xml"]
+        lues = PARTIES_LUES_PAR_NOM | set(a_suivre) | {p for p, type_ in declarees if type_ == TYPE_CHAINES_PARTAGEES}
+        feuilles_liees: set[str] = set()
+        liens_lus: set[str] = set()
+        while a_suivre:
+            if len(liens_lus) > PARTIES_SUIVIES_MAX:
+                raise ValueError("liens démesurés")
+            partie = a_suivre.pop()
+            dossier, nom = posixpath.split(partie)
+            chemin_liens = posixpath.join(dossier, "_rels", f"{nom}.rels")
+            # Plusieurs graphies d'une même partie (« xl//x ») mènent au même fichier de liens : lu une fois.
+            if chemin_liens in liens_lus:
+                continue
+            liens_lus.add(chemin_liens)
+            liens = _xml_court(archive, chemin_liens)
+            for lien in liens.iter() if liens is not None else ():
+                cible = lien.get("Target") or ""
+                if not lien.tag.endswith("Relationship") or not cible or lien.get("TargetMode") == "External":
+                    continue
+                # Chemin calculé comme openpyxl : relatif au dossier de la partie qui porte le lien.
+                cible = cible[1:] if cible.startswith("/") else posixpath.normpath(posixpath.join(dossier, cible))
+                if lien.get("Type") == LIEN_FEUILLE:
+                    # Feuille de calcul lue au fil de l'eau, quel que soit le type déclaré : comptée comme feuille.
+                    feuilles_liees.add(cible)
+                    continue
+                lues.add(cible)
+                a_suivre.append(cible)
+    except ValueError:
+        return tout, set()
+    lues = {partie.lower() for partie in lues}
+    feuilles = {partie.lower() for partie, type_ in declarees if type_ == TYPE_FEUILLE} | {partie.lower() for partie in feuilles_liees}
+    return lues, feuilles - lues
+
+
+def _xml_court(archive: zipfile.ZipFile, nom: str):
+    """Arbre XML d'une petite partie, None si elle est absente ; ValueError si elle est démesurée ou illisible."""
     import xml.etree.ElementTree as ET
 
     try:
-        info = archive.getinfo("[Content_Types].xml")
+        info = archive.getinfo(nom)
     except KeyError:
-        return set()
-    if info.file_size > 5 * 1024 * 1024:
-        return {"[content_types].xml"}  # démesuré : compté dans les parties lues en entier
+        return None
+    if info.file_size > XML_COURT_MAX:
+        raise ValueError(f"{nom} démesuré")
     try:
-        racine = ET.fromstring(archive.read(info))
-    except (ET.ParseError, zipfile.BadZipFile, ValueError):
-        return set()
-    return {
-        (element.get("PartName") or "").lstrip("/").lower()
-        for element in racine.iter()
-        if element.tag.endswith("Override") and element.get("ContentType") == TYPE_CHAINES_PARTAGEES
-    }
+        return ET.fromstring(archive.read(info))
+    except (ET.ParseError, zipfile.BadZipFile, NotImplementedError, RuntimeError) as erreur:
+        raise ValueError(f"{nom} illisible") from erreur
 
 
 # --- Conversion des anciens formats -----------------------------------------
@@ -295,11 +374,18 @@ def _lire_xlsx(chemin: Path) -> ContenuDocument:
 
     classeur = load_workbook(str(chemin), read_only=True, data_only=True)
     contenu = ContenuDocument()
+    lues = 0  # budget commun à toutes les feuilles : classeur rempli exprès de lignes, ou de feuilles
     try:
         for feuille in classeur.worksheets:
+            if lues >= LIGNES_PAR_CLASSEUR_MAX:
+                break
             lignes: list[list] = []
             vides = 0
-            for rangee in feuille.iter_rows(values_only=True):
+            largeur = min(feuille.max_column or COLONNES_MAX, COLONNES_MAX)  # dimension déclarée, bornée
+            for rangee in feuille.iter_rows(values_only=True, max_col=largeur):
+                if lues >= LIGNES_PAR_CLASSEUR_MAX:
+                    break
+                lues += 1
                 if all(v in (None, "") for v in rangee):
                     vides += 1
                     if vides > 200:  # feuilles « formatées » sur un million de lignes
@@ -307,8 +393,6 @@ def _lire_xlsx(chemin: Path) -> ContenuDocument:
                     continue
                 vides = 0
                 lignes.append(list(rangee))
-                if len(lignes) >= LIGNES_PAR_FEUILLE_MAX:  # feuille remplie exprès de cellules
-                    break
             if lignes:
                 contenu.tableaux.append(Tableau(feuille.title, lignes))
     finally:

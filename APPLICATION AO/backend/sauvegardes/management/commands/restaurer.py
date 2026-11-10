@@ -1,9 +1,11 @@
 """python manage.py restaurer <copie.dump> --confirmer : remplace la base de l'application par une copie.
 
-À lancer dans le dossier de l'application, application démarrée :
-    docker compose exec worker python manage.py restaurer 2026-11-09_0230.dump --confirmer
+D'ordinaire lancée par restaurer.ps1 ; sinon, dans le dossier de l'application, application arrêtée et base
+démarrée (docker compose up -d base redis) :
+    docker compose run --rm --no-deps -T worker python manage.py restaurer 2026-11-09_0230.dump --confirmer
 La base actuelle est d'abord copiée (base/avant-restauration_….dump), puis la copie est restaurée en une
-seule transaction (pg_restore --clean --if-exists) : en cas d'erreur, la base reste telle qu'elle était.
+seule transaction (schéma public vidé puis copie rejouée) : en cas d'erreur, la base reste telle qu'elle était.
+Enfin, migrate met à jour la structure d'une copie faite par une version plus ancienne.
 """
 import os
 from pathlib import Path
@@ -19,7 +21,7 @@ from sauvegardes import postgres
 from sauvegardes.miroir import SUFFIXE_PARTIEL, miroir
 from sauvegardes.models import Sauvegarde, StatutSauvegarde
 from sauvegardes.postgres import ErreurSauvegarde
-from sauvegardes.services import destination_affichee, dossier, verrou
+from sauvegardes.services import cle_secrete, destination_affichee, dossier, verrou
 
 
 def trouver_copie(chemin: str) -> Path:
@@ -35,14 +37,9 @@ def trouver_copie(chemin: str) -> Path:
 def cle_sauvegardee() -> str | None:
     """DJANGO_SECRET_KEY de la copie du .env, pour prévenir si elle diffère de celle de l'application."""
     try:
-        lignes = (dossier() / "configuration" / ".env").read_text(encoding="utf-8-sig", errors="replace").splitlines()
+        return cle_secrete((dossier() / "configuration" / ".env").read_bytes())
     except OSError:
         return None
-    for ligne in lignes:
-        nom, egal, valeur = ligne.strip().partition("=")
-        if egal and nom.strip() == "DJANGO_SECRET_KEY":
-            return valeur.strip().strip('"').strip("'")
-    return None
 
 
 class Command(BaseCommand):
@@ -62,19 +59,27 @@ class Command(BaseCommand):
                 f"La base actuelle de l’application sera REMPLACÉE par la copie {copie.name} : tout ce qui a été saisi "
                 "depuis sera perdu (une copie de la base actuelle est faite avant, sauf avec --sans-copie)."))
             raise CommandError("Relancez la commande avec --confirmer pour restaurer.")
+        avant = None
         try:
             p = postgres.parametres()
             with verrou() as obtenu:
                 if not obtenu:
                     raise CommandError("Une sauvegarde est en cours : attendez qu’elle se termine, puis relancez.")
                 if not sans_copie:
-                    self._copier_base_actuelle(p)
+                    avant = self._copier_base_actuelle(p)
                 connections.close_all()
                 self.stdout.write(f"Restauration de {copie.name}…")
                 postgres.restaurer(copie, p)
         except ErreurSauvegarde as exc:
             raise CommandError(f"Restauration impossible, la base n’a pas été modifiée : {exc}") from exc
-        call_command("migrate", interactive=False, verbosity=0)  # copie faite par une version plus ancienne
+        try:
+            call_command("migrate", interactive=False, verbosity=0)  # copie faite par une version plus ancienne
+        except Exception as exc:  # noqa: BLE001 - la base est déjà remplacée : l'administrateur doit le savoir
+            conseil = f", par exemple {avant.name} (la base d’avant la restauration)" if avant else ""
+            raise CommandError(
+                f"Base restaurée depuis {copie.name}, mais sa mise à jour de structure (migrate) a échoué "
+                f"({exc.__class__.__name__} : {exc}). L’application ne démarrera pas avec cette base : "
+                f"restaurez une autre copie{conseil}.", returncode=2) from exc
         self._noter_sauvegarde_restauree(copie)
         if avec_fichiers:
             self._recopier_fichiers()
@@ -87,7 +92,7 @@ class Command(BaseCommand):
         self.stdout.write(self.style.SUCCESS(
             f"Base restaurée depuis {copie.name}. Redémarrez l’application (docker compose restart) avant de reprendre le travail."))
 
-    def _copier_base_actuelle(self, p: dict) -> None:
+    def _copier_base_actuelle(self, p: dict) -> Path:
         dossier_base = dossier() / "base"
         dossier_base.mkdir(parents=True, exist_ok=True)
         cible = dossier_base / f"avant-restauration_{timezone.localtime():%Y-%m-%d_%H%M%S}.dump"
@@ -99,6 +104,7 @@ class Command(BaseCommand):
         except BaseException:
             partiel.unlink(missing_ok=True)
             raise
+        return cible
 
     def _noter_sauvegarde_restauree(self, copie: Path) -> None:
         """La copie contient la sauvegarde qui l'a produite, encore « en cours » à cet instant : on la clôt."""

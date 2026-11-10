@@ -169,8 +169,10 @@ function Preparer-Dossiers-Partage([string]$dossier) {
     return ""
 }
 
-# Montage du sous-dossier « sauvegardes » par Docker, exactement comme le feront les services.
-function Tester-Partage-Docker([string]$adresse, [string]$partage, [string]$options) {
+# Montage du sous-dossier « sauvegardes » par Docker, exactement comme le feront les services. Avec le
+# chemin Windows du dossier (connexion ouverte) : vérifie aussi qu'un nom accentué écrit par Docker
+# arrive intact sur le serveur (Plan_façade.pdf doit rester Plan_façade.pdf).
+function Tester-Partage-Docker([string]$adresse, [string]$partage, [string]$options, [string]$dossierWindows = "") {
     $volume = "application-ao-essai-serveur"
     docker pull valkey/valkey:8-alpine 2>&1 | Out-Null
     docker volume rm -f $volume 2>&1 | Out-Null
@@ -178,7 +180,21 @@ function Tester-Partage-Docker([string]$adresse, [string]$partage, [string]$opti
     if ($LASTEXITCODE -ne 0) { return "Docker ne peut pas préparer l’accès au serveur : $(Texte-Sortie $sortie)" }
     $sortie = docker run --rm -v "${volume}:/essai" --entrypoint sh valkey/valkey:8-alpine -c "echo essai > /essai/essai-docker.tmp && rm -f /essai/essai-docker.tmp" 2>&1
     $code = $LASTEXITCODE
+    $nomIntact = $true
+    if ($code -eq 0 -and $dossierWindows) {
+        docker run --rm -v "${volume}:/essai" --entrypoint sh valkey/valkey:8-alpine -c "echo essai > /essai/essai-é.tmp" 2>&1 | Out-Null
+        # Quelques secondes de patience : Windows garde un moment en mémoire le contenu des dossiers partagés.
+        $nomIntact = $false
+        for ($attente = 0; $attente -lt 6 -and -not $nomIntact; $attente++) {
+            if ($attente -gt 0) { Start-Sleep -Seconds 2 }
+            $nomIntact = Test-Path -LiteralPath (Join-Path $dossierWindows "sauvegardes\essai-é.tmp")
+        }
+        docker run --rm -v "${volume}:/essai" --entrypoint sh valkey/valkey:8-alpine -c "rm -f /essai/essai-é.tmp" 2>&1 | Out-Null
+    }
     docker volume rm -f $volume 2>&1 | Out-Null
+    if ($code -eq 0 -and -not $nomIntact) {
+        return "Docker écrit dans le dossier partagé, mais les noms de fichiers accentués y arrivent déformés (essai-é.tmp) :`nles documents aux noms accentués seraient introuvables. Mettez à jour Docker Desktop, puis réessayez."
+    }
     if ($code -eq 0) { return "" }
     $texte = Texte-Sortie $sortie
     $conseil = ""
@@ -239,7 +255,7 @@ function Configurer-Serveur {
     if (-not $erreur) { $erreur = Preparer-Dossiers-Partage $dossierWindows }
     if (-not $erreur) {
         Write-Host "Vérification de l’accès depuis Docker…"
-        $erreur = Tester-Partage-Docker $adresse $partage (Options-Partage $adresse $utilisateur $motDePasse $domaine)
+        $erreur = Tester-Partage-Docker $adresse $partage (Options-Partage $adresse $utilisateur $motDePasse $domaine) $dossierWindows
     }
     if ($erreur) {
         Write-Host $erreur -ForegroundColor Yellow
@@ -255,6 +271,9 @@ function Configurer-Serveur {
     $script:contenuEnv = Definir-Variable $script:contenuEnv "SERVEUR_DOMAINE" (Valeur-Env $domaine)
     Write-Host "Le mot de passe de ce compte est enregistré dans le fichier .env de ce dossier, comme les autres clés" -ForegroundColor Cyan
     Write-Host "de l’application : utilisez bien un compte dédié, limité au dossier D’Aplomb, et ne partagez jamais .env." -ForegroundColor Cyan
+    Write-Host "Sur le serveur, réservez les sous-dossiers sauvegardes et fichiers au compte dédié et aux administrateurs :" -ForegroundColor Cyan
+    Write-Host "sauvegardes contient une copie de .env (clés de l’application) et des copies complètes de la base." -ForegroundColor Cyan
+    Write-Host "Pour d’autres personnes, la lecture du seul sous-dossier archives suffit." -ForegroundColor Cyan
     return $true
 }
 
@@ -316,7 +335,9 @@ if (Test-Path -LiteralPath $cheminEnv) {
             "invaliderait les codes d’accès des entreprises à la GED.`n`n" +
             "  - Nouvelle version décompressée dans un autre dossier : copiez le fichier .env et le dossier donnees`n" +
             "    de l’ancien dossier de l’application dans celui-ci, puis relancez ce script.`n" +
-            "  - Fichier .env perdu : lancez restaurer.ps1, qui le reprend dans les sauvegardes de chaque nuit.")
+            "  - Fichier .env perdu : recopiez le fichier configuration\.env du dossier des sauvegardes (par exemple`n" +
+            "    \\SERVEUR\DAplomb\sauvegardes\configuration\.env) dans ce dossier, puis relancez ce script.`n" +
+            "    restaurer.ps1 sert seulement à revenir à une sauvegarde de la base.")
     }
     $modele = [System.IO.File]::ReadAllText((Join-Path $PSScriptRoot ".env.example"))
     $contenu = $modele.Replace("DJANGO_SECRET_KEY=__A_GENERER__", "DJANGO_SECRET_KEY=$(Nouveau-Secret 50)")
@@ -574,6 +595,17 @@ if ($modeServeur) {
 } else {
     $contenuEnv = Definir-Variable $contenuEnv "VOLUME_FICHIERS" ""
     $contenuEnv = Definir-Variable $contenuEnv "VOLUME_ARCHIVES" ""
+    $sauvegardesPc = Lire-Variable $contenuEnv "DOSSIER_SAUVEGARDES_PC"
+    if ($sauvegardesPc.StartsWith('"')) {
+        # Entre guillemets doubles, Docker Compose retire les \ du chemin : réécrit entre apostrophes droites.
+        $sauvegardesPc = $sauvegardesPc.Trim('"')
+        $contenuEnv = Definir-Variable $contenuEnv "DOSSIER_SAUVEGARDES_PC" (Valeur-Env $sauvegardesPc)
+    }
+    # Docker Desktop ne sait pas monter un dossier réseau (\\NAS\Sauvegardes) pour les sauvegardes.
+    if ($sauvegardesPc.StartsWith('\\') -or $sauvegardesPc.StartsWith('//')) {
+        Arreter ("DOSSIER_SAUVEGARDES_PC ne peut pas être un dossier réseau ($sauvegardesPc) : choisissez le stockage sur le`n" +
+            "serveur (videz la ligne STOCKAGE= du fichier .env), ou un disque local ou externe (E:\…), puis relancez ce script.")
+    }
     if ($serveurAvant) {
         # Retour du serveur au PC : les fichiers du serveur sont d'abord recopiés sur ce PC.
         Write-Host "Retour des fichiers sur ce PC : copie depuis le dossier du serveur…"
@@ -589,7 +621,6 @@ if ($modeServeur) {
         Write-Host "Fichiers recopiés sur ce PC. Les sauvegardes déjà faites restent sur le serveur."
     }
     if ($stockage -eq "pc") {
-        $sauvegardesPc = Lire-Variable $contenuEnv "DOSSIER_SAUVEGARDES_PC"
         Write-Host "Fichiers sur ce PC (dossier donnees\fichiers). Sauvegardes de chaque nuit : $(if ($sauvegardesPc) { $sauvegardesPc } else { 'donnees\sauvegardes' })."
         $disque = [System.IO.Path]::GetPathRoot((Chemin-Pc $sauvegardesPc "donnees\sauvegardes")).ToUpper()
         if ($disque -eq [System.IO.Path]::GetPathRoot($PSScriptRoot).ToUpper() -or $disque -eq "C:\") {
@@ -650,6 +681,33 @@ if ($LASTEXITCODE -ne 0) {
     Arreter "Le démarrage a échoué. Consultez les messages ci-dessus, ou lancez : docker compose logs"
 }
 
+# Fichiers sur le serveur : si le serveur ne répond pas encore quand Docker Desktop démarre (ouverture de
+# session, Wi-Fi lent, serveur qui redémarre), les services ne démarrent pas et Docker ne réessaie pas.
+# Une tâche planifiée relance « docker compose up -d » à chaque ouverture de session, jusqu'à ce que le
+# serveur réponde (un essai par minute pendant 20 minutes). Sans droits d'administrateur.
+$tacheDemarrage = "D’Aplomb - démarrage"
+if ($modeServeur) {
+    try {
+        $commande = 'for($i=0;$i -lt 60;$i++){docker info *>$null; if($LASTEXITCODE -eq 0){break}; Start-Sleep 10}; if(-not (docker compose ps -a -q)){exit}; for($i=0;$i -lt 20;$i++){docker compose up -d; if($LASTEXITCODE -eq 0){break}; Start-Sleep 60}'
+        $action = New-ScheduledTaskAction -Execute "powershell.exe" -WorkingDirectory $PSScriptRoot -Argument "-NoProfile -WindowStyle Hidden -Command `"$commande`""
+        $declencheur = New-ScheduledTaskTrigger -AtLogOn -User "$env:USERDOMAIN\$env:USERNAME"
+        $declencheur.Delay = "PT2M"
+        $reglages = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
+        Register-ScheduledTask -TaskName $tacheDemarrage -Action $action -Trigger $declencheur -Settings $reglages -Force -ErrorAction Stop | Out-Null
+        Write-Host "Tâche « $tacheDemarrage » : à chaque ouverture de session, l’application est relancée dès que le serveur répond."
+    } catch {
+        Write-Host "La tâche de démarrage n’a pas pu être créée ($($_.Exception.Message))." -ForegroundColor Yellow
+        Write-Host "Si le serveur était éteint au démarrage du PC, relancez installer.ps1 (ou docker compose up -d) une fois le serveur revenu." -ForegroundColor Yellow
+    }
+} else {
+    if (Get-ScheduledTask -TaskName $tacheDemarrage -ErrorAction SilentlyContinue) {
+        Unregister-ScheduledTask -TaskName $tacheDemarrage -Confirm:$false -ErrorAction SilentlyContinue
+    }
+    # Fichiers sur ce PC : les volumes du serveur d'un stockage précédent sont supprimés, car leurs réglages
+    # contiennent le mot de passe du compte dédié (les fichiers du serveur ne sont pas touchés).
+    docker volume rm application-ao_serveur_fichiers application-ao_serveur_archives application-ao_serveur_sauvegardes 2>&1 | Out-Null
+}
+
 Ecrire-Etape "Préparation de la base de données"
 $pret = $false
 for ($essai = 0; $essai -lt 90; $essai++) {
@@ -662,8 +720,8 @@ if (-not $pret) {
 }
 Write-Host "Base de données prête."
 
-$administrateurExiste = docker compose exec -T backend python manage.py shell -c "from comptes.models import Utilisateur; print(Utilisateur.objects.filter(is_superuser=True).exists())" 2>$null
-if ("$administrateurExiste".Trim() -ne "True") {
+$administrateurExiste = docker compose exec -T backend python manage.py shell --no-imports -c "from comptes.models import Utilisateur; print(Utilisateur.objects.filter(is_superuser=True).exists())" 2>$null
+if ((Texte-Sortie $administrateurExiste) -notmatch '(?m)^True$') {
     Ecrire-Etape "Création de votre compte administrateur"
     Write-Host "Choisissez un identifiant puis un mot de passe d'au moins 12 caractères."
     Write-Host "(L'adresse e-mail est facultative : appuyez sur Entrée pour la passer.)"
@@ -713,12 +771,23 @@ if ($modeServeur) {
 }
 Ecrire-Etape "Sauvegarde de contrôle : base de données vérifiée, configuration$(if (-not $modeServeur) { ' et fichiers' })"
 Write-Host "Destination : $destination (la première peut prendre plusieurs minutes)."
+# Python écrit en UTF-8 : décodage UTF-8 pour cette seule commande (robocopy, plus haut, écrit dans la
+# page de codes de la console).
+$encodage = [Console]::OutputEncoding
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 $sortie = docker compose exec -T worker python manage.py sauvegarder 2>&1
 $code = $LASTEXITCODE
+[Console]::OutputEncoding = $encodage
 $texte = Texte-Sortie $sortie
 if ($texte) { Write-Host $texte }
 if ($code -eq 0) {
-    Write-Host "Sauvegarde réussie dans $destination." -ForegroundColor Green
+    # La commande réussit aussi quand la restauration d'essai de la copie a échoué : vérification de l'état.
+    $verifiee = docker compose exec -T worker python manage.py shell --no-imports -c "from sauvegardes.models import Sauvegarde as S; s = S.objects.order_by('-debut').first(); print('OUI' if s and s.verifiee else 'NON')" 2>$null
+    if ((Texte-Sortie $verifiee) -match '(?m)^OUI$') {
+        Write-Host "Sauvegarde réussie dans $destination." -ForegroundColor Green
+    } else {
+        Write-Host "Sauvegarde faite, mais la restauration d’essai n’a pas réussi : voir le détail ci-dessus et l’état dans l’application." -ForegroundColor Yellow
+    }
 } elseif ($texte -match 'en cours') {
     # Sauvegarde de la nuit manquée, rattrapée au démarrage de l'application.
     Write-Host "Une sauvegarde est déjà en cours (celle de la nuit, rattrapée au démarrage) : son résultat s’affichera dans l’application." -ForegroundColor Yellow

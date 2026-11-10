@@ -65,10 +65,16 @@ export default function Explorateur({ client, droits, referentiels, documentOuve
   const cleAffichage = `${vue}|${rechercheDifferee}|${categorie}|${annules}`;
   const [limite, setLimite] = useState(TRANCHE);
   const [cleLimite, setCleLimite] = useState(cleAffichage);
+  // Documents déposés pendant la session : affichés même au-delà de la limite, jusqu'au prochain changement de classement.
+  const [deposes, setDeposes] = useState<ReadonlySet<number>>(new Set());
   if (cleLimite !== cleAffichage) {
     setCleLimite(cleAffichage);
     setLimite(TRANCHE);
+    setDeposes(new Set());
   }
+  // Clavier : après « Afficher les … suivants » ou « Tout afficher », le focus passe à la première ligne
+  // ajoutée (le bandeau et ses boutons disparaissent quand tout est affiché).
+  const focusApres = useRef<number | null>(null);
 
   // Fonction de bascule stable : les lignes mémoïsées ne sont pas redessinées à chaque rendu de la liste.
   const surOuvrirActuel = useRef(surOuvrir);
@@ -193,18 +199,28 @@ export default function Explorateur({ client, droits, referentiels, documentOuve
       });
   }, [documents, vue, rechercheDifferee, categorie, annules, ordreCategories, documentOuvert]);
 
-  // Documents montés : la tranche en cours, plus le document ouvert s'il est plus loin dans la liste
-  // (lien direct d'un courriel ou du journal) : il est alors affiché à la suite de la tranche.
+  // Documents montés : la tranche en cours, plus le document ouvert (lien direct d'un courriel ou du
+  // journal) et les documents déposés pendant la session s'ils sont plus loin dans la liste : ils sont
+  // alors affichés à la suite de la tranche, dans l'ordre de la liste.
   const affiches = useMemo(() => {
     if (visibles.length <= limite) return visibles;
     const tranche = visibles.slice(0, limite);
-    if (documentOuvert !== null && !tranche.some((d) => d.id === documentOuvert)) {
-      const ouvert = visibles.find((d) => d.id === documentOuvert);
-      if (ouvert) tranche.push(ouvert);
+    for (const d of visibles.slice(limite)) {
+      if (d.id === documentOuvert || deposes.has(d.id)) tranche.push(d);
     }
     return tranche;
-  }, [visibles, limite, documentOuvert]);
+  }, [visibles, limite, documentOuvert, deposes]);
   const restants = visibles.length - affiches.length;
+
+  function afficherPlus(nouvelleLimite: number) {
+    focusApres.current = visibles.slice(limite).find((d) => !affiches.includes(d))?.id ?? null;
+    setLimite(nouvelleLimite);
+  }
+  useEffect(() => {
+    if (focusApres.current === null) return;
+    document.getElementById(`document-${focusApres.current}`)?.querySelector<HTMLElement>("[aria-expanded]")?.focus();
+    focusApres.current = null;
+  }, [affiches]);
 
   // Intertitres : par zone et lot dans « Tous », par catégorie dans un lot.
   const groupes = useMemo(() => {
@@ -285,7 +301,10 @@ export default function Explorateur({ client, droits, referentiels, documentOuve
           documents={documents ?? []}
           zoneInitiale={vue === "COMMUN" || vue === "MOE" ? vue : lotVue ? "LOT" : undefined}
           lotInitial={lotVue?.id}
-          surDepose={majDocument}
+          surDepose={(d) => {
+            setDeposes((s) => new Set(s).add(d.id));
+            majDocument(d);
+          }}
           surFermer={() => setDepot(false)}
         />
       )}
@@ -393,11 +412,15 @@ export default function Explorateur({ client, droits, referentiels, documentOuve
                     {formaterNombre(affiches.length)} documents affichés sur {formaterNombre(visibles.length)}. La recherche et le classement portent sur tous
                     les documents.
                   </p>
-                  <button type="button" onClick={() => setLimite((l) => l + TRANCHE)} className={CLASSE_BOUTON}>
+                  <button
+                    type="button"
+                    onClick={() => afficherPlus(restants > TRANCHE ? limite + TRANCHE : Number.POSITIVE_INFINITY)}
+                    className={CLASSE_BOUTON}
+                  >
                     <ChevronDown aria-hidden="true" className="size-4" />
                     Afficher {restants > TRANCHE ? `les ${formaterNombre(TRANCHE)} suivants` : restants > 1 ? `les ${restants} derniers` : "le dernier"}
                   </button>
-                  <button type="button" onClick={() => setLimite(Number.POSITIVE_INFINITY)} className={CLASSE_BOUTON}>
+                  <button type="button" onClick={() => afficherPlus(Number.POSITIVE_INFINITY)} className={CLASSE_BOUTON}>
                     Tout afficher ({formaterNombre(visibles.length)})
                   </button>
                 </div>

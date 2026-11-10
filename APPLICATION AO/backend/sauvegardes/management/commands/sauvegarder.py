@@ -18,10 +18,11 @@ class Command(BaseCommand):
             raise CommandError(f"Sauvegarde impossible : {exc}") from exc
         if sauvegarde is None:
             raise CommandError("Une sauvegarde est déjà en cours : attendez qu’elle se termine.")
-        self.stdout.write(sauvegarde.message)
+        # Échec ou copie non vérifiée : le compte rendu est déjà affiché par le journal (logger.error de realiser).
         if sauvegarde.statut != StatutSauvegarde.REUSSIE:
             raise CommandError("La sauvegarde a échoué.")
         if not sauvegarde.verifiee:
             self.stdout.write(self.style.WARNING("Sauvegarde faite, mais la restauration d’essai de la base n’a pas réussi."))
         else:
+            self.stdout.write(sauvegarde.message)
             self.stdout.write(self.style.SUCCESS(f"Sauvegarde réussie : {sauvegarde.fichier}"))

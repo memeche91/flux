@@ -45,6 +45,8 @@ class ImportImpossible(Exception):
 
 LIGNES_MAX = 100_000
 LIGNES_VIDES_MAX = 1_000  # feuilles « formatées » sur un million de lignes : on s'arrête après ce blanc
+# Une dimension déclarée « A1:XFD… » ferait compléter chaque ligne à 16 384 cellules ; un export Outlook en a 92.
+COLONNES_MAX = 128
 TROP_LONG = "Fichier trop long : un annuaire importé compte au plus 100 000 lignes."
 
 
@@ -61,7 +63,8 @@ def _lignes(nom: str, contenu: bytes) -> list[list[str]]:
             feuille = classeur.worksheets[0]
             lignes: list[list[str]] = []
             vides = 0
-            for ligne in feuille.iter_rows(values_only=True):
+            largeur = min(feuille.max_column or COLONNES_MAX, COLONNES_MAX)
+            for ligne in feuille.iter_rows(values_only=True, max_col=largeur):
                 cellules = [_cellule(v) for v in ligne]
                 vides = 0 if any(cellules) else vides + 1
                 if vides > LIGNES_VIDES_MAX:

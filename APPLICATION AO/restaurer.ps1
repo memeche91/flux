@@ -89,6 +89,74 @@ function Adresse-Serveur([string]$nom) {
     return ""
 }
 
+# Dossier des sauvegardes sur le serveur, souvent ouvert au seul compte dédié à D’Aplomb : connexion avec
+# ce compte par l'adresse IP du serveur, comme installer.ps1 (une connexion déjà ouverte au nom du serveur
+# avec le compte de la session ne gêne pas). Renvoie le chemin à utiliser ensuite.
+function Connecter-Dossier([string]$dossier, [string]$attendu) {
+    if (-not $dossier.StartsWith('\\') -or (Test-Path -LiteralPath (Join-Path $dossier $attendu))) { return $dossier }
+    Write-Host "Ce dossier n’est pas accessible avec votre session Windows : indiquez le compte dédié à D’Aplomb."
+    $compte = (Read-Host "Compte (DOMAINE\utilisateur, ou SERVEUR\utilisateur)").Trim()
+    $secret = Read-Host "Mot de passe de ce compte" -AsSecureString
+    $motDePasse = (New-Object System.Management.Automation.PSCredential("compte", $secret)).GetNetworkCredential().Password
+    $parties = @($dossier.TrimStart('\').Split('\') | Where-Object { $_ })
+    if (-not $compte -or $parties.Count -lt 2) { return $dossier }
+    $racine = "\\" + $parties[0] + "\" + $parties[1]
+    $ip = Adresse-Serveur $parties[0]
+    if ($ip) {
+        $racine = "\\$ip\" + $parties[1]
+        $dossier = "\\$ip\" + (($parties[1..($parties.Count - 1)]) -join '\')
+    }
+    Deconnecter-Partage
+    $sortie = net use $racine $motDePasse "/user:$compte" /persistent:no 2>&1
+    if ($LASTEXITCODE -eq 0) {
+        $script:connexionPartage = $racine
+    } else {
+        $texte = Texte-Sortie $sortie
+        if ($texte -match '1219') {
+            $texte += "`nUne connexion à $racine est déjà ouverte avec un autre compte : fermez-la (net use $racine /delete) ou redémarrez le PC, puis relancez ce script."
+        }
+        Write-Host $texte -ForegroundColor Yellow
+    }
+    return $dossier
+}
+
+function Chemin-Complet([string]$chemin) {
+    if (-not [System.IO.Path]::IsPathRooted($chemin)) { $chemin = Join-Path $PSScriptRoot $chemin }
+    return [System.IO.Path]::GetFullPath($chemin).TrimEnd('\')
+}
+
+# Fichiers sur le PC : le service worker lit les sauvegardes dans le dossier que Docker monte (ligne
+# DOSSIER_SAUVEGARDES_PC de .env, sinon donnees\sauvegardes). Le dossier indiqué devient ce dossier ; un
+# dossier réseau, que Docker ne peut pas monter, est d'abord recopié dans donnees\sauvegardes.
+function Utiliser-Dossier-Sauvegardes([string]$dossier) {
+    if (-not (Test-Path -LiteralPath (Join-Path $dossier "base"))) {
+        Write-Host "Sous-dossier base introuvable dans $dossier." -ForegroundColor Yellow
+        return
+    }
+    $dossierLocal = Join-Path $PSScriptRoot "donnees\sauvegardes"
+    if ($dossier.StartsWith('\\')) {
+        Write-Host "Copie des sauvegardes de $dossier dans $dossierLocal (Docker ne peut pas lire un dossier réseau)…"
+        robocopy $dossier $dossierLocal /E /XO /R:2 /W:5 /NP /NFL /NDL /NJH | Out-Host
+        if ($LASTEXITCODE -ge 8) { Arreter "La copie des sauvegardes a échoué (code robocopy $LASTEXITCODE)." }
+        $dossier = $dossierLocal
+    }
+    $monte = (Lire-Variable $script:contenuEnv "DOSSIER_SAUVEGARDES_PC").Trim('"')
+    if (-not $monte) { $monte = $dossierLocal }
+    if ((Chemin-Complet $monte) -eq (Chemin-Complet $dossier)) { return }
+    $valeur = "'" + $dossier + "'"
+    if ((Chemin-Complet $dossier) -eq (Chemin-Complet $dossierLocal)) { $valeur = "" }
+    $script:contenuEnv = Definir-Variable $script:contenuEnv "DOSSIER_SAUVEGARDES_PC" $valeur
+    Enregistrer-Env $script:contenuEnv
+    if (-not $script:noteEnv) { $script:noteEnv = " (.env a été mis à jour)" }
+    Write-Host "Dossier des sauvegardes de l’application désormais : $dossier (ligne DOSSIER_SAUVEGARDES_PC de .env, au lieu de $monte)." -ForegroundColor Cyan
+}
+
+# Fin des messages d'abandon : .env a pu être repris de la sauvegarde ou modifié avant la confirmation.
+function Abandon {
+    if ($script:noteEnv) { return "la base n’a pas été modifiée$($script:noteEnv)." }
+    return "rien n’a été modifié."
+}
+
 # « 2026-11-08_0230.dump » -> « 08/11/2026 à 02:30 ».
 function Libelle-Copie([string]$nom) {
     if ($nom -match '^avant-restauration_(\d{4})-(\d{2})-(\d{2})_(\d{2})(\d{2})') {
@@ -114,6 +182,9 @@ $baseExistait = ($LASTEXITCODE -eq 0)
 
 Ecrire-Etape "Configuration de l’application (.env)"
 $cheminEnv = Join-Path $PSScriptRoot ".env"
+$dossier = ""
+# Précision ajoutée aux messages d'abandon quand .env a déjà été repris ou modifié.
+$noteEnv = ""
 if (Test-Path -LiteralPath $cheminEnv) {
     Write-Host "Le fichier .env de ce dossier est conservé."
 } else {
@@ -128,20 +199,8 @@ if (Test-Path -LiteralPath $cheminEnv) {
     $dossier = (Read-Host $invite).Trim().Trim('"').TrimEnd('\')
     if (-not $dossier) { $dossier = $proposition }
     if (-not $dossier) { Arreter "Aucun dossier indiqué : rien n’a été modifié." }
+    $dossier = Connecter-Dossier $dossier "configuration\.env"
     $envSauvegarde = Join-Path $dossier "configuration\.env"
-    if (-not (Test-Path -LiteralPath $envSauvegarde) -and $dossier.StartsWith('\\')) {
-        # Le dossier du serveur n'est souvent ouvert qu'au compte dédié à D'Aplomb.
-        Write-Host "Ce dossier n’est pas accessible avec votre session Windows : indiquez le compte dédié à D’Aplomb."
-        $compte = (Read-Host "Compte (DOMAINE\utilisateur, ou SERVEUR\utilisateur)").Trim()
-        $secret = Read-Host "Mot de passe de ce compte" -AsSecureString
-        $motDePasse = (New-Object System.Management.Automation.PSCredential("compte", $secret)).GetNetworkCredential().Password
-        $parties = @($dossier.TrimStart('\').Split('\') | Where-Object { $_ })
-        if ($compte -and $parties.Count -ge 2) {
-            $racine = "\\" + $parties[0] + "\" + $parties[1]
-            $sortie = net use $racine $motDePasse "/user:$compte" /persistent:no 2>&1
-            if ($LASTEXITCODE -eq 0) { $script:connexionPartage = $racine } else { Write-Host (Texte-Sortie $sortie) -ForegroundColor Yellow }
-        }
-    }
     if (-not (Test-Path -LiteralPath $envSauvegarde)) {
         Arreter "Fichier introuvable : $envSauvegarde`nIndiquez le dossier qui contient les sous-dossiers « base » et « configuration »."
     }
@@ -150,11 +209,15 @@ if (Test-Path -LiteralPath $cheminEnv) {
     } catch {
         Arreter "Copie du fichier .env impossible : $($_.Exception.Message)"
     }
-    Deconnecter-Partage
+    $noteEnv = " (.env a été repris de la sauvegarde)"
     Write-Host "Fichier .env repris de la sauvegarde." -ForegroundColor Green
 }
 $contenuEnv = [System.IO.File]::ReadAllText($cheminEnv)
 $serveur = (Lire-Variable $contenuEnv "COMPOSE_FILE") -match 'serveur'
+# Fichiers sur le PC : la liste et la restauration lisent le dossier monté par Docker, qui doit être celui
+# indiqué ci-dessus (disque externe qui a changé de lettre, sauvegardes recopiées ailleurs…).
+if ($dossier -and -not $serveur) { Utiliser-Dossier-Sauvegardes $dossier }
+Deconnecter-Partage
 if ($serveur) {
     # L'adresse du serveur peut avoir changé depuis la sauvegarde : les volumes du serveur sont alors recréés.
     $nomServeur = ((Lire-Variable $contenuEnv "SERVEUR_CHEMIN_AFFICHE").TrimStart('\') -split '\\')[0]
@@ -165,6 +228,7 @@ if ($serveur) {
         Write-Host "Le serveur $nomServeur a changé d’adresse : $nouvelle (au lieu de $adresse)."
         $contenuEnv = Definir-Variable $contenuEnv "SERVEUR_ADRESSE" $nouvelle
         Enregistrer-Env $contenuEnv
+        if (-not $noteEnv) { $noteEnv = " (.env a été mis à jour)" }
         foreach ($nom in @("fichiers", "archives", "sauvegardes")) {
             $volume = "application-ao_serveur_$nom"
             $conteneurs = @(docker ps -aq --filter "volume=$volume")
@@ -181,14 +245,25 @@ if ($LASTEXITCODE -ne 0) { Arreter "La construction de l’application a échou�
 Ecrire-Etape "Choix de la sauvegarde"
 # Liste lue par le service worker : il voit le dossier des sauvegardes comme la sauvegarde de chaque nuit
 # (dossier du PC ou partage du serveur), sans autre réglage.
-$sortie = docker compose run --rm --no-deps -T worker sh -c 'cd /sauvegardes/base 2>/dev/null && stat -c %n:%s *.dump 2>/dev/null'
-$copies = @()
-foreach ($ligneCopie in @($sortie)) {
-    if ("$ligneCopie" -match '^([^:/]+\.dump):(\d+)$') {
-        $nomCopie = $Matches[1]
-        $tailleCopie = [double]$Matches[2]
-        $copies += New-Object PSObject -Property @{ Nom = $nomCopie; Taille = $tailleCopie; Datee = ($nomCopie -match '^\d{4}-\d{2}-\d{2}_\d{4}') }
+while ($true) {
+    $sortie = docker compose run --rm --no-deps -T worker sh -c 'cd /sauvegardes/base 2>/dev/null && stat -c %n:%s *.dump 2>/dev/null'
+    $copies = @()
+    foreach ($ligneCopie in @($sortie)) {
+        if ("$ligneCopie" -match '^([^:/]+\.dump):(\d+)$') {
+            $nomCopie = $Matches[1]
+            $tailleCopie = [double]$Matches[2]
+            $copies += New-Object PSObject -Property @{ Nom = $nomCopie; Taille = $tailleCopie; Datee = ($nomCopie -match '^\d{4}-\d{2}-\d{2}_\d{4}') }
+        }
     }
+    if ($copies.Count -gt 0 -or $serveur) { break }
+    # Fichiers sur le PC : dossier monté vide ou absent (disque externe qui a changé de lettre, .env neuf…).
+    $monte = Lire-Variable $contenuEnv "DOSSIER_SAUVEGARDES_PC"
+    if (-not $monte) { $monte = "donnees\sauvegardes" }
+    Write-Host "Aucune sauvegarde trouvée dans le dossier des sauvegardes du PC ($monte, sous-dossier base)." -ForegroundColor Yellow
+    $autre = (Read-Host "Dossier qui contient les sauvegardes (sous-dossiers base et configuration ; Entrée pour abandonner)").Trim().Trim('"').TrimEnd('\')
+    if (-not $autre) { break }
+    Utiliser-Dossier-Sauvegardes (Connecter-Dossier $autre "base")
+    Deconnecter-Partage
 }
 # Les plus récentes d'abord ; les copies faites avant une restauration ensuite.
 $copies = @(@($copies | Where-Object { $_.Datee } | Sort-Object Nom -Descending) + @($copies | Where-Object { -not $_.Datee } | Sort-Object Nom -Descending))
@@ -210,7 +285,7 @@ if ($Sauvegarde) {
     if ($copies.Count -gt $affichees.Count) { Write-Host "  (et $($copies.Count - $affichees.Count) plus anciennes : option -Sauvegarde <nom>)" }
     $reponse = (Read-Host "Numéro de la sauvegarde à restaurer (Entrée : 1, la plus récente)").Trim()
     if (-not $reponse) { $reponse = "1" }
-    if ($reponse -notmatch '^\d{1,3}$' -or [int]$reponse -lt 1 -or [int]$reponse -gt $affichees.Count) { Arreter "Choix non reconnu : rien n’a été modifié." }
+    if ($reponse -notmatch '^\d{1,3}$' -or [int]$reponse -lt 1 -or [int]$reponse -gt $affichees.Count) { Arreter "Choix non reconnu : $(Abandon)" }
     $choix = $affichees[[int]$reponse - 1]
 }
 $libelle = Libelle-Copie $choix.Nom
@@ -227,6 +302,7 @@ if ($cleSauvegardee -and $cleSauvegardee -cne $cleActuelle) {
     if ((Read-Host "Reprendre la clé de la sauvegarde dans .env ? (O/N, O par défaut)") -notmatch '^\s*[nN]') {
         $contenuEnv = Definir-Variable $contenuEnv "DJANGO_SECRET_KEY" $cleSauvegardee
         Enregistrer-Env $contenuEnv
+        if (-not $noteEnv) { $noteEnv = " (.env a été mis à jour)" }
         Write-Host "Clé reprise. Comparez aussi vos autres réglages (messagerie, GED) avec le fichier configuration\.env des sauvegardes."
     }
 }
@@ -244,7 +320,7 @@ if (-not $serveur) {
 Write-Host ""
 Write-Host "La base de données actuelle va être REMPLACÉE par la sauvegarde du $libelle." -ForegroundColor Red
 Write-Host "Tout ce qui a été saisi depuis sera perdu. Une copie de la base actuelle est faite juste avant."
-if ((Read-Host "Tapez OUI pour confirmer") -ne "OUI") { Arreter "Restauration annulée : rien n’a été modifié." }
+if ((Read-Host "Tapez OUI pour confirmer") -ne "OUI") { Arreter "Restauration annulée : $(Abandon)" }
 
 Ecrire-Etape "Arrêt de l’application et démarrage de la base de données"
 $conteneurs = @(docker ps -q --filter "label=com.docker.compose.project=application-ao")
@@ -263,8 +339,12 @@ Ecrire-Etape "Restauration de la base de données (quelques minutes)"
 $arguments = @("compose", "run", "--rm", "--no-deps", "-T", "worker", "python", "manage.py", "restaurer", "/sauvegardes/base/$($choix.Nom)", "--confirmer")
 if ($avecFichiers) { $arguments += "--avec-fichiers" }
 & docker @arguments
-$restauree = ($LASTEXITCODE -eq 0)
-if (-not $restauree) {
+$codeRestauration = $LASTEXITCODE
+$restauree = ($codeRestauration -eq 0)
+if ($codeRestauration -eq 2) {
+    Write-Host "La base a été remplacée, mais sa mise à jour de structure a échoué (détail ci-dessus)." -ForegroundColor Red
+    Write-Host "Relancez restaurer.ps1 et choisissez la copie « avant-restauration_… » pour revenir à la base d’avant, ou une autre copie." -ForegroundColor Red
+} elseif (-not $restauree) {
     Write-Host "La restauration a échoué (détail ci-dessus) : la base est restée telle qu’elle était." -ForegroundColor Red
 }
 

@@ -41,6 +41,16 @@ class ImportAnnuaireAuditTests(TestCase):
                 _lignes("annuaire.xlsx", contenu)
         chargement.assert_not_called()
 
+    def test_classeur_tres_large_borne(self):
+        # Dimension déclarée sur 16 384 colonnes : openpyxl compléterait chaque ligne à 16 384 cellules.
+        contenu = xlsx_chaines_partagees(
+            [["Entreprise", "Ville"]] + [[f"Entreprise {n}", "Annecy"] for n in range(300)], dimension="A1:XFD301"
+        )
+        lignes = _lignes("annuaire.xlsx", contenu)
+        self.assertEqual(len(lignes), 301)
+        self.assertLessEqual(max(len(ligne) for ligne in lignes), importation.COLONNES_MAX)
+        self.assertEqual(importer("annuaire.xlsx", contenu).creees, 300)
+
     def test_trop_de_lignes_refuse(self):
         contenu = _classeur([["Entreprise", "Ville"]] + [[f"Entreprise {n}", "Annecy"] for n in range(60)])
         with mock.patch.object(importation, "LIGNES_MAX", 50), self.assertRaisesMessage(ImportImpossible, "trop long"):

@@ -19,6 +19,7 @@ export default function ProjetDetail() {
   const projet = useRequete<Projet>(`/projets/${projetId}`);
   const lots = useRequete<Lot[]>("/referentiel/lots");
   const [erreur, setErreur] = useState<string | null>(null);
+  const [erreurSuppression, setErreurSuppression] = useState<string | null>(null);
   const [lotAjoute, setLotAjoute] = useState("");
 
   if (projet.erreur) {
@@ -47,15 +48,31 @@ export default function ProjetDetail() {
   }
 
   async function supprimerLot(id: number, libelle: string) {
-    if (!window.confirm(`Supprimer le lot ${libelle} et tout son contenu (CCTP et DPGF) ?`)) return;
-    await api(`/lots-projet/${id}`, { method: "DELETE" });
-    projet.recharger();
+    if (
+      !window.confirm(
+        `Supprimer le lot ${libelle} et tout son contenu (CCTP, DPGF, pièces jointes) ? Un lot qui a des documents dans la GED ne peut pas être supprimé ; un lot qui a des offres ou des consultations ne peut l’être que par l’administrateur.`,
+      )
+    )
+      return;
+    setErreur(null);
+    try {
+      await api(`/lots-projet/${id}`, { method: "DELETE" });
+      projet.recharger();
+    } catch (probleme) {
+      setErreur(probleme instanceof Error ? probleme.message : "Suppression impossible.");
+    }
   }
 
   async function supprimerProjet() {
     if (!window.confirm(`Supprimer définitivement le projet « ${p.nom} » et tous ses lots ?`)) return;
-    await api(`/projets/${p.id}`, { method: "DELETE" });
-    naviguer("/projets");
+    setErreurSuppression(null);
+    try {
+      await api(`/projets/${p.id}`, { method: "DELETE" });
+      naviguer("/projets");
+    } catch (probleme) {
+      // Réservé à l'administrateur : le serveur explique pourquoi (archive puis purge conseillées).
+      setErreurSuppression(probleme instanceof Error ? probleme.message : "Suppression impossible.");
+    }
   }
 
   return (
@@ -203,6 +220,11 @@ export default function ProjetDetail() {
         >
           Supprimer le projet
         </button>
+        {erreurSuppression && (
+          <p role="alert" className="basis-full rounded-lg border border-danger/40 bg-danger/10 px-3 py-2 text-danger">
+            {erreurSuppression}
+          </p>
+        )}
       </section>
     </>
   );

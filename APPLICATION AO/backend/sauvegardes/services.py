@@ -3,9 +3,11 @@
 Déroulé (une seule sauvegarde à la fois) :
   a) pg_dump de la base vers base/AAAA-MM-JJ_HHMM.dump (écrit dans un .partiel puis renommé) ;
   b) restauration d'essai dans une base temporaire et comparaison des lignes de chaque table ;
-  c) copie du .env (la clé DJANGO_SECRET_KEY rend les codes d'accès de la GED valides après restauration) ;
+  c) copie du .env (la clé DJANGO_SECRET_KEY rend les codes d'accès de la GED valides après restauration ;
+     un .env avec une autre clé ne remplace jamais la copie) ;
   d) fichiers sur le PC : miroir des fichiers et des archives (suppression différée de 30 jours) ;
-  e) rotation : SAUVEGARDE_JOURS sauvegardes quotidiennes et SAUVEGARDE_MOIS mensuelles ;
+  e) rotation : SAUVEGARDE_JOURS sauvegardes quotidiennes et SAUVEGARDE_MOIS mensuelles (seules les copies
+     faites par la base actuelle sont effacées) ;
   f) échec : courriel aux administrateurs (si la messagerie est réglée).
 """
 from __future__ import annotations
@@ -36,6 +38,8 @@ DELAI_ALERTE = datetime.timedelta(hours=36)
 INTERROMPUE = "Sauvegarde interrompue (arrêt du PC ou de l’application) : relancez-la ou attendez celle de la nuit."
 MOTIF_COPIE = re.compile(r"^(\d{4})-(\d{2})-(\d{2})_(\d{2})(\d{2})(?:-(\d+))?\.dump$")
 CLE_VERROU = 7_041_946  # verrou consultatif PostgreSQL propre à la sauvegarde
+# Repère du compte rendu : l'alerte de l'application le cherche dans le message de la dernière sauvegarde.
+CLE_DIFFERENTE = "la clé DJANGO_SECRET_KEY du .env de l’application diffère de celle des sauvegardes"
 LISEZ_MOI = """D’Aplomb — sauvegardes
 =====================
 
@@ -45,20 +49,25 @@ base\\            copies de la base de données (AAAA-MM-JJ_HHMM.dump) : les {jo
                   et la première copie de chacun des {mois} derniers mois
 configuration\\   copie du fichier .env de l’application : clé des codes d’accès de la GED et mots de
                   passe. CONFIDENTIEL. Les versions remplacées sont dans configuration\\historique.
+                  Un .env avec une autre clé ne remplace jamais celui-ci : il est mis à part dans
+                  configuration\\historique\\nouvelle-cle-….env.
 fichiers\\        copie des fichiers de l’application et des archives de fin de chantier, quand ils
 archives\\        sont rangés sur le PC (un fichier supprimé y reste encore 30 jours)
 manifestes\\      suivi des fichiers supprimés (ne pas modifier)
 
+base\\avant-restauration_… et les copies faites par une autre installation ne sont jamais effacées
+automatiquement.
+
 Restaurer après une panne
 -------------------------
-1. Installez D’Aplomb sur le PC. AVANT de lancer installer.ps1, copiez configuration\\.env à la
-   place du fichier .env du dossier de l’application : sans cette clé, les codes d’accès des
-   entreprises à la GED ne fonctionnent plus.
-2. Si les fichiers étaient sur le PC, recopiez fichiers\\ et archives\\ dans le dossier donnees\\ de
-   l’application (ou utilisez l’option --avec-fichiers ci-dessous).
-3. Lancez installer.ps1, puis, dans le dossier de l’application :
-     docker compose exec worker python manage.py restaurer AAAA-MM-JJ_HHMM.dump --confirmer
-   La base actuelle est d’abord copiée dans base\\avant-restauration_….dump.
+Dans le dossier de l’application, lancez restaurer.ps1 (clic droit > Exécuter avec PowerShell).
+Sur un nouveau PC, lancez-le AVANT installer.ps1 : il reprend configuration\\.env, propose les
+copies, restaure la base (et, si besoin, les fichiers), puis termine avec installer.ps1.
+Ne lancez pas installer.ps1 avant : il créerait une base vide et une nouvelle clé.
+
+Commande équivalente, application arrêtée (base démarrée : docker compose up -d base redis) :
+  docker compose run --rm --no-deps -T worker python manage.py restaurer AAAA-MM-JJ_HHMM.dump --confirmer [--avec-fichiers]
+La base actuelle est d’abord copiée dans base\\avant-restauration_….dump.
 """
 
 
@@ -195,9 +204,22 @@ def sauvegarder_base(racine: Path, debut: datetime.datetime) -> tuple[Path, dict
     return cible, comptes
 
 
+def cle_secrete(contenu: bytes) -> str | None:
+    """Valeur de DJANGO_SECRET_KEY dans le contenu d'un fichier .env (None si elle n'y est pas)."""
+    for ligne in contenu.decode("utf-8-sig", errors="replace").splitlines():
+        nom, egal, valeur = ligne.strip().partition("=")
+        if egal and nom.strip() == "DJANGO_SECRET_KEY":
+            return valeur.strip().strip('"').strip("'")
+    return None
+
+
 def copier_configuration(racine: Path, maintenant: datetime.datetime) -> str:
-    """Étape c : copie du .env ; une version remplacée est gardée (un .env régénéré par erreur
-    n'efface pas l'ancienne clé des codes d'accès de la GED)."""
+    """Étape c : copie du .env ; une version remplacée est gardée dans l'historique.
+
+    Un .env dont la clé DJANGO_SECRET_KEY diffère (régénéré par installer.ps1 sur un nouveau PC, avant la
+    restauration) ne remplace jamais la copie : il est mis à part dans l'historique, et l'écart est signalé.
+    La copie garde ainsi la clé des codes d'accès de la GED, que restaurer.ps1 et la commande restaurer lisent.
+    """
     source = Path(settings.FICHIER_CONFIGURATION)
     try:
         contenu = source.read_bytes()
@@ -219,7 +241,18 @@ def copier_configuration(racine: Path, maintenant: datetime.datetime) -> str:
     if ancien is not None:
         historique = destination / "historique"
         historique.mkdir(exist_ok=True)
-        _ecrire_atomique(historique / f"remplace-le-{timezone.localtime(maintenant):%Y-%m-%d_%H%M}.env", ancien)
+        horodatage = f"{timezone.localtime(maintenant):%Y-%m-%d_%H%M}"
+        ancienne_cle, nouvelle_cle = cle_secrete(ancien), cle_secrete(contenu)
+        if ancienne_cle and nouvelle_cle and ancienne_cle != nouvelle_cle:
+            nouveau = next((f for f in sorted(historique.glob("nouvelle-cle-*.env")) if f.read_bytes() == contenu), None)
+            if nouveau is None:  # une seule copie de chaque version, et non une par nuit
+                nouveau = historique / f"nouvelle-cle-{horodatage}.env"
+                _ecrire_atomique(nouveau, contenu)
+            return (f"Configuration : ATTENTION, {CLE_DIFFERENTE} : les codes d’accès de la GED créés avant ne "
+                    "fonctionneraient plus. configuration\\.env garde l’ancienne clé ; le nouveau .env est dans "
+                    f"configuration\\historique\\{nouveau.name}. Nouvelle installation : restaurez avec restaurer.ps1, "
+                    "qui reprend l’ancienne clé. Changement voulu : supprimez configuration\\.env du dossier des sauvegardes.")
+        _ecrire_atomique(historique / f"remplace-le-{horodatage}.env", ancien)
     _ecrire_atomique(cible, contenu)
     return "Configuration (.env) copiée."
 
@@ -259,11 +292,16 @@ def copier_fichiers(racine: Path, maintenant: datetime.datetime) -> tuple[int, l
     return copies, compte_rendu, erreurs
 
 
-def rotation(dossier_base: Path, jours: int, mois: int, proteges: set[str] = frozenset()) -> list[str]:
+def rotation(dossier_base: Path, jours: int, mois: int, proteges: set[str] = frozenset(),
+             effacables: set[str] | None = None) -> tuple[list[str], list[str]]:
     """Étape e : garde la dernière copie de chacun des `jours` derniers jours sauvegardés et la première
     de chacun des `mois` derniers mois ; `proteges` (noms de fichiers) ne sont jamais effacés.
 
+    `effacables` (noms de fichiers ; None : toutes) : seules ces copies peuvent être effacées. Les autres,
+    faites par une autre installation ou par la base d'avant une restauration, contiennent peut-être les
+    vraies données (base neuve après une réinstallation) : elles sont gardées.
     Les fichiers qui ne suivent pas le nom AAAA-MM-JJ_HHMM.dump (copie avant restauration…) sont ignorés.
+    Renvoie (copies effacées, copies gardées seulement parce qu'elles ne sont pas dans `effacables`).
     """
     copies = []
     for chemin in dossier_base.iterdir():
@@ -282,21 +320,29 @@ def rotation(dossier_base: Path, jours: int, mois: int, proteges: set[str] = fro
         garder.update(par_jour[jour] for jour in sorted(par_jour)[-jours:])
     if mois > 0:
         garder.update(par_mois[m] for m in sorted(par_mois)[-mois:])
-    effacees = []
+    effacees, gardees = [], []
     for _moment, chemin in copies:
         if chemin in garder or chemin.name in proteges:
+            continue
+        if effacables is not None and chemin.name not in effacables:
+            gardees.append(chemin.name)
             continue
         chemin.unlink(missing_ok=True)
         effacees.append(chemin.name)
     for partiel in dossier_base.glob(f"*{SUFFIXE_PARTIEL}"):  # copies interrompues (le verrou est tenu)
         with contextlib.suppress(OSError):
             partiel.unlink()
-    return effacees
+    return effacees, gardees
 
 
 def _derniere_verifiee() -> set[str]:
     sauvegarde = Sauvegarde.objects.filter(statut=StatutSauvegarde.REUSSIE, verifiee=True).exclude(fichier="").first()
     return {Path(sauvegarde.fichier).name} if sauvegarde else set()
+
+
+def _copies_connues() -> set[str]:
+    """Copies faites par la base actuelle (seules celles-ci peuvent être effacées par la rotation)."""
+    return {Path(fichier).name for fichier in Sauvegarde.objects.exclude(fichier="").values_list("fichier", flat=True)}
 
 
 def _etape(libelle: str, erreurs: list[str], fonction, *arguments):
@@ -357,13 +403,19 @@ def _derouler(sauvegarde: Sauvegarde, erreurs: list[str], compte_rendu: list[str
             sauvegarde.fichiers_copies, textes, erreurs_fichiers = bilan
             compte_rendu.extend(textes)
             erreurs.extend(erreurs_fichiers)
-    # e) rotation, seulement après une copie réussie (un échec n'efface jamais les anciennes).
+    # e) rotation, seulement après une copie réussie (un échec n'efface jamais les anciennes), et seulement
+    # des copies faites par cette base : une base neuve (réinstallation) n'efface pas celles des vraies données.
     if resultat is not None:
         avertissements: list[str] = []
-        effacees = _etape("Rotation", avertissements, rotation, racine / "base", settings.SAUVEGARDE_JOURS,
-                          settings.SAUVEGARDE_MOIS, _derniere_verifiee() | {resultat[0].name})
-        if effacees:
-            compte_rendu.append(f"{len(effacees)} ancienne(s) copie(s) de la base effacée(s).")
+        bilan_rotation = _etape("Rotation", avertissements, rotation, racine / "base", settings.SAUVEGARDE_JOURS,
+                                settings.SAUVEGARDE_MOIS, _derniere_verifiee() | {resultat[0].name}, _copies_connues())
+        if bilan_rotation is not None:
+            effacees, gardees = bilan_rotation
+            if effacees:
+                compte_rendu.append(f"{len(effacees)} ancienne(s) copie(s) de la base effacée(s).")
+            if gardees:
+                compte_rendu.append(f"{len(gardees)} ancienne(s) copie(s) de la base faite(s) par une autre installation ou "
+                                    "avant une restauration, conservée(s) (à effacer à la main si inutile).")
         compte_rendu.extend(avertissements)
 
 
@@ -386,7 +438,8 @@ def realiser(sauvegarde: Sauvegarde) -> None:
         logger.error("Sauvegarde %s : %s", sauvegarde.pk, sauvegarde.message)
         courriel_echec(sauvegarde)
     else:
-        logger.info("Sauvegarde %s réussie : %s", sauvegarde.pk, sauvegarde.message)
+        # Pas au niveau INFO : la commande sauvegarder affiche elle-même ce compte rendu (une seule fois).
+        logger.debug("Sauvegarde %s réussie : %s", sauvegarde.pk, sauvegarde.message)
 
 
 # --- État affiché et alerte ----------------------------------------------------------------------------
@@ -437,6 +490,11 @@ def alerte(derniere_terminee: Sauvegarde | None, derniere_reussie: Sauvegarde | 
                             "le PC ou l’application étaient-ils arrêtés la nuit ?")
         if derniere_terminee is not None and derniere_terminee.pk == derniere_reussie.pk and not derniere_reussie.verifiee:
             messages.append("La dernière sauvegarde n’a pas pu être vérifiée par une restauration d’essai.")
+    if derniere_terminee is not None and CLE_DIFFERENTE in derniere_terminee.message:
+        messages.append("La clé DJANGO_SECRET_KEY de l’application diffère de celle des sauvegardes (configuration\\.env, "
+                        "gardé tel quel) : avec elle, les codes d’accès de la GED créés avant ne fonctionneraient plus. "
+                        "Nouvelle installation : restaurez avec restaurer.ps1, qui reprend l’ancienne clé. Changement voulu : "
+                        "supprimez configuration\\.env du dossier des sauvegardes.")
     if sur_le_meme_disque():
         messages.append("Les sauvegardes sont sur le même disque que l’application : une panne du PC les emporterait aussi. "
                         "Enregistrez-les sur le serveur de l’agence ou sur un disque externe.")

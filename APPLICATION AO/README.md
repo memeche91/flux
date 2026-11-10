@@ -101,9 +101,10 @@ Par défaut, D’Aplomb range tout sur le PC où il est installé : une panne de
 La base de données reste toujours sur le PC : PostgreSQL ne fonctionne pas de façon fiable sur un dossier réseau. C’est sa copie de chaque nuit, vérifiée, qui part sur le serveur.
 
 **Préparer le serveur** (Windows Server ; avec votre prestataire informatique au besoin) :
-1. créez un dossier, par exemple `D:\DAplomb`, et partagez-le sous le nom `DAplomb` ;
+1. créez un dossier, par exemple `D:\DAplomb`, partagez-le sous le nom `DAplomb`, et créez dedans les sous-dossiers `fichiers`, `archives` et `sauvegardes` (l’installateur les réutilise) ;
 2. créez un **compte Windows dédié** (par exemple `daplomb`), avec un mot de passe sans virgule ni guillemet et qui n’expire pas, et donnez-lui le droit **Modifier** sur ce dossier (onglets Partage et Sécurité), et sur rien d’autre ;
-3. vérifiez que le pare-feu du serveur autorise le partage de fichiers (port 445) depuis le PC de D’Aplomb, et que le partage accepte SMB 3 (c’est le cas par défaut depuis Windows Server 2012).
+3. vérifiez que le pare-feu du serveur autorise le partage de fichiers (port 445) depuis le PC de D’Aplomb, et que le partage accepte SMB 3 (c’est le cas par défaut depuis Windows Server 2012) ;
+4. si d’autres personnes doivent consulter les archives, donnez-leur seulement la **lecture** sur le sous-dossier `archives`. Les sous-dossiers `sauvegardes` et `fichiers` restent réservés au compte dédié et aux administrateurs (Propriétés › Sécurité › Avancé › désactiver l’héritage sur `sauvegardes` et `fichiers`) : `sauvegardes` contient les clés de l’application et des copies complètes de la base.
 
 **Activer** : lancez `installer.ps1` et répondez **O** à « Enregistrer les fichiers et les sauvegardes sur le serveur de l’agence ». Indiquez le chemin du dossier (`\\SERVEUR\DAplomb`, ou un sous-dossier : `\\SERVEUR\Donnees\DAplomb`), le compte (`DOMAINE\daplomb`, ou `SERVEUR\daplomb` pour un compte local du serveur) et son mot de passe. L’installateur :
 - trouve l’adresse IP du serveur (Docker ne connaît pas les noms du réseau Windows) ;
@@ -111,13 +112,13 @@ La base de données reste toujours sur le PC : PostgreSQL ne fonctionne pas de f
 - copie sur le serveur les fichiers déjà enregistrés sur le PC, avant le redémarrage, puis renomme les anciens dossiers du PC (`donnees\fichiers-copie-avant-serveur-…`, à supprimer une fois l’application vérifiée) ;
 - active le fichier `docker-compose.serveur.yml` (ligne `COMPOSE_FILE` de `.env`).
 
-> Le mot de passe du compte dédié est enregistré dans `.env`, comme les autres clés de l’application : c’est pourquoi ce compte doit être **dédié** et limité au seul dossier de D’Aplomb. Seul Docker s’en sert, pour ouvrir le dossier partagé ; il n’est pas transmis aux services de l’application.
+> Le mot de passe du compte dédié est enregistré dans `.env`, comme les autres clés de l’application : c’est pourquoi ce compte doit être **dédié** et limité au seul dossier de D’Aplomb. Docker s’en sert pour ouvrir le dossier partagé. Il n’est pas fourni aux services comme réglage, mais le fichier `.env` qui le contient est copié chaque nuit dans `sauvegardes\configuration`.
 
 À savoir :
-- le serveur doit être allumé quand l’application démarre (Docker ouvre le dossier partagé à ce moment-là). S’il était éteint, relancez `installer.ps1`, ou `docker compose up -d`, une fois le serveur revenu ;
+- le serveur doit être joignable quand l’application démarre (Docker ouvre le dossier partagé à ce moment-là). S’il ne l’est pas encore à l’ouverture de la session Windows, l’application redémarre seule quand le serveur revient : la tâche planifiée « D’Aplomb - démarrage », créée par `installer.ps1`, relance `docker compose up -d` chaque minute pendant 20 minutes. Au-delà, relancez `installer.ps1`, ou `docker compose up -d`, une fois le serveur revenu ;
 - mot de passe du compte changé, serveur renuméroté : relancez `installer.ps1`. Il retrouve l’adresse du serveur, vérifie l’accès et, s’il échoue, propose de saisir à nouveau le dossier et le compte. Les fichiers du serveur ne sont jamais effacés par cette opération ;
 - nouveau dossier partagé : copiez-y d’abord les sous-dossiers `fichiers` et `archives` de l’ancien, puis videz la ligne `STOCKAGE=` de `.env` et relancez `installer.ps1` ;
-- revenir aux fichiers sur le PC : mettez `STOCKAGE=pc` dans `.env`, puis relancez `installer.ps1`. Les fichiers du serveur sont recopiés sur le PC avant le redémarrage.
+- revenir aux fichiers sur le PC : mettez `STOCKAGE=pc` dans `.env`, puis relancez `installer.ps1`. Les fichiers du serveur sont recopiés sur le PC avant le redémarrage ; le mot de passe du compte dédié est effacé de `.env` et de Docker, et la tâche planifiée est supprimée.
 
 ### Sauvegarde automatique chaque nuit
 
@@ -126,26 +127,26 @@ Chaque nuit à 2 h 30 (heure de Paris, ligne `SAUVEGARDE_HEURE` de `.env`), le s
 2. **vérifie cette copie** : il la restaure dans une base temporaire et compare le nombre de lignes de tables clés avec la base réelle ;
 3. copie le fichier `.env` dans `sauvegardes\configuration\.env` : sa clé `DJANGO_SECRET_KEY` garde valides les codes d’accès des entreprises à la GED après une restauration. **Ce dossier est confidentiel** ;
 4. si les fichiers sont sur le PC, copie les fichiers nouveaux ou modifiés dans `sauvegardes\fichiers` et `sauvegardes\archives` (un fichier supprimé de l’application y reste encore 30 jours). Avec le serveur de l’agence, cette copie est inutile : les fichiers y sont déjà ;
-5. garde une sauvegarde par jour pendant 14 jours (`SAUVEGARDE_JOURS`) et la première de chaque mois pendant 6 mois (`SAUVEGARDE_MOIS`).
+5. garde la dernière sauvegarde de chacun des 14 derniers jours qui ont une sauvegarde (`SAUVEGARDE_JOURS` ; un PC éteint le week-end garde donc plus de 14 jours de calendrier) et la première de chacun des 6 derniers mois (`SAUVEGARDE_MOIS`).
 
 En cas d’échec, les administrateurs (comptes administrateur actifs avec une adresse e-mail) reçoivent un courriel, si la messagerie est réglée. L’état de la dernière sauvegarde est affiché dans l’application, avec une alerte si aucune n’a réussi depuis plus de 36 heures, si la dernière a échoué, ou si les sauvegardes sont sur le même disque que l’application.
 
 - Le PC doit être allumé et la session Windows ouverte (Docker Desktop) à l’heure prévue. S’il était éteint, la sauvegarde est faite à son démarrage suivant.
 - Sauvegarder tout de suite : depuis l’application (administrateur), ou `docker compose exec worker python manage.py sauvegarder`. `installer.ps1` en fait une à la fin de chaque passage et affiche le résultat.
-- Fichiers sur le PC : placez les sauvegardes sur un autre disque, toujours branché (ligne `DOSSIER_SAUVEGARDES_PC` de `.env`, par exemple `E:\Sauvegardes DAplomb`), puis relancez `installer.ps1`. Sinon, une panne du disque emporterait l’application **et** ses sauvegardes.
+- Fichiers sur le PC : placez les sauvegardes sur un autre disque, toujours branché (ligne `DOSSIER_SAUVEGARDES_PC` de `.env`, par exemple `E:\Sauvegardes DAplomb`), puis relancez `installer.ps1`. Sinon, une panne du disque emporterait l’application **et** ses sauvegardes. Un dossier réseau n’est pas accepté (Docker ne sait pas l’ouvrir) : choisissez plutôt le stockage sur le serveur de l’agence.
 
 ### Restaurer une sauvegarde
 
 Clic droit sur **`restaurer.ps1`** › **Exécuter avec PowerShell** (ou `powershell -ExecutionPolicy Bypass -File .\restaurer.ps1`). Le script :
-1. reprend le fichier `.env` enregistré avec les sauvegardes s’il est absent du dossier (nouveau PC) ;
-2. liste les sauvegardes et propose la plus récente (option `-Sauvegarde 2026-11-08_0230.dump` pour en choisir une sans la liste) ;
+1. reprend le fichier `.env` enregistré avec les sauvegardes s’il est absent du dossier (nouveau PC). Fichiers sur le PC : le dossier indiqué devient le dossier des sauvegardes de l’application (ligne `DOSSIER_SAUVEGARDES_PC`) ; un dossier réseau est d’abord recopié dans `donnees\sauvegardes` ;
+2. liste les sauvegardes et propose la plus récente (option `-Sauvegarde 2026-11-08_0230.dump` pour en choisir une sans la liste). Fichiers sur le PC : s’il n’en trouve aucune (disque externe qui a changé de lettre, sauvegardes recopiées ailleurs), il demande le dossier qui les contient ;
 3. vérifie que la clé des codes d’accès de la GED est bien celle de la sauvegarde, et propose de la reprendre sinon ;
 4. si les fichiers sont sur le PC, propose de les recopier depuis la sauvegarde (rien n’est effacé) ;
 5. après confirmation (taper `OUI`), arrête l’application, copie la base actuelle (`sauvegardes\base\avant-restauration_…`), restaure la base choisie, applique les mises à jour de structure, puis redémarre l’application.
 
 **Après une panne du PC** : installez Docker Desktop sur le nouveau PC, récupérez le dossier de l’application (étape 2 de l’installation), puis lancez **directement `restaurer.ps1`** et indiquez le dossier des sauvegardes (par exemple `\\SERVEUR\DAplomb\sauvegardes` ; le script demande le compte dédié si votre session n’y a pas accès). Il reprend `.env`, restaure la base, puis lance `installer.ps1` pour terminer (modèles de l’assistant, carte graphique). Si `installer.ps1` a déjà été lancé sur ce PC, `restaurer.ps1` propose de reprendre la clé de la sauvegarde.
 
-Application démarrée, la commande équivalente est : `docker compose exec worker python manage.py restaurer 2026-11-08_0230.dump --confirmer` (option `--avec-fichiers` pour recopier aussi les fichiers sauvegardés).
+Commande équivalente, application arrêtée (`docker compose stop`, puis `docker compose up -d base redis`) : `docker compose run --rm --no-deps -T worker python manage.py restaurer 2026-11-08_0230.dump --confirmer` (option `--avec-fichiers` pour recopier aussi les fichiers sauvegardés), puis `docker compose up -d`.
 
 ### Mettre à jour sans rien perdre
 

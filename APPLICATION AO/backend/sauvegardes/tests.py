@@ -1,4 +1,4 @@
-"""Tests de la sauvegarde, sans PostgreSQL : pg_dump, pg_restore, createdb et dropdb sont simulés
+"""Tests de la sauvegarde, sans PostgreSQL : pg_dump, pg_restore, createdb, dropdb et psql sont simulés
 (subprocess.run remplacé), ainsi que l'instantané et le comptage des lignes."""
 import contextlib
 import datetime
@@ -38,15 +38,20 @@ class FauxOutils:
         self.commandes: list[list[str]] = []
         self.environnements: list[dict] = []
         self.echecs: dict[str, str] = {}
+        self.scripts_lus: list[str] = []  # contenu du script SQL quand psql le rejoue
 
     def __call__(self, commande, env=None, **_options):
         self.commandes.append(list(commande))
         self.environnements.append(env or {})
         if commande[0] in self.echecs:
             return subprocess.CompletedProcess(commande, 1, "", self.echecs[commande[0]])
+        fichier = next((argument.split("=", 1)[1] for argument in commande if argument.startswith("--file=")), None)
         if commande[0] == "pg_dump":
-            fichier = next(argument.split("=", 1)[1] for argument in commande if argument.startswith("--file="))
             Path(fichier).write_bytes(b"PGDMP" + b"\0" * 2048)
+        elif commande[0] == "pg_restore" and fichier:  # conversion de la copie en script SQL
+            Path(fichier).write_text("CREATE TABLE public.projets_projet (id bigint);\n", encoding="utf-8")
+        elif commande[0] == "psql":
+            self.scripts_lus.append(Path(commande[commande.index("-f") + 1]).read_text(encoding="utf-8"))
         return subprocess.CompletedProcess(commande, 0, "", "")
 
     def outils(self) -> list[str]:
@@ -203,13 +208,68 @@ class SauvegardeTests(OutilsSimules, TestCase):
 
     def test_configuration_remplacee_gardee_dans_l_historique(self):
         lancer("essai")
-        self.env.write_text("DJANGO_SECRET_KEY=nouvelle-cle\n", encoding="utf-8")
-        lancer("essai")
+        # Un autre réglage change, même clé : la copie est remplacée, l'ancienne version gardée.
+        self.env.write_text("DJANGO_SECRET_KEY=cle-des-codes-ged\nPOSTGRES_PASSWORD=y\n", encoding="utf-8")
+        sauvegarde = lancer("essai")
+        self.assertIn("Configuration (.env) copiée.", sauvegarde.message)
         copie = self.sauvegardes / "configuration"
-        self.assertEqual((copie / ".env").read_text(encoding="utf-8"), "DJANGO_SECRET_KEY=nouvelle-cle\n")
+        self.assertEqual((copie / ".env").read_bytes(), self.env.read_bytes())
         historique = list((copie / "historique").iterdir())
         self.assertEqual(len(historique), 1)
-        self.assertIn("cle-des-codes-ged", historique[0].read_text(encoding="utf-8"))
+        self.assertTrue(historique[0].name.startswith("remplace-le-"))
+        self.assertIn("POSTGRES_PASSWORD=x", historique[0].read_text(encoding="utf-8"))
+        self.assertEqual(etat()["alerte"], "")
+
+    def test_configuration_avec_une_autre_cle_jamais_remplacee(self):
+        from .management.commands.restaurer import cle_sauvegardee
+
+        lancer("essai")
+        copie = self.sauvegardes / "configuration"
+        ancien = (copie / ".env").read_bytes()
+        # .env régénéré par installer.ps1 (nouveau PC, avant la restauration) : nouvelle clé.
+        self.env.write_text('DJANGO_SECRET_KEY="nouvelle-cle"\nPOSTGRES_PASSWORD=x\n', encoding="utf-8")
+        sauvegarde = lancer("essai")
+        self.assertEqual(sauvegarde.statut, StatutSauvegarde.REUSSIE, sauvegarde.message)  # la base est sauvegardée
+        self.assertTrue(sauvegarde.verifiee)
+        self.assertEqual((copie / ".env").read_bytes(), ancien)
+        self.assertEqual(cle_sauvegardee(), "cle-des-codes-ged")  # restaurer.ps1 et restaurer préviennent toujours
+        nouvelles = list((copie / "historique").iterdir())
+        self.assertEqual([f.name[:13] for f in nouvelles], ["nouvelle-cle-"])
+        self.assertEqual(nouvelles[0].read_bytes(), self.env.read_bytes())
+        self.assertIn("ATTENTION, la clé DJANGO_SECRET_KEY du .env de l’application diffère", sauvegarde.message)
+        self.assertIn(f"configuration\\historique\\{nouvelles[0].name}", sauvegarde.message)
+        self.assertIn("La clé DJANGO_SECRET_KEY de l’application diffère", etat()["alerte"])
+        self.assertIn("restaurer.ps1", etat()["alerte"])
+        # Nuit suivante : l'écart est encore signalé, sans seconde copie du même fichier.
+        self.assertIn("ATTENTION", lancer("essai").message)
+        self.assertEqual(len(list((copie / "historique").iterdir())), 1)
+        # Changement voulu : configuration\.env supprimé à la main, le nouveau est copié et l'alerte disparaît.
+        (copie / ".env").unlink()
+        self.assertIn("Configuration (.env) copiée.", lancer("essai").message)
+        self.assertEqual((copie / ".env").read_bytes(), self.env.read_bytes())
+        self.assertEqual(etat()["alerte"], "")
+
+    @override_settings(SAUVEGARDE_JOURS=1, SAUVEGARDE_MOIS=0)
+    def test_rotation_n_efface_que_les_copies_de_cette_base(self):
+        # Base neuve (Docker réinitialisé, nouveau PC) : la copie du jour, faite par l'ancienne base et inconnue
+        # de celle-ci, contient les vraies données. Elle n'est pas effacée, même si elle sort de la rotation.
+        base = self.sauvegardes / "base"
+        base.mkdir(parents=True)
+        aujourd_hui = timezone.localtime()
+        autre = base / f"{aujourd_hui:%Y-%m-%d}_0000.dump"
+        autre.write_bytes(b"PGDMP vraies donnees")
+        connue = base / f"{aujourd_hui - datetime.timedelta(days=1):%Y-%m-%d}_0230.dump"
+        connue.write_bytes(b"PGDMP")
+        Sauvegarde.objects.create(debut=timezone.now() - datetime.timedelta(days=1), statut=StatutSauvegarde.REUSSIE,
+                                  fichier=f"base/{connue.name}")
+        sauvegarde = lancer("essai")
+        self.assertEqual(sauvegarde.statut, StatutSauvegarde.REUSSIE, sauvegarde.message)
+        self.assertTrue(autre.exists())
+        self.assertFalse(connue.exists())  # copie de cette base hors des jours gardés : effacée
+        self.assertTrue((self.sauvegardes / sauvegarde.fichier).exists())
+        self.assertIn("1 ancienne(s) copie(s) de la base effacée(s).", sauvegarde.message)
+        self.assertIn("1 ancienne(s) copie(s) de la base faite(s) par une autre installation ou avant une restauration, "
+                      "conservée(s)", sauvegarde.message)
 
     def test_dossier_des_sauvegardes_injoignable(self):
         bloquant = self.racine / "fichier-ordinaire"
@@ -369,8 +429,9 @@ class RotationTests(TestCase):
         ]
         for nom in noms:
             (dossier / nom).write_bytes(b"x")
-        effacees = rotation(dossier, jours=3, mois=2, proteges={"2026-05-15_0230.dump"})
+        effacees, gardees = rotation(dossier, jours=3, mois=2, proteges={"2026-05-15_0230.dump"})
         self.assertEqual(sorted(effacees), ["2026-05-01_0230.dump", "2026-06-20_0230.dump", "2026-07-05_0230.dump"])
+        self.assertEqual(gardees, [])
         self.assertEqual(sorted(p.name for p in dossier.iterdir()), sorted([
             "2026-05-15_0230.dump",  # protégée (dernière vérifiée)
             "2026-06-01_0230.dump", "2026-07-03_0230.dump",  # premières des 2 derniers mois
@@ -391,6 +452,18 @@ class RotationTests(TestCase):
         quotidiennes = [f"2026-10-{j}_0230.dump" for j in range(27, 32)] + [f"2026-11-0{j}_0230.dump" for j in range(1, 10)]
         self.assertEqual(restantes, sorted(set(mensuelles + quotidiennes)))
 
+    def test_seules_les_copies_effacables(self):
+        dossier = Path(tempfile.mkdtemp(prefix="daplomb-rotation-"))
+        self.addCleanup(shutil.rmtree, dossier, ignore_errors=True)
+        for nom in ("2026-11-01_0230.dump", "2026-11-02_0230.dump", "2026-11-03_0230.dump", "2026-11-03_0958.dump"):
+            (dossier / nom).write_bytes(b"x")
+        # Base neuve : elle ne connaît que sa propre copie (2026-11-03_0958) et celle du 2.
+        effacees, gardees = rotation(dossier, jours=1, mois=0, effacables={"2026-11-02_0230.dump", "2026-11-03_0958.dump"})
+        self.assertEqual(effacees, ["2026-11-02_0230.dump"])
+        self.assertEqual(gardees, ["2026-11-01_0230.dump", "2026-11-03_0230.dump"])
+        self.assertEqual(sorted(p.name for p in dossier.iterdir()),
+                         ["2026-11-01_0230.dump", "2026-11-03_0230.dump", "2026-11-03_0958.dump"])
+
 
 class AlerteTests(TestCase):
     def test_messages(self):
@@ -405,6 +478,9 @@ class AlerteTests(TestCase):
             self.assertIn("a échoué : « pg_dump » a échoué : disque plein.", alerte(echec, reussie, maintenant))
             reussie.verifiee = False
             self.assertIn("n’a pas pu être vérifiée", alerte(reussie, reussie, maintenant))
+            reussie.verifiee = True
+            reussie.message = f"Base : 2 Mo. Configuration : ATTENTION, {services.CLE_DIFFERENTE} : …"
+            self.assertIn("La clé DJANGO_SECRET_KEY de l’application diffère", alerte(reussie, reussie, maintenant))
 
     def test_meme_disque(self):
         for chemin, attendu in (("", True), ("./donnees/sauvegardes", True), ("C:\\Sauvegardes", True), ("c:/sauvegardes", True),
@@ -494,12 +570,17 @@ class ApiTests(OutilsSimules, TestCase):
 class CommandesTests(OutilsSimules, TestCase):
     def test_sauvegarder(self):
         sortie = StringIO()
-        call_command("sauvegarder", stdout=sortie)
+        with self.assertNoLogs("sauvegardes", "INFO"):  # compte rendu affiché une seule fois, par la commande
+            call_command("sauvegarder", stdout=sortie)
         self.assertIn("Sauvegarde réussie", sortie.getvalue())
+        self.assertEqual(sortie.getvalue().count("vérifiée par une restauration d’essai"), 1)
         self.assertEqual(Sauvegarde.objects.get().declenchee_par, "commande")
-        self.outils.echecs["pg_dump"] = "pg_dump: error"
-        with self.assertRaises(CommandError):
-            call_command("sauvegarder", stdout=StringIO())
+        self.outils.echecs["pg_dump"] = "pg_dump: error: disque plein"
+        sortie = StringIO()
+        with self.assertLogs("sauvegardes", "ERROR") as journal, self.assertRaises(CommandError):
+            call_command("sauvegarder", stdout=sortie)
+        self.assertEqual(sum("disque plein" in ligne for ligne in journal.output), 1)  # une seule fois, par le journal
+        self.assertNotIn("disque plein", sortie.getvalue())
 
     def test_restaurer(self):
         lancer("essai")
@@ -516,22 +597,53 @@ class CommandesTests(OutilsSimules, TestCase):
                 mock.patch("sauvegardes.management.commands.restaurer.connections"), override_settings(SECRET_KEY="autre-cle"):
             call_command("restaurer", nom, "--confirmer", stdout=sortie)
         migrer.assert_called_once_with("migrate", interactive=False, verbosity=0)
-        self.assertEqual(self.outils.outils(), ["pg_dump", "pg_restore"])
+        self.assertEqual(self.outils.outils(), ["pg_dump", "pg_restore", "psql"])
         self.assertTrue(any(a.startswith("--file=") and "avant-restauration_" in a for a in self.outils.commandes[0]))
         self.assertTrue(list((self.sauvegardes / "base").glob("avant-restauration_*.dump")))
-        restauration = self.outils.commandes[1]
-        for option in ("--clean", "--if-exists", "--single-transaction", "--dbname=application_ao"):
+        # 1. La copie est convertie en script SQL, sans toucher la base (une copie abîmée échoue ici).
+        conversion = self.outils.commandes[1]
+        self.assertEqual(conversion[-1], str(self.sauvegardes / "base" / nom))
+        self.assertFalse(any(a.startswith("--dbname") for a in conversion))
+        script = next(a.split("=", 1)[1] for a in conversion if a.startswith("--file="))
+        # 2. Une seule transaction : tout le schéma public est supprimé (y compris les tables créées par une mise
+        #    à jour plus récente que la copie, que migrate recrée ensuite), puis le script est rejoué.
+        restauration = self.outils.commandes[2]
+        for option in ("-X", "--single-transaction", "ON_ERROR_STOP=1", "--dbname=application_ao"):
             self.assertIn(option, restauration)
-        self.assertEqual(restauration[-1], str(self.sauvegardes / "base" / nom))
+        self.assertLess(restauration.index("DROP SCHEMA public CASCADE"), restauration.index("CREATE SCHEMA public"))
+        self.assertLess(restauration.index("CREATE SCHEMA public"), restauration.index("-f"))
+        self.assertEqual(restauration[restauration.index("-f") + 1], script)
+        self.assertEqual(self.outils.scripts_lus, ["CREATE TABLE public.projets_projet (id bigint);\n"])
+        self.assertFalse(Path(script).exists())  # script temporaire (toute la base) supprimé
         self.assertIn("DJANGO_SECRET_KEY de l’application diffère", sortie.getvalue())
         self.assertFalse(Sauvegarde.objects.filter(statut=StatutSauvegarde.EN_COURS).exists())
 
     def test_restaurer_echec_base_inchangee(self):
         lancer("essai")
         nom = Path(Sauvegarde.objects.get().fichier).name
-        self.outils.echecs["pg_restore"] = "pg_restore: error: could not execute query"
+        self.outils.commandes.clear()
+        self.outils.echecs["pg_restore"] = "pg_restore: error: could not read from input file: end of file"
         with mock.patch("sauvegardes.management.commands.restaurer.connections"), self.assertRaisesMessage(CommandError, "la base n’a pas été modifiée"):
             call_command("restaurer", nom, "--confirmer", "--sans-copie", stdout=StringIO())
+        self.assertEqual(self.outils.outils(), ["pg_restore"])  # copie tronquée : psql n'est jamais lancé
+        script = next(a.split("=", 1)[1] for a in self.outils.commandes[0] if a.startswith("--file="))
+        self.assertFalse(Path(script).exists())
+        self.outils.echecs = {"psql": "psql:/tmp/restauration.sql:12: ERROR: disk full"}
+        with mock.patch("sauvegardes.management.commands.restaurer.connections"), \
+                self.assertRaisesMessage(CommandError, "la base n’a pas été modifiée : « psql » a échoué : psql:/tmp/restauration.sql:12: ERROR: disk full"):
+            call_command("restaurer", nom, "--confirmer", "--sans-copie", stdout=StringIO())
+
+    def test_restaurer_migrate_en_echec(self):
+        lancer("essai")
+        nom = Path(Sauvegarde.objects.get().fichier).name
+        with mock.patch("sauvegardes.management.commands.restaurer.call_command",
+                        side_effect=RuntimeError('relation "ged_nouveau" already exists')), \
+                mock.patch("sauvegardes.management.commands.restaurer.connections"), self.assertRaises(CommandError) as erreur:
+            call_command("restaurer", nom, "--confirmer", stdout=StringIO())
+        texte = str(erreur.exception)
+        self.assertIn(f"Base restaurée depuis {nom}, mais sa mise à jour de structure (migrate) a échoué", texte)
+        self.assertIn('relation "ged_nouveau" already exists', texte)
+        self.assertRegex(texte, r"restaurez une autre copie, par exemple avant-restauration_[\d_-]+\.dump")
 
 
 class ReglagesTests(TestCase):
