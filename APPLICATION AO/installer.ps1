@@ -292,8 +292,8 @@ function Chemin-Pc([string]$valeur, [string]$defaut) {
     return (Join-Path $PSScriptRoot ($valeur -replace '^\.\\', ''))
 }
 
-# Dossier du PC indiqué dans .env (DOSSIER_SAUVEGARDES_PC, DOSSIER_ARCHIVES_PC) : jamais réécrit par les scripts,
-# seulement vérifié. Docker ne lit comme dossier qu'un chemin complet (E:\Sauvegardes DAplomb) ou commençant par .\ ;
+# Dossier du PC indiqué dans .env (DOSSIER_SAUVEGARDES_PC, DOSSIER_ARCHIVES_PC) : jamais transformé par les scripts,
+# seulement vérifié (restaurer.ps1 n'y écrit que le dossier des sauvegardes choisi, après cette même vérification). Docker ne lit comme dossier qu'un chemin complet (E:\Sauvegardes DAplomb) ou commençant par .\ ;
 # une apostrophe, un guillemet, un # (commentaire) ou un \ final seraient mal lus par Docker. Message vide si correct.
 function Probleme-Dossier([string]$valeur) {
     if (-not $valeur) { return "" }
@@ -649,12 +649,6 @@ if ($modeServeur) {
     $contenuEnv = Definir-Variable $contenuEnv "VOLUME_FICHIERS" ""
     $contenuEnv = Definir-Variable $contenuEnv "VOLUME_ARCHIVES" ""
     $sauvegardesPc = Lire-Variable $contenuEnv "DOSSIER_SAUVEGARDES_PC"
-    if ($sauvegardesPc.Contains("'")) {
-        # Entre apostrophes, comme les autres chemins, la valeur rendrait .env illisible pour Docker Compose.
-        Arreter ("DOSSIER_SAUVEGARDES_PC contient une apostrophe ($sauvegardesPc), que Docker ne sait pas lire dans .env :`n" +
-            "renommez ce dossier sans apostrophe (par exemple E:\Sauvegardes DAplomb), corrigez la ligne DOSSIER_SAUVEGARDES_PC= du`n" +
-            "fichier .env (entre apostrophes droites : DOSSIER_SAUVEGARDES_PC='E:\Sauvegardes DAplomb'), puis relancez ce script.")
-    }
     # Docker Desktop ne sait pas monter un dossier réseau (\\NAS\Sauvegardes) ni un lecteur réseau (S:\…).
     if ($sauvegardesPc -and (Est-Reseau (Chemin-Pc $sauvegardesPc "donnees\sauvegardes"))) {
         Arreter ("DOSSIER_SAUVEGARDES_PC ($sauvegardesPc) ne peut pas être un dossier réseau (\\NAS\…) ni un lecteur réseau (S:\…) :`n" +
@@ -800,9 +794,9 @@ if ($LASTEXITCODE -ne 0) {
     Write-Host "Le reste de l'application fonctionne. Relancez installer.ps1 plus tard pour terminer." -ForegroundColor Yellow
 }
 
-$port = "8080"
-$ligne = Select-String -LiteralPath $cheminEnv -Pattern '^APP_PORT=(\d+)' | Select-Object -First 1
-if ($ligne) { $port = $ligne.Matches[0].Groups[1].Value }
+# Port publié par Docker : dernière ligne APP_PORT de .env, comme Docker Compose.
+$port = Lire-Variable $contenuEnv "APP_PORT"
+if ($port -notmatch '^\d+$') { $port = "8080" }
 
 if ($modeGed) {
     $urlGed = Lire-Variable $contenuEnv "GED_URL_PUBLIQUE"

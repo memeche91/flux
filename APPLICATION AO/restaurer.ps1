@@ -147,8 +147,8 @@ function Est-Reseau([string]$chemin) {
     return $false
 }
 
-# Dossier du PC indiqué dans .env (DOSSIER_SAUVEGARDES_PC, DOSSIER_ARCHIVES_PC) : jamais réécrit par les scripts,
-# seulement vérifié. Docker ne lit comme dossier qu'un chemin complet (E:\Sauvegardes DAplomb) ou commençant par .\ ;
+# Dossier du PC indiqué dans .env (DOSSIER_SAUVEGARDES_PC, DOSSIER_ARCHIVES_PC) : jamais transformé par les scripts,
+# seulement vérifié (restaurer.ps1 n'y écrit que le dossier des sauvegardes choisi, après cette même vérification). Docker ne lit comme dossier qu'un chemin complet (E:\Sauvegardes DAplomb) ou commençant par .\ ;
 # une apostrophe, un guillemet, un # (commentaire) ou un \ final seraient mal lus par Docker. Message vide si correct.
 function Probleme-Dossier([string]$valeur) {
     if (-not $valeur) { return "" }
@@ -186,9 +186,8 @@ function Utiliser-Dossier-Sauvegardes([string]$dossier) {
         }
         $dossier = $dossierLocal
     }
-    $monte = (Lire-Variable $script:contenuEnv "DOSSIER_SAUVEGARDES_PC").Trim('"')
+    $monte = Lire-Variable $script:contenuEnv "DOSSIER_SAUVEGARDES_PC"
     if (-not $monte) { $monte = $dossierLocal }
-    # Un chemin relatif sans « .\ » (donnees\sauvegardes) serait pris par Docker pour un nom de volume : réécrit.
     $lisible = [System.IO.Path]::IsPathRooted($monte) -or $monte.StartsWith('.')
     if ($lisible -and (Chemin-Complet $monte) -eq (Chemin-Complet $dossier)) { return }
     # Chemin complet : un chemin relatif tapé sans « .\ » n'est pas lisible par Docker.
@@ -204,7 +203,7 @@ function Utiliser-Dossier-Sauvegardes([string]$dossier) {
         $probleme = "ne doit être ni le dossier des archives (DOSSIER_ARCHIVES_PC), ni dedans, ni le contenir"
     }
     if ($probleme) {
-        Arreter ("Dossier des sauvegardes « $complet » : il $probleme. $(Abandon)`n" +
+        Arreter ("Dossier des sauvegardes « $complet » : il $probleme ; $(Abandon)`n" +
             "Recopiez les sauvegardes dans un dossier comme E:\Sauvegardes DAplomb, puis relancez ce script.")
     }
     $valeur = "'" + $complet + "'"
@@ -289,7 +288,7 @@ if (-not $serveur) {
         $cheminLu = Lire-Variable $contenuEnv $nomDossier
         $probleme = Probleme-Dossier $cheminLu
         if ($probleme) {
-            Arreter ("Ligne $nomDossier de .env (« $cheminLu ») : le dossier $probleme. $(Abandon)`n" +
+            Arreter ("Ligne $nomDossier de .env (« $cheminLu ») : le dossier $probleme ; $(Abandon)`n" +
                 "Corrigez cette ligne avec le Bloc-notes (exemple : $nomDossier=$(@{ DOSSIER_SAUVEGARDES_PC = 'E:\Sauvegardes DAplomb'; DOSSIER_ARCHIVES_PC = 'D:\Archives chantiers' }[$nomDossier]), ou videz-la), puis relancez ce script.")
         }
     }
