@@ -21,6 +21,8 @@ Set-Location -LiteralPath $PSScriptRoot
 Write-Host "D’Aplomb - restauration d’une sauvegarde" -ForegroundColor Cyan
 
 $script:connexionPartage = ""
+# Volumes du serveur recréés avant la restauration : les services qui les utilisaient ont été supprimés.
+$script:servicesSupprimes = $false
 
 function Ecrire-Etape([string]$texte) {
     Write-Host ""
@@ -36,6 +38,9 @@ function Deconnecter-Partage {
 
 function Arreter([string]$message) {
     Deconnecter-Partage
+    if ($script:servicesSupprimes) {
+        $message += "`nL’application a été arrêtée pour renouveler son accès au serveur : relancez installer.ps1 pour la redémarrer."
+    }
     Write-Host ""
     Write-Host $message -ForegroundColor Red
     Read-Host "Appuyez sur Entrée pour fermer"
@@ -125,18 +130,31 @@ function Chemin-Complet([string]$chemin) {
     return [System.IO.Path]::GetFullPath($chemin).TrimEnd('\')
 }
 
+# Dossier réseau (\\NAS\…) ou lecteur réseau (S:\…, vu par la session Windows mais pas par Docker Desktop).
+function Est-Reseau([string]$chemin) {
+    if ($chemin.StartsWith('\\') -or $chemin.StartsWith('//')) { return $true }
+    try {
+        $racine = [System.IO.Path]::GetPathRoot($chemin)
+        if ($racine -match '^[A-Za-z]:') {
+            return (New-Object System.IO.DriveInfo ($racine.Substring(0, 1))).DriveType -eq [System.IO.DriveType]::Network
+        }
+    } catch { }
+    return $false
+}
+
 # Fichiers sur le PC : le service worker lit les sauvegardes dans le dossier que Docker monte (ligne
 # DOSSIER_SAUVEGARDES_PC de .env, sinon donnees\sauvegardes). Le dossier indiqué devient ce dossier ; un
-# dossier réseau, que Docker ne peut pas monter, ou un chemin avec apostrophe, que Docker ne sait pas lire
-# dans .env, est d'abord recopié dans donnees\sauvegardes.
+# dossier ou un lecteur réseau, que Docker ne peut pas monter, ou un chemin avec apostrophe, que Docker ne
+# sait pas lire dans .env, est d'abord recopié dans donnees\sauvegardes.
 function Utiliser-Dossier-Sauvegardes([string]$dossier) {
     if (-not (Test-Path -LiteralPath (Join-Path $dossier "base"))) {
         Write-Host "Sous-dossier base introuvable dans $dossier." -ForegroundColor Yellow
         return
     }
     $dossierLocal = Join-Path $PSScriptRoot "donnees\sauvegardes"
-    if ($dossier.StartsWith('\\') -or ($dossier.Contains("'") -and (Chemin-Complet $dossier) -ne (Chemin-Complet $dossierLocal))) {
-        Write-Host "Copie des sauvegardes de $dossier dans $dossierLocal (Docker ne peut pas lire un dossier réseau ni un chemin avec apostrophe)…"
+    # Chemin complet (écrit tel quel dans .env) : l'apostrophe peut venir du dossier de l'application.
+    if ((Est-Reseau $dossier) -or ((Chemin-Complet $dossier).Contains("'") -and (Chemin-Complet $dossier) -ne (Chemin-Complet $dossierLocal))) {
+        Write-Host "Copie des sauvegardes de $dossier dans $dossierLocal (Docker ne peut pas lire un dossier ou un lecteur réseau, ni un chemin avec apostrophe)…"
         robocopy $dossier $dossierLocal /E /XO /R:2 /W:5 /NP /NFL /NDL /NJH | Out-Host
         if ($LASTEXITCODE -ge 8) { Arreter "La copie des sauvegardes a échoué (code robocopy $LASTEXITCODE)." }
         # Le .env doit être celui des sauvegardes indiquées, même plus ancien (/XO garderait celui de la sauvegarde
@@ -153,18 +171,22 @@ function Utiliser-Dossier-Sauvegardes([string]$dossier) {
     }
     $monte = (Lire-Variable $script:contenuEnv "DOSSIER_SAUVEGARDES_PC").Trim('"')
     if (-not $monte) { $monte = $dossierLocal }
-    if ((Chemin-Complet $monte) -eq (Chemin-Complet $dossier)) { return }
-    $valeur = "'" + $dossier + "'"
-    if ((Chemin-Complet $dossier) -eq (Chemin-Complet $dossierLocal)) { $valeur = "" }
+    # Un chemin relatif sans « .\ » (donnees\sauvegardes) serait pris par Docker pour un nom de volume : réécrit.
+    $lisible = [System.IO.Path]::IsPathRooted($monte) -or $monte.StartsWith('.')
+    if ($lisible -and (Chemin-Complet $monte) -eq (Chemin-Complet $dossier)) { return }
+    # Chemin complet : un chemin relatif tapé sans « .\ » n'est pas lisible par Docker.
+    $complet = Chemin-Complet $dossier
+    $valeur = "'" + $complet + "'"
+    if ($complet -eq (Chemin-Complet $dossierLocal)) { $valeur = "" }
     $script:contenuEnv = Definir-Variable $script:contenuEnv "DOSSIER_SAUVEGARDES_PC" $valeur
     Enregistrer-Env $script:contenuEnv
     if (-not $script:noteEnv) { $script:noteEnv = " (.env a été mis à jour)" }
-    Write-Host "Dossier des sauvegardes de l’application désormais : $dossier (ligne DOSSIER_SAUVEGARDES_PC de .env, au lieu de $monte)." -ForegroundColor Cyan
+    Write-Host "Dossier des sauvegardes de l’application désormais : $complet (ligne DOSSIER_SAUVEGARDES_PC de .env, au lieu de $monte)." -ForegroundColor Cyan
 }
 
 # Fin des messages d'abandon : .env a pu être repris de la sauvegarde ou modifié avant la confirmation.
 function Abandon {
-    if ($script:noteEnv) { return "la base n’a pas été modifiée$($script:noteEnv)." }
+    if ($script:noteEnv -or $script:servicesSupprimes) { return "la base n’a pas été modifiée$($script:noteEnv)." }
     return "rien n’a été modifié."
 }
 
@@ -235,7 +257,7 @@ $serveur = (Lire-Variable $contenuEnv "COMPOSE_FILE") -match 'serveur'
 if ($dossier -and -not $serveur) { Utiliser-Dossier-Sauvegardes $dossier }
 Deconnecter-Partage
 if ($serveur) {
-    # L'adresse du serveur peut avoir changé depuis la sauvegarde : les volumes du serveur sont alors recréés.
+    # L'adresse du serveur peut avoir changé depuis la sauvegarde : elle est mise à jour dans .env.
     $nomServeur = ((Lire-Variable $contenuEnv "SERVEUR_CHEMIN_AFFICHE").TrimStart('\') -split '\\')[0]
     $adresse = Lire-Variable $contenuEnv "SERVEUR_ADRESSE"
     $nouvelle = ""
@@ -245,11 +267,33 @@ if ($serveur) {
         $contenuEnv = Definir-Variable $contenuEnv "SERVEUR_ADRESSE" $nouvelle
         Enregistrer-Env $contenuEnv
         if (-not $noteEnv) { $noteEnv = " (.env a été mis à jour)" }
-        foreach ($nom in @("fichiers", "archives", "sauvegardes")) {
-            $volume = "application-ao_serveur_$nom"
-            $conteneurs = @(docker ps -aq --filter "volume=$volume")
-            if ($conteneurs.Count -gt 0) { docker rm -f $conteneurs | Out-Null }
-            docker volume rm $volume 2>&1 | Out-Null
+    }
+    # Les réglages d'un volume du serveur (adresse, compte, mot de passe) sont fixés à sa création : s'ils ne
+    # correspondent plus à .env (adresse ci-dessus, mot de passe corrigé dans .env…), le volume est recréé, comme
+    # par installer.ps1. Sinon Docker Compose demanderait s'il faut le recréer, sans que la question s'affiche,
+    # et le script resterait bloqué. Les fichiers du serveur ne sont pas touchés.
+    $configuration = docker compose config --format json 2>$null
+    if ($LASTEXITCODE -eq 0) {
+        try { $modele = (Texte-Sortie $configuration) | ConvertFrom-Json } catch { $modele = $null }
+        foreach ($nom in @("serveur_fichiers", "serveur_archives", "serveur_sauvegardes")) {
+            if (-not $modele -or -not $modele.volumes.$nom) { continue }
+            $attendu = $modele.volumes.$nom.driver_opts
+            $volume = "application-ao_$nom"
+            $actuel = docker volume inspect $volume --format "{{json .Options}}" 2>$null
+            if ($LASTEXITCODE -ne 0 -or -not (Texte-Sortie $actuel)) { continue }
+            $options = (Texte-Sortie $actuel) | ConvertFrom-Json
+            # -cne : un mot de passe qui ne change que par des majuscules ou minuscules doit aussi recréer le volume.
+            if ($options.o -cne "$($attendu.o)".Replace('$$', '$') -or $options.device -cne "$($attendu.device)".Replace('$$', '$')) {
+                Write-Host "Réglages du serveur modifiés : le volume $nom est recréé (les fichiers du serveur ne sont pas touchés)."
+                $conteneurs = @(docker ps -aq --filter "volume=$volume")
+                if ($conteneurs.Count -gt 0) {
+                    docker rm -f $conteneurs | Out-Null
+                    # Application arrêtée : les messages d'abandon disent comment la redémarrer (pas sur un nouveau
+                    # PC, où installer.ps1 ne doit être lancé qu'après la restauration).
+                    if (-not $nouveauPc) { $servicesSupprimes = $true }
+                }
+                docker volume rm $volume 2>&1 | Out-Null
+            }
         }
     }
 }
@@ -309,6 +353,11 @@ if ($copies.Count -eq 0) {
     $conseil = "Vérifiez que le dossier est accessible (message de Docker éventuel ci-dessus)."
     if ($serveur) {
         $conseil = "Vérifiez que le serveur est allumé et que le compte dédié (lignes SERVEUR_… de .env) a toujours accès au dossier (message de Docker éventuel ci-dessus)."
+        if ($nouveauPc) {
+            $conseil += "`nSi son mot de passe a changé : corrigez la ligne SERVEUR_MOT_DE_PASSE= de .env (entre apostrophes droites : SERVEUR_MOT_DE_PASSE='…'), puis relancez ce script."
+        } else {
+            $conseil += "`nSi son mot de passe a changé : relancez d’abord installer.ps1, qui le redemande, puis relancez ce script."
+        }
     }
     if ($nouveauPc) {
         # Nouveau PC : installer.ps1 créerait une base vide, dont la sauvegarde de contrôle serait ensuite la copie la plus récente.
@@ -373,6 +422,8 @@ if ((Read-Host "Tapez OUI pour confirmer") -ne "OUI") { Arreter "Restauration an
 Ecrire-Etape "Arrêt de l’application et démarrage de la base de données"
 $conteneurs = @(docker ps -q --filter "label=com.docker.compose.project=application-ao")
 if ($conteneurs.Count -gt 0) { docker stop $conteneurs | Out-Null }
+# Désormais, l'application est arrêtée pour la restauration : les messages qui suivent disent quoi faire.
+$servicesSupprimes = $false
 docker compose up -d base redis
 if ($LASTEXITCODE -ne 0) { Arreter "La base de données ne démarre pas. Consultez : docker compose logs base" }
 $pret = $false

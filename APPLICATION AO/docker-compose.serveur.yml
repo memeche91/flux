@@ -14,8 +14,10 @@
 #   SERVEUR_CHEMIN_AFFICHE  chemin affiché dans l'application, par exemple \\SERVEUR\DAplomb
 #
 # Docker monte ces volumes au démarrage des services : le serveur doit être allumé et joignable.
-# Leurs réglages sont fixés à leur création : après un changement de mot de passe ou d'adresse,
-# relancez installer.ps1, qui les recrée (les fichiers du serveur ne sont pas touchés).
+# Leurs réglages sont fixés à leur création : après un changement de mot de passe ou d'adresse (toute
+# modification des lignes SERVEUR_ de .env), relancez installer.ps1 avant tout « docker compose up -d » :
+# il les recrée (les fichiers du serveur ne sont pas touchés). Sinon Docker demande s'il faut les
+# recréer, et la tâche planifiée « D’Aplomb - démarrage », qui ne peut pas répondre, reste bloquée.
 #
 # Le service « ged » (fichiers internet et tunnel) voit les volumes du serveur grâce aux lignes
 # VOLUME_FICHIERS et VOLUME_ARCHIVES de .env. Seul le worker monte « sauvegardes ».

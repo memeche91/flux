@@ -291,6 +291,25 @@ function Chemin-Pc([string]$valeur, [string]$defaut) {
     return (Join-Path $PSScriptRoot ($valeur -replace '^\.\\', ''))
 }
 
+# Chemin à écrire dans .env pour Docker : un chemin relatif sans « .\ » (donnees\sauvegardes) serait pris pour un
+# nom de volume, et Docker refuserait tout le projet (plus rien ne démarrerait). Il devient .\donnees\sauvegardes.
+function Chemin-Docker([string]$valeur) {
+    if ($valeur -and $valeur -notmatch '^([A-Za-z]:|[\\/.~"])' -and -not $valeur.Contains("'")) { return ".\$valeur" }
+    return $valeur
+}
+
+# Dossier réseau (\\NAS\…) ou lecteur réseau (S:\…, vu par la session Windows mais pas par Docker Desktop).
+function Est-Reseau([string]$chemin) {
+    if ($chemin.StartsWith('\\') -or $chemin.StartsWith('//')) { return $true }
+    try {
+        $racine = [System.IO.Path]::GetPathRoot($chemin)
+        if ($racine -match '^[A-Za-z]:') {
+            return (New-Object System.IO.DriveInfo ($racine.Substring(0, 1))).DriveType -eq [System.IO.DriveType]::Network
+        }
+    } catch { }
+    return $false
+}
+
 function Contient-Fichiers([string]$dossier) {
     if (-not (Test-Path -LiteralPath $dossier)) { return $false }
     return [bool](Get-ChildItem -LiteralPath $dossier -Recurse -File -Force -ErrorAction SilentlyContinue | Select-Object -First 1)
@@ -613,10 +632,25 @@ if ($modeServeur) {
         $sauvegardesPc = $sauvegardesPc.Trim('"')
         $contenuEnv = Definir-Variable $contenuEnv "DOSSIER_SAUVEGARDES_PC" (Valeur-Env $sauvegardesPc)
     }
-    # Docker Desktop ne sait pas monter un dossier réseau (\\NAS\Sauvegardes) pour les sauvegardes.
-    if ($sauvegardesPc.StartsWith('\\') -or $sauvegardesPc.StartsWith('//')) {
-        Arreter ("DOSSIER_SAUVEGARDES_PC ne peut pas être un dossier réseau ($sauvegardesPc) : choisissez le stockage sur le`n" +
-            "serveur (videz la ligne STOCKAGE= du fichier .env), ou un disque local ou externe (E:\…), puis relancez ce script.")
+    if ((Chemin-Docker $sauvegardesPc) -ne $sauvegardesPc) {
+        $sauvegardesPc = Chemin-Docker $sauvegardesPc
+        $contenuEnv = Definir-Variable $contenuEnv "DOSSIER_SAUVEGARDES_PC" (Valeur-Env $sauvegardesPc)
+    }
+    # Docker Desktop ne sait pas monter un dossier réseau (\\NAS\Sauvegardes) ni un lecteur réseau (S:\…).
+    if ($sauvegardesPc -and (Est-Reseau (Chemin-Pc $sauvegardesPc "donnees\sauvegardes"))) {
+        Arreter ("DOSSIER_SAUVEGARDES_PC ($sauvegardesPc) ne peut pas être un dossier réseau (\\NAS\…) ni un lecteur réseau (S:\…) :`n" +
+            "Docker ne sait pas l’ouvrir. Choisissez le stockage sur le serveur (videz la ligne STOCKAGE= du fichier .env),`n" +
+            "ou un disque local ou externe (E:\…), puis relancez ce script.")
+    }
+    $archivesPc = Lire-Variable $contenuEnv "DOSSIER_ARCHIVES_PC"
+    if ((Chemin-Docker $archivesPc) -ne $archivesPc) {
+        $archivesPc = Chemin-Docker $archivesPc
+        $contenuEnv = Definir-Variable $contenuEnv "DOSSIER_ARCHIVES_PC" (Valeur-Env $archivesPc)
+    }
+    if ($archivesPc -and (Est-Reseau (Chemin-Pc $archivesPc.Trim('"') "donnees\archives"))) {
+        Arreter ("DOSSIER_ARCHIVES_PC ($archivesPc) ne peut pas être un dossier réseau (\\NAS\…) ni un lecteur réseau (S:\…) :`n" +
+            "Docker ne sait pas l’ouvrir. Choisissez le stockage sur le serveur (videz la ligne STOCKAGE= du fichier .env),`n" +
+            "ou un disque local ou externe (D:\…), puis relancez ce script.")
     }
     if ($serveurAvant) {
         # Retour du serveur au PC : les fichiers du serveur sont d'abord recopiés sur ce PC.
@@ -698,6 +732,9 @@ if ($LASTEXITCODE -ne 0) {
 # session, Wi-Fi lent, serveur qui redémarre), les services ne démarrent pas et Docker ne réessaie pas.
 # Une tâche planifiée relance « docker compose up -d » à chaque ouverture de session, jusqu'à ce que le
 # serveur réponde (un essai par minute pendant 20 minutes). Sans droits d'administrateur.
+# Elle ne vérifie pas les réglages des volumes du serveur (comparaison plus haut) : toute modification des
+# lignes SERVEUR_ de .env passe par ce script (README, .env.example), sinon Docker Compose demanderait, dans
+# sa fenêtre cachée, s'il faut recréer ces volumes.
 $tacheDemarrage = "D’Aplomb - démarrage"
 if ($modeServeur) {
     try {

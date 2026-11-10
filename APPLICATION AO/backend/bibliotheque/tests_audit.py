@@ -50,12 +50,14 @@ def _xlsx(lignes: int = 2) -> bytes:
 
 
 def xlsx_chaines_partagees(
-    lignes: list[list[str]], partie: str = "xl/sharedStrings.xml", *, dimension: str = "", types_en_plus: str = "", liens_en_plus: str = ""
+    lignes: list[list[str]], partie: str = "xl/sharedStrings.xml", *, dimension: str = "", types_en_plus: str = "", liens_en_plus: str = "",
+    feuilles_en_plus: str = "", classeur_en_plus: str = "",
 ) -> bytes:
     """Classeur avec une table des chaînes partagées, comme Excel l'écrit (openpyxl écrit le texte en ligne).
 
     dimension : zone déclarée par la feuille (« A1:XFD2000 ») ; types_en_plus et liens_en_plus : éléments
-    ajoutés à [Content_Types].xml et aux liens du classeur.
+    ajoutés à [Content_Types].xml et aux liens du classeur ; feuilles_en_plus et classeur_en_plus : éléments
+    ajoutés à <sheets> et au classeur, après <sheets>.
     """
     chaines: list[str] = []
     rangees = []
@@ -83,7 +85,8 @@ def xlsx_chaines_partagees(
             f'<Relationship Id="rId1" Type="{relations}/officeDocument" Target="xl/workbook.xml"/></Relationships>'
         ))
         archive.writestr("xl/workbook.xml", (
-            f'<workbook xmlns="{principal}" xmlns:r="{relations}"><sheets><sheet name="DPGF" sheetId="1" r:id="rId1"/></sheets></workbook>'
+            f'<workbook xmlns="{principal}" xmlns:r="{relations}"><sheets><sheet name="DPGF" sheetId="1" r:id="rId1"/>{feuilles_en_plus}</sheets>'
+            f"{classeur_en_plus}</workbook>"
         ))
         archive.writestr("xl/_rels/workbook.xml.rels", (
             '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
@@ -273,6 +276,91 @@ class LectureAuditTests(SimpleTestCase):
             archive.writestr("xl/feuille.bin", "<worksheet/>" + " " * 60_000)
         with mock.patch.object(lecture, "FEUILLES_MAX", 50_000):
             self.assertTrue(decompression_excessive(flux, ".xlsx"))
+
+    def test_xlsx_parties_designees_par_un_lien_externe_ou_vide_comptees(self):
+        # Lien « TargetMode="External" » : openpyxl ne résout pas la cible, mais lit l'entrée de ce nom si
+        # l'archive en contient une (lien externe lu en entier, feuille lue au fil de l'eau). Cible vide :
+        # openpyxl lit l'entrée « xl ».
+        from openpyxl import load_workbook
+
+        relations = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+        externe = io.BytesIO(xlsx_chaines_partagees(
+            [["Châssis aluminium", "u"]],
+            classeur_en_plus='<externalReferences><externalReference r:id="rId9"/></externalReferences>',
+            liens_en_plus=f'<Relationship Id="rId9" Type="{relations}/externalLink" Target="xl/ext.bin" TargetMode="External"/>',
+        ))
+        with zipfile.ZipFile(externe, "a", zipfile.ZIP_DEFLATED) as archive:
+            archive.writestr("xl/ext.bin", "<externalLink/>" + " " * 1_000_000)
+        self.assertFalse(decompression_excessive(externe, ".xlsx"))
+        with mock.patch.object(lecture, "XML_LU_EN_ENTIER_MAX", 200_000):
+            self.assertTrue(decompression_excessive(externe, ".xlsx"))
+
+        for cible, mode, entree in (("xl/worksheets/s.bin", ' TargetMode="External"', "xl/worksheets/s.bin"), ("", "", "xl")):
+            feuille = io.BytesIO(xlsx_chaines_partagees(
+                [["Châssis aluminium", "u"]],
+                feuilles_en_plus='<sheet name="Annexe" sheetId="2" r:id="rId9"/>',
+                liens_en_plus=f'<Relationship Id="rId9" Type="{relations}/worksheet" Target="{cible}"{mode}/>',
+            ))
+            with zipfile.ZipFile(feuille, "a", zipfile.ZIP_DEFLATED) as archive:
+                archive.writestr(entree, "<worksheet/>" + " " * 60_000)
+            self.assertEqual(load_workbook(feuille, read_only=True).sheetnames, ["DPGF", "Annexe"])  # feuille lue
+            self.assertFalse(decompression_excessive(feuille, ".xlsx"))
+            with mock.patch.object(lecture, "FEUILLES_MAX", 50_000):
+                self.assertTrue(decompression_excessive(feuille, ".xlsx"))
+
+    def test_xlsx_feuille_citee_plusieurs_fois_comptee_a_chaque_citation(self):
+        # openpyxl analyse une feuille autant de fois que <sheets> la cite : tout enfant de <sheets>, par son
+        # r:id ou son id, quel que soit le type du lien (« drawing » : partie comptée parmi les lues en entier).
+        from openpyxl import load_workbook
+
+        relations = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+
+        def classeur(type_lien: str, citations: str) -> io.BytesIO:
+            flux = io.BytesIO(xlsx_chaines_partagees(
+                [["Châssis aluminium", "u"]],
+                feuilles_en_plus=citations,
+                liens_en_plus=f'<Relationship Id="rId9" Type="{relations}/{type_lien}" Target="feuille.xml"/>',
+            ))
+            with zipfile.ZipFile(flux, "a", zipfile.ZIP_DEFLATED) as archive:
+                archive.writestr("xl/feuille.xml", "<worksheet/>" + " " * 40_000)
+            return flux
+
+        une = '<sheet name="Annexe" sheetId="2" r:id="rId9"/>'
+        trois = une + '<sheet name="Annexe 2" sheetId="3" r:id="rId9"/><autre name="Annexe 3" sheetId="4" id="rId9"/>'
+        for type_lien in ("worksheet", "drawing"):
+            self.assertEqual(len(load_workbook(classeur(type_lien, trois), read_only=True).worksheets), 4)
+        with mock.patch.object(lecture, "FEUILLES_MAX", 100_000), mock.patch.object(lecture, "XML_LU_EN_ENTIER_MAX", 100_000):
+            for type_lien in ("worksheet", "drawing"):
+                self.assertFalse(decompression_excessive(classeur(type_lien, une), ".xlsx"))
+                self.assertTrue(decompression_excessive(classeur(type_lien, trois), ".xlsx"))
+            with mock.patch.object(lecture, "PARTIES_SUIVIES_MAX", 0):  # liens non suivis : tout compté, citations comprises
+                self.assertFalse(decompression_excessive(classeur("worksheet", une), ".xlsx"))
+                self.assertTrue(decompression_excessive(classeur("worksheet", trois), ".xlsx"))
+
+    def test_xlsx_citations_impossibles_a_etablir_refuse(self):
+        # Liens du classeur dans un codage multi-octets, ou DTD (dont les entités démultiplient le texte) :
+        # illisibles pour la vérification, mais lus par openpyxl (lxml). Le fichier est refusé.
+        from openpyxl import load_workbook
+
+        source = zipfile.ZipFile(io.BytesIO(xlsx_chaines_partagees([["Châssis aluminium", "u"]])))
+        dtd = b'<!DOCTYPE x [<!ENTITY a "Lot 08">]>'
+        for partie, entete in (
+            ("xl/_rels/workbook.xml.rels", b'<?xml version="1.0" encoding="Shift_JIS"?>'),
+            ("xl/_rels/workbook.xml.rels", dtd),
+            ("xl/workbook.xml", dtd),
+        ):
+            flux = io.BytesIO()
+            with zipfile.ZipFile(flux, "w", zipfile.ZIP_DEFLATED) as archive:
+                for nom in source.namelist():
+                    archive.writestr(nom, (entete if nom == partie else b"") + source.read(nom))
+            self.assertEqual(load_workbook(flux, read_only=True).sheetnames, ["DPGF"])
+            (self.dossier / "dpgf.xlsx").write_bytes(flux.getvalue())
+            with mock.patch.object(lecture, "_lire_xlsx") as lire, self.assertRaisesMessage(ErreurLecture, "illisible"):
+                lire_document(self.dossier / "dpgf.xlsx", self.dossier)
+            lire.assert_not_called()
+        # Liens démesurés : refusé comme trop volumineux.
+        with mock.patch.object(lecture, "XML_COURT_MAX", 100):
+            self.assertTrue(decompression_excessive(io.BytesIO(xlsx_chaines_partagees([["Châssis aluminium", "u"]])), ".xlsx"))
 
     def test_xlsx_largeur_des_lignes_bornee(self):
         # Dimension déclarée sur 16 384 colonnes, une cellule par ligne : openpyxl compléterait chaque ligne.

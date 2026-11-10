@@ -65,7 +65,7 @@ L'installateur :
 
 - **Fichiers importés** : dossier `donnees\fichiers`, classés par type, puis par lot (par exemple `bibliotheque\CCTP\08\...`). Avec le stockage sur le serveur de l’agence : sous-dossier `fichiers` du dossier partagé (par exemple `\\SERVEUR\DAplomb\fichiers`).
 - **Base de données** : volume Docker `application-ao_base_donnees`, toujours sur ce PC (invisible dans l’Explorateur) ; sa copie vérifiée est faite chaque nuit dans le dossier des sauvegardes.
-- **Archives de fin de chantier** : dossier `donnees\archives` (ou le dossier choisi dans `.env`, ligne `DOSSIER_ARCHIVES_PC`, par exemple `D:\Archives chantiers`) ; avec le serveur de l’agence : `\\SERVEUR\DAplomb\archives`.
+- **Archives de fin de chantier** : dossier `donnees\archives` (ou le dossier choisi dans `.env`, ligne `DOSSIER_ARCHIVES_PC`, par exemple `D:\Archives chantiers`, sur un disque du PC : pas de dossier ni de lecteur réseau) ; avec le serveur de l’agence : `\\SERVEUR\DAplomb\archives`.
 - **Sauvegardes de chaque nuit** : dossier `donnees\sauvegardes` (ou ligne `DOSSIER_SAUVEGARDES_PC` de `.env`) ; avec le serveur de l’agence : `\\SERVEUR\DAplomb\sauvegardes`.
 - **Journal des connexions à la GED depuis Internet** : dossier `donnees\journaux`.
 
@@ -116,7 +116,7 @@ La base de données reste toujours sur le PC : PostgreSQL ne fonctionne pas de f
 
 À savoir :
 - le serveur doit être joignable quand l’application démarre (Docker ouvre le dossier partagé à ce moment-là). S’il ne l’est pas encore à l’ouverture de la session Windows, l’application redémarre seule quand le serveur revient : la tâche planifiée « D’Aplomb - démarrage », créée par `installer.ps1`, relance `docker compose up -d` chaque minute pendant 20 minutes. Au-delà, relancez `installer.ps1`, ou `docker compose up -d`, une fois le serveur revenu ;
-- mot de passe du compte changé, serveur renuméroté : relancez `installer.ps1`. Il retrouve l’adresse du serveur, vérifie l’accès et, s’il échoue, propose de saisir à nouveau le dossier et le compte. Les fichiers du serveur ne sont jamais effacés par cette opération ;
+- mot de passe du compte changé, serveur renuméroté : relancez `installer.ps1`. Il retrouve l’adresse du serveur, vérifie l’accès et, s’il échoue, propose de saisir à nouveau le dossier et le compte. Les fichiers du serveur ne sont jamais effacés par cette opération. Après toute modification à la main des lignes `SERVEUR_…` de `.env`, relancez aussi `installer.ps1` avant tout `docker compose up -d` : il met à jour l’accès de Docker au serveur. Sinon Docker demande s’il faut « recréer » les volumes du serveur, et la tâche planifiée « D’Aplomb - démarrage », qui ne peut pas répondre, attend sans démarrer l’application ;
 - nouveau dossier partagé : copiez-y d’abord les sous-dossiers `fichiers` et `archives` de l’ancien, puis videz la ligne `STOCKAGE=` de `.env` et relancez `installer.ps1` ;
 - revenir aux fichiers sur le PC : mettez `STOCKAGE=pc` dans `.env`, puis relancez `installer.ps1`. Les fichiers du serveur sont recopiés sur le PC avant le redémarrage ; le mot de passe du compte dédié est effacé de `.env` et de Docker, et la tâche planifiée est supprimée.
 
@@ -133,12 +133,12 @@ En cas d’échec, les administrateurs (comptes administrateur actifs avec une a
 
 - Le PC doit être allumé et la session Windows ouverte (Docker Desktop) à l’heure prévue. S’il était éteint, la sauvegarde est faite à son démarrage suivant.
 - Sauvegarder tout de suite : depuis l’application (administrateur), ou `docker compose exec worker python manage.py sauvegarder`. `installer.ps1` en fait une à la fin de chaque passage et affiche le résultat.
-- Fichiers sur le PC : placez les sauvegardes sur un autre disque, toujours branché (ligne `DOSSIER_SAUVEGARDES_PC` de `.env`, par exemple `DOSSIER_SAUVEGARDES_PC='E:\Sauvegardes DAplomb'`, chemin sans apostrophe), puis relancez `installer.ps1`. Sinon, une panne du disque emporterait l’application **et** ses sauvegardes. Un dossier réseau n’est pas accepté (Docker ne sait pas l’ouvrir) : choisissez plutôt le stockage sur le serveur de l’agence.
+- Fichiers sur le PC : placez les sauvegardes sur un autre disque, toujours branché (ligne `DOSSIER_SAUVEGARDES_PC` de `.env`, par exemple `DOSSIER_SAUVEGARDES_PC='E:\Sauvegardes DAplomb'`, chemin sans apostrophe), puis relancez `installer.ps1`. Sinon, une panne du disque emporterait l’application **et** ses sauvegardes. Un dossier réseau (`\\NAS\…`) ou un lecteur réseau (`S:\…`) n’est pas accepté (Docker ne sait pas l’ouvrir) : choisissez plutôt le stockage sur le serveur de l’agence.
 
 ### Restaurer une sauvegarde
 
 Clic droit sur **`restaurer.ps1`** › **Exécuter avec PowerShell** (ou `powershell -ExecutionPolicy Bypass -File .\restaurer.ps1`). Le script :
-1. reprend le fichier `.env` enregistré avec les sauvegardes s’il est absent du dossier (nouveau PC). Fichiers sur le PC : le dossier indiqué devient le dossier des sauvegardes de l’application (ligne `DOSSIER_SAUVEGARDES_PC`) ; un dossier réseau, ou un chemin qui contient une apostrophe (`'`), est d’abord recopié dans `donnees\sauvegardes` ;
+1. reprend le fichier `.env` enregistré avec les sauvegardes s’il est absent du dossier (nouveau PC). Fichiers sur le PC : le dossier indiqué devient le dossier des sauvegardes de l’application (ligne `DOSSIER_SAUVEGARDES_PC`) ; un dossier ou un lecteur réseau, ou un chemin qui contient une apostrophe (`'`), est d’abord recopié dans `donnees\sauvegardes` ;
 2. liste les sauvegardes et propose la plus récente (option `-Sauvegarde 2026-11-08_0230.dump` pour en choisir une sans la liste). Fichiers sur le PC, `.env` déjà présent : il indique le dossier où il lit les sauvegardes et permet d’en choisir un autre (disque externe, `installer.ps1` déjà lancé sur un nouveau PC) ; s’il n’en trouve aucune (disque externe qui a changé de lettre, sauvegardes recopiées ailleurs), il demande le dossier qui les contient ;
 3. vérifie que la clé des codes d’accès de la GED est bien celle de la sauvegarde, et propose de la reprendre sinon ;
 4. si les fichiers sont sur le PC, propose de les recopier depuis la sauvegarde (rien n’est effacé) ;

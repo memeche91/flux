@@ -46,7 +46,8 @@ PARTIES_LUES_PAR_NOM = {
 }
 XML_COURT_MAX = 5 * 1024 * 1024  # [Content_Types].xml et liens (.rels) lus pour repérer les feuilles
 # Feuilles lues au fil de l'eau : openpyxl garde pourtant en mémoire chaque élément XML parcouru (environ
-# 90 octets pour « <x/> », 4 octets du fichier). Au pire, 100 Mo de feuilles prennent 2,5 Go.
+# 90 octets pour « <x/> », 4 octets du fichier). Au pire, 100 Mo de feuilles prennent 2,5 Go. Une feuille
+# citée plusieurs fois par le classeur est analysée, et comptée, à chaque citation.
 FEUILLES_MAX = 100 * 1024 * 1024
 LIGNES_PAR_CLASSEUR_MAX = 200_000  # lignes lues, toutes feuilles confondues
 COLONNES_MAX = 256  # une dimension déclarée « A1:XFD… » ferait compléter chaque ligne à 16 384 cellules
@@ -142,8 +143,8 @@ def decompression_excessive(source, extension: str) -> bool:
     """Bombe zip : l'archive, ou ses parties lues en entier, dépassent-elles la limite une fois décompressées ?
 
     Seule la taille annoncée par l'archive est lue (rien n'est décompressé, sauf [Content_Types].xml et les
-    liens d'un classeur, de petite taille) : une taille mensongère est sans danger, zipfile s'arrête à cette
-    taille puis signale une archive endommagée.
+    liens d'un classeur, de petite taille, et le classeur lui-même, lu au fil de l'eau) : une taille mensongère
+    est sans danger, zipfile s'arrête à cette taille puis signale une archive endommagée.
     source : chemin ou flux binaire d'un .docx, .xlsx ou .xlsm.
     """
     with zipfile.ZipFile(source) as archive:
@@ -153,13 +154,18 @@ def decompression_excessive(source, extension: str) -> bool:
         if extension.lower() == ".docx":
             return _xml_docx(archive) > XML_LU_EN_ENTIER_MAX
         lues, feuilles = _parties_xlsx(archive)
+        citations = _citations_feuilles(archive)
+        if citations is None:
+            return True  # citations inconnues : une feuille citée mille fois passerait inaperçue
         en_entier = en_flux = 0
         for info in entrees:
             nom = info.filename.lower()
+            # openpyxl analyse une partie autant de fois que le classeur la cite comme feuille.
+            taille = info.file_size * max(1, citations[nom])
             if nom in feuilles:
-                en_flux += info.file_size
+                en_flux += taille
             elif nom in lues or nom.endswith((".xml", ".rels")):
-                en_entier += info.file_size
+                en_entier += taille
         return en_entier > XML_LU_EN_ENTIER_MAX or en_flux > FEUILLES_MAX
 
 
@@ -201,9 +207,9 @@ def _parties_xlsx(archive: zipfile.ZipFile) -> tuple[set[str], set[str]]:
 
     Lues en entier : le classeur et la table des chaînes (repérés par leur type dans [Content_Types].xml),
     les parties à nom fixe, et les parties désignées par les liens du classeur, de proche en proche
-    (feuilles de graphique, liens externes, dessins…), dont le nom est libre. Une feuille déclarée dans
-    [Content_Types].xml n'est pas comptée, sauf si elle est aussi lue en entier. Dans le doute
-    ([Content_Types].xml ou liens démesurés, illisibles), tout est compté. Noms en minuscules.
+    (feuilles de graphique, liens externes, dessins…, même par un lien « External »), dont le nom est libre.
+    Une feuille déclarée dans [Content_Types].xml n'est pas comptée, sauf si elle est aussi lue en entier.
+    Dans le doute ([Content_Types].xml ou liens démesurés, illisibles), tout est compté. Noms en minuscules.
     """
     tout = {i.filename.lower() for i in archive.infolist()}
     if sum(i.file_size for i in archive.infolist() if i.filename.lower().endswith(".rels")) > XML_LU_EN_ENTIER_MAX:
@@ -232,11 +238,9 @@ def _parties_xlsx(archive: zipfile.ZipFile) -> tuple[set[str], set[str]]:
             liens_lus.add(chemin_liens)
             liens = _xml_court(archive, chemin_liens)
             for lien in liens.iter() if liens is not None else ():
-                cible = lien.get("Target") or ""
-                if not lien.tag.endswith("Relationship") or not cible or lien.get("TargetMode") == "External":
+                cible = _cible_lien(lien, dossier)
+                if cible is None:
                     continue
-                # Chemin calculé comme openpyxl : relatif au dossier de la partie qui porte le lien.
-                cible = cible[1:] if cible.startswith("/") else posixpath.normpath(posixpath.join(dossier, cible))
                 if lien.get("Type") == LIEN_FEUILLE:
                     # Feuille de calcul lue au fil de l'eau, quel que soit le type déclaré : comptée comme feuille.
                     feuilles_liees.add(cible)
@@ -250,9 +254,103 @@ def _parties_xlsx(archive: zipfile.ZipFile) -> tuple[set[str], set[str]]:
     return lues, feuilles - lues
 
 
+def _cible_lien(lien, dossier: str) -> str | None:
+    """Entrée de l'archive désignée par un lien (élément d'un .rels), calculée comme openpyxl ; None sinon."""
+    cible = lien.get("Target")
+    if not lien.tag.endswith("Relationship") or cible is None:
+        return None
+    if lien.get("TargetMode") == "External":
+        # openpyxl ne résout pas la cible d'un lien « External », mais la lit telle quelle si l'archive contient
+        # une entrée de ce nom (liens externes, feuilles, dessins) : comptée comme les autres. Une vraie cible
+        # externe (adresse, fichier du réseau) ne correspond à aucune entrée : sans effet.
+        return cible
+    # Chemin relatif au dossier de la partie qui porte le lien. Une cible vide désigne ce dossier lui-même
+    # (« xl ») : openpyxl lit l'entrée de ce nom si elle existe.
+    return cible[1:] if cible.startswith("/") else posixpath.normpath(posixpath.join(dossier, cible))
+
+
+def _citations_feuilles(archive: zipfile.ZipFile) -> Counter | None:
+    """Nombre de fois que chaque partie est citée comme feuille par le classeur (noms en minuscules).
+
+    openpyxl analyse une feuille autant de fois que le classeur la cite (dimensions au chargement, puis
+    lignes) : une feuille sans ligne citée trente fois occupe le worker trente fois plus longtemps. Comme
+    openpyxl, tout enfant de <sheets> compte, quel que soit son nom : son r:id (ou id) désigne un lien du
+    classeur, quels que soient le type et le mode de ce lien. Tous les classeurs possibles (déclarés, et
+    xl/workbook.xml) sont lus, au fil de l'eau, en mémoire constante. Si les citations ne peuvent pas être
+    établies, le fichier n'est pas lu : None quand [Content_Types].xml, les liens d'un classeur ou les classeurs
+    sont démesurés, zipfile.BadZipFile quand ils sont illisibles.
+    """
+    import xml.parsers.expat
+
+    citations: Counter = Counter()
+    try:
+        types = _xml_court(archive, "[Content_Types].xml")
+        presentes = {info.filename for info in archive.infolist()}
+        classeurs = presentes & ({"xl/workbook.xml"} | {
+            (element.get("PartName") or "")[1:]
+            for element in (types.iter() if types is not None else ())
+            if element.tag.endswith("Override") and element.get("ContentType") in TYPES_CLASSEUR
+        })
+        if sum(archive.getinfo(classeur).file_size for classeur in classeurs) > XML_LU_EN_ENTIER_MAX:
+            return None
+        for classeur in classeurs:
+            dossier, nom = posixpath.split(classeur)
+            liens: dict[str, set[str]] = {}
+            arbre = _xml_court(archive, posixpath.join(dossier, "_rels", f"{nom}.rels"))
+            for lien in arbre.iter() if arbre is not None else ():
+                cible = _cible_lien(lien, dossier)
+                if cible is not None:
+                    liens.setdefault(lien.get("Id") or "", set()).add(cible.lower())
+            profondeur = 0
+            dans_sheets = False
+
+            def debut(balise, attributs, liens=liens):
+                nonlocal profondeur, dans_sheets
+                profondeur += 1
+                if profondeur == 2:
+                    dans_sheets = balise.rpartition(":")[2] == "sheets"
+                elif profondeur == 3 and dans_sheets:
+                    # Préfixes non résolus : tout attribut « id » compte (r:id, ou id seul, comme openpyxl).
+                    for ident in {valeur for cle, valeur in attributs.items() if cle.rpartition(":")[2] == "id"}:
+                        citations.update(liens.get(ident, ()))
+
+            def fin(_balise):
+                nonlocal profondeur
+                profondeur -= 1
+
+            analyseur = xml.parsers.expat.ParserCreate()
+            analyseur.StartDoctypeDeclHandler = _refuser_dtd
+            analyseur.StartElementHandler = debut
+            analyseur.EndElementHandler = fin
+            try:
+                with archive.open(classeur) as source:
+                    analyseur.ParseFile(source)
+            except (xml.parsers.expat.ExpatError, ValueError, NotImplementedError, RuntimeError) as erreur:
+                raise PartieIllisible(f"{classeur} illisible") from erreur
+    except PartieIllisible as erreur:
+        # Classeur abîmé, ou d'un codage qu'openpyxl seul saurait lire : refusé comme une archive endommagée.
+        raise zipfile.BadZipFile(str(erreur)) from erreur
+    except ValueError:  # [Content_Types].xml ou liens démesurés
+        return None
+    return citations
+
+
+class PartieIllisible(ValueError):
+    """Partie XML illisible (et non démesurée)."""
+
+
+def _refuser_dtd(*_):
+    # Aucun fichier Office ne contient de DTD : ses entités démultiplieraient le texte à analyser (jusqu'à
+    # 100 fois la taille de la partie, limite d'expat). Partie refusée comme illisible.
+    raise ValueError("DTD refusée")
+
+
 def _xml_court(archive: zipfile.ZipFile, nom: str):
     """Arbre XML d'une petite partie, None si elle est absente ; ValueError si elle est démesurée ou illisible."""
     import xml.etree.ElementTree as ET
+
+    class SansDtd(ET.TreeBuilder):
+        doctype = staticmethod(_refuser_dtd)
 
     try:
         info = archive.getinfo(nom)
@@ -261,9 +359,12 @@ def _xml_court(archive: zipfile.ZipFile, nom: str):
     if info.file_size > XML_COURT_MAX:
         raise ValueError(f"{nom} démesuré")
     try:
-        return ET.fromstring(archive.read(info))
-    except (ET.ParseError, zipfile.BadZipFile, NotImplementedError, RuntimeError) as erreur:
-        raise ValueError(f"{nom} illisible") from erreur
+        analyseur = ET.XMLParser(target=SansDtd())
+        analyseur.feed(archive.read(info))
+        return analyseur.close()
+    except (ET.ParseError, ValueError, zipfile.BadZipFile, NotImplementedError, RuntimeError) as erreur:
+        # ValueError : codage multi-octets (Shift_JIS…), que lit pourtant openpyxl (lxml).
+        raise PartieIllisible(f"{nom} illisible") from erreur
 
 
 # --- Conversion des anciens formats -----------------------------------------
