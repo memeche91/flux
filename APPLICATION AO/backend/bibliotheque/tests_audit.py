@@ -219,19 +219,31 @@ class LectureAuditTests(SimpleTestCase):
                     partie.write(b"</w:body></w:document>")
             return flux.getvalue()
 
-        for declaration in (
+        # Déclarations « leurres » placées après la vraie : python-docx ne lit que les enfants directs de <Types>
+        # de son espace de noms ; une déclaration d'un autre espace de noms, ou imbriquée, ne compte pas pour lui.
+        autre = "application/octet-stream"
+        leurres = [
+            "",
+            f'<x:Override xmlns:x="urn:leurre" PartName="/word/document.bin" ContentType="{autre}"/>',
+            f'<Leurre><Override PartName="/word/document.bin" ContentType="{autre}"/></Leurre>',
+            f'<x:Default xmlns:x="urn:leurre" Extension="bin" ContentType="{autre}"/>',
+            f'<Leurre><Default Extension="bin" ContentType="{autre}"/></Leurre>',
+        ]
+        for vraie in (
             f'<Override PartName="/word/document.bin" ContentType="{principal}"/>',
             f'<Default Extension="bin" ContentType="{principal}"/>',
         ):
-            from docx import Document
+            for leurre in leurres:
+                from docx import Document
 
-            texte = b"<w:p><w:r><w:t>Lot 08</w:t></w:r></w:p>"
-            self.assertEqual(Document(io.BytesIO(document(declaration, texte))).paragraphs[0].text, "Lot 08")  # lue en entier
-            contenu = document(declaration, b"<w:p/>" * (8 * 1024 * 1024 // 6))  # 8 Mo, environ 10 Ko compressés
-            self.assertLess(len(contenu), 100_000)
-            with mock.patch.object(lecture, "XML_LU_EN_ENTIER_MAX", 5 * 1024 * 1024):
-                self.assertTrue(decompression_excessive(io.BytesIO(contenu), ".docx"))
-            self.assertFalse(decompression_excessive(io.BytesIO(contenu), ".docx"))
+                declaration = vraie + leurre
+                texte = b"<w:p><w:r><w:t>Lot 08</w:t></w:r></w:p>"
+                self.assertEqual(Document(io.BytesIO(document(declaration, texte))).paragraphs[0].text, "Lot 08")  # lue en entier
+                contenu = document(declaration, b"<w:p/>" * (8 * 1024 * 1024 // 6))  # 8 Mo, environ 10 Ko compressés
+                self.assertLess(len(contenu), 100_000)
+                with mock.patch.object(lecture, "XML_LU_EN_ENTIER_MAX", 5 * 1024 * 1024):
+                    self.assertTrue(decompression_excessive(io.BytesIO(contenu), ".docx"), leurre)
+                self.assertFalse(decompression_excessive(io.BytesIO(contenu), ".docx"))
 
     def test_docx_heritage_de_styles_en_boucle_lu_sans_fin(self):
         # Style de titre « basé sur » lui-même, ou deux styles basés l'un sur l'autre : la recherche de la
@@ -277,6 +289,63 @@ class LectureAuditTests(SimpleTestCase):
             signal.alarm(0)
             self.assertEqual([(b.genre, b.numero, b.texte) for b in blocs],
                              [("titre", numeros[0], "Généralités"), ("titre", numeros[1], "Objet du marché")])
+
+    def _alarme(self, secondes: int):
+        import signal
+
+        def trop_long(*_):
+            raise AssertionError("lecture trop longue")
+
+        ancien = signal.signal(signal.SIGALRM, trop_long)
+        self.addCleanup(signal.signal, signal.SIGALRM, ancien)
+        self.addCleanup(signal.alarm, 0)
+        signal.alarm(secondes)
+
+    def test_docx_cellule_a_grid_span_demesure_lue_une_fois(self):
+        # w:gridSpan sans borne : _Row.cells de python-docx renvoyait la cellule 10**12 fois (mémoire sans fin).
+        from .tests_isolation import docx_cellule
+
+        chemin = self.dossier / "offre.docx"
+        chemin.write_bytes(docx_cellule(10**12))
+        self._alarme(20)
+        blocs = lire_document(chemin, self.dossier).blocs
+        self.assertEqual([(b.genre, b.texte or b.lignes) for b in blocs], [("texte", "Début"), ("tableau", [["Prix"]]), ("texte", "Fin")])
+
+    def test_docx_longue_colonne_fusionnee_lue_sans_recursion(self):
+        # Colonne fusionnée verticalement sur 2 000 rangées : _Row.cells remontait récursivement jusqu'à la cellule
+        # du haut pour chaque rangée (temps quadratique, RecursionError au-delà d'environ 1 000 rangées) et en
+        # recopiait le texte. Le texte n'est plus lu qu'une fois, dans la cellule du haut ; une cellule fusionnée
+        # horizontalement (gridSpan) ne donne qu'une valeur.
+        from docx import Document
+
+        w = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"'
+
+        def cellule(texte: str, proprietes: str = "") -> str:
+            return f"<w:tc><w:tcPr>{proprietes}</w:tcPr><w:p><w:r><w:t>{texte}</w:t></w:r></w:p></w:tc>"
+
+        rangees = [
+            "<w:tr>" + cellule("Lot 08 – Menuiseries", '<w:vMerge w:val="restart"/>') + cellule("Article 0") + cellule("u") + "</w:tr>"
+        ] + [
+            "<w:tr>" + cellule("", "<w:vMerge/>") + cellule(f"Article {n}") + cellule("u") + "</w:tr>" for n in range(1, 1999)
+        ] + ["<w:tr>" + cellule("", '<w:vMerge w:val="continue"/>') + cellule("Total", '<w:gridSpan w:val="2"/>') + "</w:tr>"]
+        corps = (
+            f'<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document {w}><w:body><w:tbl>'
+            '<w:tblGrid><w:gridCol/><w:gridCol/><w:gridCol/></w:tblGrid>' + "".join(rangees) + "</w:tbl></w:body></w:document>"
+        )
+        gabarit = io.BytesIO()
+        Document().save(gabarit)
+        chemin = self.dossier / "cctp.docx"
+        with zipfile.ZipFile(gabarit) as source, zipfile.ZipFile(chemin, "w", zipfile.ZIP_DEFLATED) as cible:
+            for info in source.infolist():
+                cible.writestr(info.filename, corps.encode() if info.filename == "word/document.xml" else source.read(info))
+        self._alarme(20)
+        debut = __import__("time").monotonic()
+        lignes = lire_document(chemin, self.dossier).tableaux[0].lignes
+        self.assertLess(__import__("time").monotonic() - debut, 5)
+        self.assertEqual(len(lignes), 2000)
+        self.assertEqual(lignes[:2], [["Lot 08 – Menuiseries", "Article 0", "u"], ["", "Article 1", "u"]])
+        self.assertEqual(lignes[-1], ["", "Total"])
+        self.assertEqual(sum(valeur == "Lot 08 – Menuiseries" for ligne in lignes for valeur in ligne), 1)
 
     def test_docx_styles_resolus_une_fois_par_document(self):
         # python-docx parcourt tous les styles à chaque Paragraph.style : 85 s pour 2 000 styles et 3 000
@@ -427,6 +496,55 @@ class LectureAuditTests(SimpleTestCase):
             with mock.patch.object(lecture, "FEUILLES_MAX", 50_000):
                 self.assertTrue(decompression_excessive(feuille, ".xlsx"))
 
+    def test_xlsx_lien_ecrit_sous_une_autre_balise_compte(self):
+        # openpyxl lit chaque enfant de <Relationships> comme un lien, quelle que soit sa balise : une feuille
+        # « .bin » désignée par <R …>, sans déclaration dans [Content_Types].xml, est bien lue. Elle doit être
+        # comptée, à chaque citation.
+        import re
+
+        from openpyxl import Workbook
+
+        classeur = Workbook()
+        classeur.active.title = "F"
+        classeur.active.append(["Désignation", "PU"])
+        gabarit = io.BytesIO()
+        classeur.save(gabarit)
+        lignes = "".join(f'<row r="{n}"><c r="A{n}" t="inlineStr"><is><t>ligne {n}</t></is></c></row>' for n in range(1, 5001))
+        with zipfile.ZipFile(gabarit) as source:
+            feuille = re.sub(r"<sheetData>.*</sheetData>|<sheetData/>", f"<sheetData>{lignes}</sheetData>",
+                             re.sub(r"<dimension[^>]*/>", "", source.read("xl/worksheets/sheet1.xml").decode()), flags=re.S)
+
+        def fabriquer(balise: str, citations: int) -> io.BytesIO:
+            flux = io.BytesIO()
+            with zipfile.ZipFile(gabarit) as source, zipfile.ZipFile(flux, "w", zipfile.ZIP_DEFLATED) as cible:
+                for info in source.infolist():
+                    donnees = source.read(info).decode()
+                    if info.filename == "xl/worksheets/sheet1.xml":
+                        cible.writestr("xl/worksheets/s.bin", feuille)
+                        continue
+                    if info.filename == "[Content_Types].xml":
+                        donnees = re.sub(r'<Override PartName="/xl/worksheets/sheet1.xml"[^>]*/>', "", donnees)
+                    elif info.filename == "xl/_rels/workbook.xml.rels":
+                        donnees = re.sub(r'<Relationship ([^>]*?)Target="/?xl/worksheets/sheet1.xml"', rf'<{balise} \1Target="/xl/worksheets/s.bin"', donnees)
+                        self.assertIn(f"<{balise} ", donnees)
+                    elif info.filename == "xl/workbook.xml":
+                        citation = re.search(r'<sheet [^>]*name="F"[^>]*/>', donnees).group(0)
+                        donnees = donnees.replace(citation, citation + "".join(
+                            citation.replace('name="F"', f'name="F{n}"').replace('sheetId="1"', f'sheetId="{n + 1}"') for n in range(1, citations)
+                        ))
+                    cible.writestr(info.filename, donnees)
+            return flux
+
+        for balise in ("Relationship", "R"):
+            classeur = lecture.ouvrir_classeur(fabriquer(balise, 1))
+            self.assertEqual(sum(1 for _ in classeur.worksheets[0].iter_rows(values_only=True)), 5000)  # feuille lue
+            classeur.close()
+            with mock.patch.object(lecture, "FEUILLES_MAX", 50_000), mock.patch.object(lecture, "XML_LU_EN_ENTIER_MAX", 50_000):
+                self.assertTrue(decompression_excessive(fabriquer(balise, 1), ".xlsx"), balise)
+            with mock.patch.object(lecture, "FEUILLES_MAX", len(feuille) * 3 // 2):
+                self.assertFalse(decompression_excessive(fabriquer(balise, 1), ".xlsx"), balise)
+                self.assertTrue(decompression_excessive(fabriquer(balise, 2), ".xlsx"), balise)  # citée deux fois
+
     def test_xlsx_feuille_citee_plusieurs_fois_comptee_a_chaque_citation(self):
         # openpyxl analyse une feuille autant de fois que <sheets> la cite : tout enfant de <sheets>, par son
         # r:id ou son id, quel que soit le type du lien (« drawing » : partie comptée parmi les lues en entier).
@@ -479,6 +597,42 @@ class LectureAuditTests(SimpleTestCase):
         with mock.patch.object(lecture, "XML_LU_EN_ENTIER_MAX", 100_000):  # liens de la feuille : 41 Ko
             self.assertFalse(decompression_excessive(classeur(1), ".xlsx"))
             self.assertTrue(decompression_excessive(classeur(3), ".xlsx"))
+
+    def test_xlsx_liens_d_une_feuille_declares_comme_feuille_comptes_en_entier(self):
+        # Liens d'une feuille (.rels) déclarés de type « feuille de calcul » dans [Content_Types].xml : openpyxl les
+        # analyse pourtant en entier. Ils restent comptés avec les parties lues en entier, pas avec les feuilles.
+        from openpyxl import Workbook
+        from openpyxl.packaging import relationship
+        from openpyxl.reader import excel
+
+        def classeur(declarer: bool) -> io.BytesIO:
+            modele = Workbook()
+            modele.active.append(["Entreprise", "Ville"])
+            tampon = io.BytesIO()
+            modele.save(tampon)
+            flux = io.BytesIO()
+            with zipfile.ZipFile(tampon) as source, zipfile.ZipFile(flux, "w", zipfile.ZIP_DEFLATED) as cible:
+                for info in source.infolist():
+                    donnees = source.read(info)
+                    if info.filename == "[Content_Types].xml" and declarer:
+                        donnees = donnees.replace(b"</Types>", (
+                            f'<Override PartName="/xl/worksheets/_rels/sheet1.xml.rels" ContentType="{lecture.TYPE_FEUILLE}"/></Types>'
+                        ).encode())
+                    cible.writestr(info, donnees)
+                cible.writestr("xl/autre.xml", b"<a>" + b"<b/>" * (100 * 1024) + b"</a>")  # 400 Ko d'autre XML lu en entier
+                cible.writestr("xl/worksheets/_rels/sheet1.xml.rels", (
+                    '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+                    + '<Relationship Id="a" Type="t" Target="x"/>' * 10_000 + "</Relationships>"  # 400 Ko
+                ))
+            return flux
+
+        for declarer in (False, True):
+            with mock.patch.object(excel, "get_dependents", wraps=relationship.get_dependents) as liens:
+                lecture.ouvrir_classeur(classeur(declarer)).close()
+            self.assertIn("xl/worksheets/_rels/sheet1.xml.rels", [appel.args[1] for appel in liens.call_args_list])
+            with mock.patch.object(lecture, "XML_LU_EN_ENTIER_MAX", 500_000):
+                self.assertTrue(decompression_excessive(classeur(declarer), ".xlsx"), declarer)
+            self.assertFalse(decompression_excessive(classeur(declarer), ".xlsx"))
 
     def test_xlsx_liens_externes_et_feuilles_de_graphique_jamais_lus(self):
         # load_workbook lit chaque lien externe autant de fois que <externalReferences> le cite, et chaque
@@ -572,6 +726,28 @@ class LectureAuditTests(SimpleTestCase):
         with mock.patch.object(lecture, "LIGNES_PAR_CLASSEUR_MAX", 50):
             contenu = lire_document(self.dossier / "dpgf.xlsx", self.dossier)
         self.assertEqual([len(tableau.lignes) for tableau in contenu.tableaux], [40, 10])
+
+    def test_contenu_lu_demesure_refuse(self):
+        # Une chaîne partagée de 32 000 caractères citée par 1 000 cellules : 32 Ko dans le fichier et dans la
+        # mémoire de la lecture, mais 32 millions de caractères pour la suite (texte(), lignes de prix), faite
+        # dans le worker, hors des plafonds de la lecture isolée.
+        texte = "Châssis aluminium " * 1_777 + "Lot 08"
+        source = zipfile.ZipFile(io.BytesIO(xlsx_chaines_partagees([["8.0", texte]])))
+        with zipfile.ZipFile(self.dossier / "dpgf.xlsx", "w", zipfile.ZIP_DEFLATED) as archive:
+            for nom in source.namelist():
+                donnees = source.read(nom).decode()
+                if nom == "xl/worksheets/sheet1.xml":  # 1 000 lignes citant la chaîne n° 1
+                    donnees = donnees.replace("</sheetData>", "".join(
+                        f'<row r="{n}"><c r="A{n}" t="inlineStr"><is><t>8.{n}</t></is></c><c r="B{n}" t="s"><v>1</v></c></row>'
+                        for n in range(2, 1_001)
+                    ) + "</sheetData>")
+                archive.writestr(nom, donnees)
+        self.assertLess((self.dossier / "dpgf.xlsx").stat().st_size, 20_000)
+        lignes = lire_document(self.dossier / "dpgf.xlsx", self.dossier).tableaux[0].lignes
+        self.assertEqual((len(lignes), lignes[-1][:2]), (1_000, ["8.1000", texte]))
+        with mock.patch.object(lecture, "CONTENU_LU_MAX", 10_000_000), self.assertRaisesMessage(ErreurLecture, lecture.MESSAGE_CONTENU):
+            lire_document(self.dossier / "dpgf.xlsx", self.dossier)
+        self.assertFalse(lecture.contenu_demesure(lecture.ContenuDocument(blocs=[lecture.Bloc("texte", texte="x" * 1000)])))
 
     def test_archive_endommagee_reste_une_erreur_de_lecture(self):
         (self.dossier / "abime.docx").write_bytes(b"PK\x03\x04 pas une archive")

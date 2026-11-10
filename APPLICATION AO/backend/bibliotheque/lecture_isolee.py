@@ -65,16 +65,18 @@ class ErreurEnfant(Exception):
 
 
 def executer_isole(cible: str, *args, dossier: Path | None = None, memoire_mo: int | None = None,
-                   delai: int | None = None, **kwargs):
+                   delai: int | None = None, cpu: int | None = None, **kwargs):
     """Résultat de cible(*args, **kwargs), calculé dans un processus séparé et plafonné.
 
     cible : « module:fonction » (importée par l'enfant après django.setup()). dossier : où écrire les fichiers
     d'échange (dossier de travail de la lecture ; dossier temporaire du système sinon). memoire_mo et delai :
-    LECTURE_MEMOIRE_MAX_MO et LECTURE_DELAI_MAX par défaut. Lève l'exception métier de l'enfant telle quelle,
-    LimiteDepassee si l'enfant a dépassé un plafond ou est mort, ErreurEnfant pour toute autre exception.
+    LECTURE_MEMOIRE_MAX_MO et LECTURE_DELAI_MAX par défaut ; cpu (temps de calcul, secondes) : le délai par
+    défaut. Lève l'exception métier de l'enfant telle quelle, LimiteDepassee si l'enfant a dépassé un plafond
+    ou est mort, ErreurEnfant pour toute autre exception.
     """
     memoire_mo = settings.LECTURE_MEMOIRE_MAX_MO if memoire_mo is None else memoire_mo
     delai = settings.LECTURE_DELAI_MAX if delai is None else delai
+    cpu = delai if cpu is None else cpu
     with tempfile.TemporaryDirectory(prefix="lecture-isolee-", dir=dossier) as echange:
         echange = Path(echange)
         requete, resultat, journal = echange / "requete.pickle", echange / "resultat.pickle", echange / "journal.txt"
@@ -82,7 +84,7 @@ def executer_isole(cible: str, *args, dossier: Path | None = None, memoire_mo: i
             pickle.dump((cible, args, kwargs), fichier, protocol=pickle.HIGHEST_PROTOCOL)
         commande = [
             sys.executable, "-m", "bibliotheque.lecture_isolee",
-            str(memoire_mo * 1024 * 1024), str(delai), str(requete), str(resultat),
+            str(int(memoire_mo * 1024 * 1024)), str(int(cpu)), str(requete), str(resultat),
         ]
         debut = time.monotonic()
         with open(journal, "wb") as sortie:
@@ -116,10 +118,9 @@ def executer_isole(cible: str, *args, dossier: Path | None = None, memoire_mo: i
     genre = reponse[0]
     if genre == "resultat":
         return reponse[1]
-    if genre == "metier":
+    if genre == "metier" and tuple(reponse[1:3]) in EXCEPTIONS_TRANSMISES:
         _, module, nom, message = reponse
-        if (module, nom) in EXCEPTIONS_TRANSMISES:
-            raise getattr(importlib.import_module(module), nom)(message)
+        raise getattr(importlib.import_module(module), nom)(message)
     _, nom, message, trace = reponse
     logger.error("Lecture isolée %s : exception %s dans le processus de lecture.\n%s", cible, nom, trace)
     raise ErreurEnfant(nom, message)
@@ -186,6 +187,16 @@ def _reponse_exception(erreur: BaseException) -> tuple:
     return ("erreur", type(erreur).__name__, str(erreur)[:1000], trace)
 
 
+def _causee_par_la_memoire(erreur: BaseException) -> bool:
+    vues = set()
+    while erreur is not None and id(erreur) not in vues:
+        if isinstance(erreur, MemoryError):
+            return True
+        vues.add(id(erreur))
+        erreur = erreur.__cause__ or erreur.__context__
+    return False
+
+
 def _plafonner(ressource: int, souple: int, dur: int) -> None:
     """Pose un plafond, sans dépasser le plafond dur déjà imposé à ce processus (qui ne peut que baisser)."""
     _, actuel = resource.getrlimit(ressource)
@@ -213,7 +224,11 @@ def _enfant(memoire: int, cpu: int, requete: Path, resultat: Path) -> None:
     except MemoryError:
         pass  # la mémoire manque : rien n'est écrit (et la pile, qui retient la mémoire prise, est libérée ici)
     except BaseException as erreur:  # noqa: BLE001 - tout est transmis au parent
-        reponse = _reponse_exception(erreur)
+        try:
+            # Exception née d'une MemoryError (import, lxml…) : c'est le plafond qui a été atteint.
+            reponse = None if _causee_par_la_memoire(erreur) else _reponse_exception(erreur)
+        except MemoryError:
+            reponse = None
     if reponse is None:
         os._exit(CODE_MEMOIRE)
     temporaire = resultat.with_suffix(".tmp")

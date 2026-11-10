@@ -5,6 +5,7 @@ import shutil
 import tempfile
 from decimal import Decimal
 from pathlib import Path
+from unittest import mock
 
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase, override_settings
@@ -171,6 +172,15 @@ class OffresTests(TestCase):
         self.assertIn("saisissez le montant", offre.message_lecture.lower())
         etat = self.json("patch", f"/api/offres/{offre.pk}", {"montant_base": "9800.00"})
         self.assertEqual(etat["offres"][0]["montant_base"], 9800.0)
+
+    def test_lecture_interrompue_par_le_plafond(self):
+        # Lecture isolée arrêtée (mémoire ou temps) : le message dit déjà de saisir l'offre, sans phrase en double.
+        from bibliotheque.lecture import MESSAGE_LECTURE_INTERROMPUE, LectureInterrompue
+
+        with mock.patch("offres.tasks.lire_offre", side_effect=LectureInterrompue(MESSAGE_LECTURE_INTERROMPUE)):
+            self.deposer(self.durand, "offre.pdf", b"%PDF-1.4 piege")
+        offre = Offre.objects.get()
+        self.assertEqual((offre.statut_lecture, offre.message_lecture), (StatutLecture.NON_LUE, MESSAGE_LECTURE_INTERROMPUE))
 
     # --- notation et classement -------------------------------------------------
     def test_notation_classement_et_attribution(self):

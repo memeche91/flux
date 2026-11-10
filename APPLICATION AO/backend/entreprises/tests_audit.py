@@ -3,7 +3,7 @@ import csv
 import io
 from unittest import mock
 
-from django.test import TestCase
+from django.test import TestCase, override_settings
 
 from bibliotheque import lecture
 from bibliotheque.tests_audit import (
@@ -105,3 +105,32 @@ class ImportAnnuaireAuditTests(TestCase):
     def test_echec_de_la_detection_du_separateur_sans_effet_sur_csv_excel(self):
         _lignes("annuaire.csv", b"Entreprise\nMenuiseries Durand\n")  # une colonne : séparateur introuvable
         self.assertEqual(csv.excel.delimiter, ",")
+
+
+class ImportAnnuaireIsoleTests(TestCase):
+    """Classeur lu dans un processus séparé et plafonné (forcé ici : lecture directe pendant les tests)."""
+
+    def test_classeur_lu_a_l_identique_dans_un_processus_separe(self):
+        contenu = _classeur([["Entreprise", "Ville", "Créée le"], ["Menuiseries Durand", "Annecy", 1998], ["Plâtres Martin", "Cran", None]])
+        attendu = importation.lignes_classeur(contenu)
+        with override_settings(LECTURE_ISOLEE=True), mock.patch.object(
+            importation, "lignes_classeur", side_effect=AssertionError("lu dans le serveur web")
+        ):
+            self.assertEqual(_lignes("annuaire.xlsx", contenu), attendu)
+            self.assertEqual(importer("annuaire.xlsx", contenu).creees, 2)
+            # Exception métier de l'enfant retransmise telle quelle.
+            with self.assertRaisesMessage(ImportImpossible, importation.CLASSEUR_ILLISIBLE):
+                _lignes("annuaire.xlsx", b"PK\x03\x04 pas une archive")
+
+    def test_plafond_atteint_refuse_proprement(self):
+        contenu = _classeur([["Entreprise", "Ville"], ["Menuiseries Durand", "Annecy"]])
+        with override_settings(LECTURE_ISOLEE=True, LECTURE_MEMOIRE_MAX_MO=1):  # même Django ne se charge pas
+            with self.assertRaisesMessage(ImportImpossible, importation.LECTURE_INTERROMPUE):
+                _lignes("annuaire.xlsx", contenu)
+
+    def test_texte_demesure_refuse(self):
+        # Chaîne partagée citée par toutes les lignes : chaque ligne importée la reprendrait (lots, notes).
+        contenu = _classeur([["Entreprise", "Notes"]] + [[f"Entreprise {n}", "x" * 100] for n in range(50)])
+        self.assertEqual(len(_lignes("annuaire.xlsx", contenu)), 51)
+        with mock.patch.object(importation, "ANNUAIRE_CARACTERES_MAX", 2_000), self.assertRaisesMessage(ImportImpossible, "anormalement volumineux"):
+            _lignes("annuaire.xlsx", contenu)

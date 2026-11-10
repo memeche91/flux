@@ -131,12 +131,18 @@ def lire_document(chemin: Path, dossier_travail: Path, *, tableaux_pdf: bool = F
     """
     if not settings.LECTURE_ISOLEE:
         return lire_document_direct(chemin, dossier_travail, tableaux_pdf=tableaux_pdf)
+    return lire_isole("bibliotheque.lecture:lire_document_direct", chemin, dossier_travail, tableaux_pdf=tableaux_pdf)
+
+
+def lire_isole(cible: str, chemin: Path, dossier_travail: Path, **options) -> ContenuDocument:
+    """cible(chemin, dossier_travail, **options) dans le processus séparé, erreurs traduites pour l'utilisateur.
+
+    Plafond atteint ou processus tué : LectureInterrompue ; exception inattendue : ErreurLecture.
+    """
     from .lecture_isolee import ErreurEnfant, LimiteDepassee, executer_isole
 
     try:
-        return executer_isole(
-            "bibliotheque.lecture:lire_document_direct", chemin, dossier_travail, tableaux_pdf=tableaux_pdf, dossier=dossier_travail
-        )
+        return executer_isole(cible, chemin, dossier_travail, dossier=dossier_travail, **options)
     except LimiteDepassee as erreur:
         raise LectureInterrompue(MESSAGE_LECTURE_INTERROMPUE) from erreur
     except ErreurEnfant as erreur:

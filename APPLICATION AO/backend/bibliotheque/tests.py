@@ -74,6 +74,19 @@ class BibliothequeApiTests(TestCase):
         self.assertIn("Repère | Dimensions", document.texte_extrait)
         self.assertTrue(document.fichier.name.startswith("bibliotheque/CCTP/08/"))
 
+    def test_lecture_interrompue_document_conserve(self):
+        from unittest import mock
+
+        from . import tasks
+        from .lecture import MESSAGE_LECTURE_INTERROMPUE, LectureInterrompue
+
+        with mock.patch.object(tasks, "lire_document", side_effect=LectureInterrompue(MESSAGE_LECTURE_INTERROMPUE)):
+            reponse = self.televerser(fichier_docx(), type_document="CCTP", lot_id=self.lot.pk)
+        self.assertEqual(reponse.status_code, 201, reponse.content)
+        document = DocumentReference.objects.get()
+        self.assertEqual((document.statut_analyse, document.message_analyse), (StatutAnalyse.ERREUR, tasks.LECTURE_INTERROMPUE))
+        self.assertTrue(document.fichier.storage.exists(document.fichier.name))
+
     def test_dpgf_xlsx_analysee(self):
         reponse = self.televerser(fichier_xlsx(), type_document="DPGF", lot_id=self.lot.pk)
         self.assertEqual(reponse.status_code, 201, reponse.content)
