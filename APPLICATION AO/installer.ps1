@@ -336,12 +336,15 @@ function Arreter-Application {
 }
 
 # Après une copie ratée : l'application repart telle qu'elle était (mêmes conteneurs ; .env n'a pas encore été modifié).
+# Renvoie « relancee », « echec » (par exemple, serveur de l'agence injoignable pour des conteneurs qui l'utilisent) ou
+# « arretee » (elle ne tournait pas avant la copie : rien à relancer).
 function Relancer-Application {
-    if ($script:conteneursArretes.Count -gt 0) {
-        Write-Host "Redémarrage de l’application, comme avant…"
-        docker start $script:conteneursArretes 2>&1 | Out-Null
-        $script:conteneursArretes = @()
-    }
+    if ($script:conteneursArretes.Count -eq 0) { return "arretee" }
+    Write-Host "Redémarrage de l’application, comme avant…"
+    docker start $script:conteneursArretes 2>&1 | Out-Null
+    $etat = if ($LASTEXITCODE -eq 0) { "relancee" } else { "echec" }
+    $script:conteneursArretes = @()
+    return $etat
 }
 
 # Copie des fichiers nouveaux ou plus récents (un fichier plus récent à l'arrivée n'est jamais écrasé).
@@ -356,10 +359,45 @@ function Copier-Dossier([string]$source, [string]$destination) {
     return $true
 }
 
+# Nombre de copies de la base (*.dump) d'un dossier ; 0 s'il est absent (Get-ChildItem -File échouerait sur un
+# lecteur absent, par exemple un disque externe débranché).
+function Nombre-Copies-Base([string]$dossier) {
+    if (-not $dossier -or -not (Test-Path -LiteralPath $dossier)) { return 0 }
+    return @(Get-ChildItem -LiteralPath $dossier -Filter "*.dump" -File -ErrorAction SilentlyContinue).Count
+}
+
+# Avant de passer du PC au serveur : les dossiers du PC réglés dans .env (DOSSIER_ARCHIVES_PC, DOSSIER_SAUVEGARDES_PC)
+# doivent être accessibles, sinon leur contenu ne serait pas recopié sur le serveur. Vérifié une seule fois, avant les
+# questions sur le serveur (rien n'est à ressaisir après avoir rebranché un disque).
+$script:dossiersPcVerifies = $false
+function Verifier-Dossiers-Pc {
+    if ($script:dossiersPcVerifies) { return }
+    $script:dossiersPcVerifies = $true
+    # Première installation (aucune base) : rien n'a encore été enregistré sur ce PC, rien à recopier.
+    docker volume inspect application-ao_base_donnees 2>&1 | Out-Null
+    if ($LASTEXITCODE -ne 0) { return }
+    foreach ($nom in @("DOSSIER_ARCHIVES_PC", "DOSSIER_SAUVEGARDES_PC")) {
+        $valeur = Lire-Variable $script:contenuEnv $nom
+        if (-not $valeur -or (Test-Path -LiteralPath (Chemin-Pc $valeur ""))) { continue }
+        $cause = if ($valeur -match '^[A-Za-z]:') { "disque débranché, ou lettre du disque changée ?" } else { "dossier déplacé ou renommé ?" }
+        $remede = "Rebranchez le disque ou remettez le dossier en place, ou corrigez la ligne $nom de .env avec le Bloc-notes, puis relancez ce script."
+        if ($nom -eq "DOSSIER_ARCHIVES_PC") {
+            Arreter ("Le dossier des archives $valeur (ligne $nom de .env) est introuvable ($cause) :`n" +
+                "ses archives ne seraient pas recopiées sur le serveur. $remede`n" +
+                "S’il n’y a encore aucune archive, videz plutôt cette ligne. Rien n’a été modifié.")
+        }
+        Write-Host "Le dossier des sauvegardes $valeur (ligne $nom de .env) est introuvable ($cause) :" -ForegroundColor Yellow
+        Write-Host "les sauvegardes qu’il contient ne seront pas recopiées sur le serveur, et restaurer.ps1 ne les proposera plus." -ForegroundColor Yellow
+        if ((Read-Host "Continuer sans elles ? (O/N, N par défaut)") -notmatch '^\s*[oO]') {
+            Arreter "$remede Rien n’a été modifié."
+        }
+    }
+}
+
 # Copies de la base faites chaque nuit sur ce PC (fichiers .dump du sous-dossier base) : recopiées telles quelles,
 # sans le miroir des fichiers ni configuration\.env, que la première sauvegarde sur le serveur écrit elle-même.
 function Copier-Copies-Base([string]$source, [string]$destination) {
-    if (@(Get-ChildItem -LiteralPath $source -Filter "*.dump" -File -ErrorAction SilentlyContinue).Count -eq 0) { return $true }
+    if ((Nombre-Copies-Base $source) -eq 0) { return $true }
     Write-Host "Copie des sauvegardes de la base de « $source » vers « $destination »…"
     robocopy $source $destination "*.dump" /XO /R:2 /W:5 /NP /NFL /NDL /NJH | Out-Host
     if ($LASTEXITCODE -ge 8) {
@@ -570,6 +608,7 @@ $serveurAvant = (Lire-Variable $contenuEnv "COMPOSE_FILE") -match 'serveur'
 $dossierAvant = Lire-Variable $contenuEnv "SERVEUR_CHEMIN_AFFICHE"
 $modeServeur = $false
 if ($stockage -eq "serveur") {
+    if (-not $serveurAvant) { Verifier-Dossiers-Pc }
     # L'adresse du serveur peut avoir changé (nouveau serveur, réseau renuméroté) : elle est recherchée à nouveau.
     $nomServeur = ((Lire-Variable $contenuEnv "SERVEUR_CHEMIN_AFFICHE").TrimStart('\') -split '\\')[0]
     $adresse = Lire-Variable $contenuEnv "SERVEUR_ADRESSE"
@@ -593,6 +632,10 @@ if ($stockage -eq "serveur") {
         Write-Host $erreur -ForegroundColor Yellow
         if ((Read-Host "Indiquer à nouveau le dossier partagé et le compte ? (O/N)") -match '^\s*[oO]' -and (Configurer-Serveur)) {
             $modeServeur = $true
+        } elseif (-not $serveurAvant) {
+            Arreter ("Le dossier du serveur n’est pas accessible. Rien n’a été modifié : les fichiers de l’application sont encore sur ce PC.`n" +
+                "Vérifiez le serveur et le compte, puis relancez ce script ; ou, pour rester sur ce PC, mettez STOCKAGE=pc dans .env`n" +
+                "avec le Bloc-notes, puis relancez-le.")
         } else {
             Arreter ("Les fichiers de l’application sont sur le serveur de l’agence : elle ne peut pas démarrer sans lui.`n" +
                 "Vérifiez que le serveur est allumé et que le compte fonctionne, puis relancez ce script.")
@@ -611,6 +654,7 @@ if ($stockage -eq "serveur") {
         $contenuEnv = Definir-Variable $contenuEnv "STOCKAGE" "pc"
         $stockage = "pc"
     } else {
+        if (-not $serveurAvant) { Verifier-Dossiers-Pc }
         for ($essai = 1; $essai -le 3 -and -not $modeServeur; $essai++) {
             if (Configurer-Serveur) {
                 $modeServeur = $true
@@ -638,37 +682,58 @@ if ($modeServeur) {
         if ((Read-Host "Continuer ? (O/N)") -notmatch '^\s*[oO]') { Arreter "Rien n’a été modifié." }
     }
     if (-not $serveurAvant) {
-        # Passage du PC au serveur : les fichiers déjà enregistrés sur ce PC, et les copies de la base faites chaque
-        # nuit, sont d'abord copiés sur le serveur (restaurer.ps1 ne lit ensuite plus que le dossier du serveur).
+        # Passage du PC au serveur : les fichiers déjà enregistrés sur ce PC, les archives et les copies de la base
+        # faites chaque nuit sont d'abord copiés sur le serveur (restaurer.ps1 ne lit ensuite plus que le serveur).
+        Verifier-Dossiers-Pc
         $sourceFichiers = Join-Path $PSScriptRoot "donnees\fichiers"
         $archivesPc = Lire-Variable $contenuEnv "DOSSIER_ARCHIVES_PC"
-        $sourceArchives = Chemin-Pc $archivesPc "donnees\archives"
         $sauvegardesPcAvant = Lire-Variable $contenuEnv "DOSSIER_SAUVEGARDES_PC"
-        $sourceSauvegardes = Chemin-Pc $sauvegardesPcAvant "donnees\sauvegardes"
-        $sourceBase = Join-Path $sourceSauvegardes "base"
-        $copiesBase = @(Get-ChildItem -LiteralPath $sourceBase -Filter "*.dump" -File -ErrorAction SilentlyContinue).Count
-        if ((Contient-Fichiers $sourceFichiers) -or (Contient-Fichiers $sourceArchives) -or $copiesBase -gt 0) {
-            Write-Host "Des fichiers et des sauvegardes sont déjà enregistrés sur ce PC : ils sont copiés sur le serveur avant le démarrage."
+        # Dossiers par défaut ET dossiers réglés dans .env : Docker peut encore utiliser l'un alors que .env désigne
+        # l'autre (ligne modifiée sans redémarrage). robocopy /XO les réunit sans rien écraser. Combine, et non
+        # Join-Path, qui échoue sur un lecteur absent.
+        $sourcesArchives = @(@((Join-Path $PSScriptRoot "donnees\archives"), (Chemin-Pc $archivesPc "donnees\archives")) | Sort-Object -Unique)
+        $sourcesBase = @(@((Join-Path $PSScriptRoot "donnees\sauvegardes\base"),
+            [System.IO.Path]::Combine((Chemin-Pc $sauvegardesPcAvant "donnees\sauvegardes"), "base")) | Sort-Object -Unique)
+        $avecFichiers = Contient-Fichiers $sourceFichiers
+        $avecArchives = @($sourcesArchives | Where-Object { Contient-Fichiers $_ }).Count -gt 0
+        $copiesBase = 0
+        foreach ($source in $sourcesBase) { $copiesBase += Nombre-Copies-Base $source }
+        if ($avecFichiers -or $avecArchives -or $copiesBase -gt 0) {
+            $quoi = @()
+            if ($avecFichiers) { $quoi += "les fichiers" }
+            if ($avecArchives) { $quoi += "les archives" }
+            if ($copiesBase -gt 0) { $quoi += "les sauvegardes de la base" }
+            $liste = if ($quoi.Count -gt 1) { ($quoi[0..($quoi.Count - 2)] -join ", ") + " et " + $quoi[-1] } else { $quoi[0] }
+            Write-Host "Copie sur le serveur, avant le démarrage, de ce qui est déjà enregistré sur ce PC : $liste."
             $dossierServeur = Connecter-Partage-Env
             if (-not $dossierServeur) { Arreter "Copie impossible : le dossier du serveur n’est pas accessible. Rien n’a été modifié." }
             Arreter-Application
-            if (-not (Copier-Dossier $sourceFichiers (Join-Path $dossierServeur "fichiers")) -or
-                -not (Copier-Dossier $sourceArchives (Join-Path $dossierServeur "archives")) -or
-                -not (Copier-Copies-Base $sourceBase (Join-Path $dossierServeur "sauvegardes\base"))) {
-                Relancer-Application
-                Arreter ("La copie sur le serveur a échoué : l’application continue sur ce PC, comme avant (rien n’a été modifié).`n" +
-                    "Vérifiez que le serveur est allumé et qu’il lui reste de la place, puis relancez ce script et répondez O.")
+            $copieReussie = Copier-Dossier $sourceFichiers (Join-Path $dossierServeur "fichiers")
+            foreach ($source in $sourcesArchives) {
+                if ($copieReussie) { $copieReussie = Copier-Dossier $source (Join-Path $dossierServeur "archives") }
             }
-            if ($copiesBase -gt 0) {
-                Write-Host "Les $copiesBase sauvegardes de la base faites sur ce PC sont recopiées sur le serveur : restaurer.ps1 les propose."
+            foreach ($source in $sourcesBase) {
+                if ($copieReussie) { $copieReussie = Copier-Copies-Base $source (Join-Path $dossierServeur "sauvegardes\base") }
+            }
+            if (-not $copieReussie) {
+                if ((Relancer-Application) -eq "relancee") {
+                    Arreter ("La copie sur le serveur a échoué : l’application continue sur ce PC, comme avant (rien n’a été modifié).`n" +
+                        "Vérifiez que le serveur est allumé et qu’il lui reste de la place, puis relancez ce script pour réessayer.")
+                }
+                Arreter ("La copie sur le serveur a échoué (rien n’a été modifié), et l’application est arrêtée.`n" +
+                    "Vérifiez que le serveur est allumé et qu’il lui reste de la place, puis relancez ce script pour réessayer.`n" +
+                    "Pour rester sur ce PC : mettez STOCKAGE=pc dans .env avec le Bloc-notes, puis relancez ce script.")
+            }
+            if ($copiesBase -eq 1) {
+                Write-Host "La sauvegarde de la base faite sur ce PC a été recopiée sur le serveur : restaurer.ps1 la propose."
+            } elseif ($copiesBase -gt 1) {
+                Write-Host "Les $copiesBase sauvegardes de la base faites sur ce PC ont été recopiées sur le serveur : restaurer.ps1 les propose."
             }
             # Les dossiers du PC, désormais inutilisés, sont renommés : on ne les confond plus avec ceux du serveur.
-            $aRenommer = @($sourceFichiers)
-            if (-not $archivesPc) { $aRenommer += $sourceArchives }
-            if (-not $sauvegardesPcAvant) { $aRenommer += $sourceSauvegardes }
-            foreach ($dossier in $aRenommer) {
+            foreach ($nomDossier in @("fichiers", "archives", "sauvegardes")) {
+                $dossier = Join-Path $PSScriptRoot "donnees\$nomDossier"
                 if (-not (Test-Path -LiteralPath $dossier)) { continue }
-                $nouveauNom = (Split-Path $dossier -Leaf) + "-copie-avant-serveur-" + (Get-Date -Format "yyyy-MM-dd_HHmm")
+                $nouveauNom = "$nomDossier-copie-avant-serveur-" + (Get-Date -Format "yyyy-MM-dd_HHmm")
                 try {
                     Rename-Item -LiteralPath $dossier -NewName $nouveauNom -ErrorAction Stop
                     Write-Host "Ancien dossier du PC conservé sous donnees\$nouveauNom (à supprimer quand tout sera vérifié)."
@@ -676,9 +741,12 @@ if ($modeServeur) {
                     Write-Host "Le dossier $dossier n’a pas pu être renommé ; il n’est plus utilisé par l’application." -ForegroundColor Yellow
                 }
             }
-            if ($archivesPc) { Write-Host "Le dossier $archivesPc n’est plus utilisé : les archives sont désormais sur le serveur." }
-            if ($sauvegardesPcAvant -and $copiesBase -gt 0) {
-                Write-Host "Le dossier $sauvegardesPcAvant n’est plus utilisé : les sauvegardes sont désormais sur le serveur (à supprimer quand tout sera vérifié)."
+            # Dossiers réglés sur un autre disque : laissés en place, plus utilisés.
+            if ($archivesPc -and (Contient-Fichiers (Chemin-Pc $archivesPc ""))) {
+                Write-Host "Le dossier $archivesPc n’est plus utilisé : ses archives ont été recopiées sur le serveur (à supprimer quand tout sera vérifié)."
+            }
+            if ($sauvegardesPcAvant -and (Nombre-Copies-Base ([System.IO.Path]::Combine((Chemin-Pc $sauvegardesPcAvant ""), "base"))) -gt 0) {
+                Write-Host "Le dossier $sauvegardesPcAvant n’est plus utilisé : ses sauvegardes de la base ont été recopiées sur le serveur (à supprimer quand tout sera vérifié)."
             }
         }
     }
@@ -707,9 +775,12 @@ if ($modeServeur) {
         Arreter-Application
         if (-not (Copier-Dossier (Join-Path $dossierServeur "fichiers") (Join-Path $PSScriptRoot "donnees\fichiers")) -or
             -not (Copier-Dossier (Join-Path $dossierServeur "archives") (Chemin-Pc (Lire-Variable $contenuEnv "DOSSIER_ARCHIVES_PC") "donnees\archives"))) {
-            Relancer-Application
-            Arreter ("La copie depuis le serveur a échoué : l’application continue comme avant, avec les fichiers du serveur.`n" +
-                "Relancez ce script pour réessayer, ou remettez STOCKAGE=serveur dans .env pour rester sur le serveur.")
+            if ((Relancer-Application) -eq "relancee") {
+                Arreter ("La copie depuis le serveur a échoué : l’application continue comme avant, avec les fichiers du serveur.`n" +
+                    "Relancez ce script pour réessayer, ou remettez STOCKAGE=serveur dans .env pour rester sur le serveur.")
+            }
+            Arreter ("La copie depuis le serveur a échoué, et l’application est arrêtée (le serveur ne répond pas ?).`n" +
+                "Une fois le serveur revenu, relancez ce script pour réessayer, ou remettez STOCKAGE=serveur dans .env puis relancez-le.")
         }
         # Le mot de passe du compte du serveur n'est plus utile.
         $contenuEnv = Definir-Variable $contenuEnv "SERVEUR_MOT_DE_PASSE" ""
