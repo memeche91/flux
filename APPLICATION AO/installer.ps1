@@ -326,11 +326,21 @@ function Contient-Fichiers([string]$dossier) {
 }
 
 # Arrêt de tous les services de l'application (aucun fichier ne doit changer pendant une copie).
+$script:conteneursArretes = @()
 function Arreter-Application {
-    $conteneurs = @(docker ps -q --filter "label=com.docker.compose.project=application-ao")
-    if ($conteneurs.Count -gt 0) {
+    $script:conteneursArretes = @(docker ps -q --filter "label=com.docker.compose.project=application-ao")
+    if ($script:conteneursArretes.Count -gt 0) {
         Write-Host "Arrêt de l’application pendant la copie des fichiers…"
-        docker stop $conteneurs | Out-Null
+        docker stop $script:conteneursArretes | Out-Null
+    }
+}
+
+# Après une copie ratée : l'application repart telle qu'elle était (mêmes conteneurs ; .env n'a pas encore été modifié).
+function Relancer-Application {
+    if ($script:conteneursArretes.Count -gt 0) {
+        Write-Host "Redémarrage de l’application, comme avant…"
+        docker start $script:conteneursArretes 2>&1 | Out-Null
+        $script:conteneursArretes = @()
     }
 }
 
@@ -339,6 +349,19 @@ function Copier-Dossier([string]$source, [string]$destination) {
     if (-not (Contient-Fichiers $source)) { return $true }
     Write-Host "Copie de « $source » vers « $destination »…"
     robocopy $source $destination /E /XO /R:2 /W:5 /NP /NFL /NDL /NJH | Out-Host
+    if ($LASTEXITCODE -ge 8) {
+        Write-Host "La copie a échoué (code robocopy $LASTEXITCODE)." -ForegroundColor Red
+        return $false
+    }
+    return $true
+}
+
+# Copies de la base faites chaque nuit sur ce PC (fichiers .dump du sous-dossier base) : recopiées telles quelles,
+# sans le miroir des fichiers ni configuration\.env, que la première sauvegarde sur le serveur écrit elle-même.
+function Copier-Copies-Base([string]$source, [string]$destination) {
+    if (@(Get-ChildItem -LiteralPath $source -Filter "*.dump" -File -ErrorAction SilentlyContinue).Count -eq 0) { return $true }
+    Write-Host "Copie des sauvegardes de la base de « $source » vers « $destination »…"
+    robocopy $source $destination "*.dump" /XO /R:2 /W:5 /NP /NFL /NDL /NJH | Out-Host
     if ($LASTEXITCODE -ge 8) {
         Write-Host "La copie a échoué (code robocopy $LASTEXITCODE)." -ForegroundColor Red
         return $false
@@ -615,22 +638,34 @@ if ($modeServeur) {
         if ((Read-Host "Continuer ? (O/N)") -notmatch '^\s*[oO]') { Arreter "Rien n’a été modifié." }
     }
     if (-not $serveurAvant) {
-        # Passage du PC au serveur : les fichiers déjà enregistrés sur ce PC sont d'abord copiés sur le serveur.
+        # Passage du PC au serveur : les fichiers déjà enregistrés sur ce PC, et les copies de la base faites chaque
+        # nuit, sont d'abord copiés sur le serveur (restaurer.ps1 ne lit ensuite plus que le dossier du serveur).
         $sourceFichiers = Join-Path $PSScriptRoot "donnees\fichiers"
         $archivesPc = Lire-Variable $contenuEnv "DOSSIER_ARCHIVES_PC"
         $sourceArchives = Chemin-Pc $archivesPc "donnees\archives"
-        if ((Contient-Fichiers $sourceFichiers) -or (Contient-Fichiers $sourceArchives)) {
-            Write-Host "Des fichiers sont déjà enregistrés sur ce PC : ils sont copiés sur le serveur avant le démarrage."
+        $sauvegardesPcAvant = Lire-Variable $contenuEnv "DOSSIER_SAUVEGARDES_PC"
+        $sourceSauvegardes = Chemin-Pc $sauvegardesPcAvant "donnees\sauvegardes"
+        $sourceBase = Join-Path $sourceSauvegardes "base"
+        $copiesBase = @(Get-ChildItem -LiteralPath $sourceBase -Filter "*.dump" -File -ErrorAction SilentlyContinue).Count
+        if ((Contient-Fichiers $sourceFichiers) -or (Contient-Fichiers $sourceArchives) -or $copiesBase -gt 0) {
+            Write-Host "Des fichiers et des sauvegardes sont déjà enregistrés sur ce PC : ils sont copiés sur le serveur avant le démarrage."
             $dossierServeur = Connecter-Partage-Env
             if (-not $dossierServeur) { Arreter "Copie impossible : le dossier du serveur n’est pas accessible. Rien n’a été modifié." }
             Arreter-Application
             if (-not (Copier-Dossier $sourceFichiers (Join-Path $dossierServeur "fichiers")) -or
-                -not (Copier-Dossier $sourceArchives (Join-Path $dossierServeur "archives"))) {
-                Arreter "La copie des fichiers sur le serveur a échoué : l’application reste configurée sur ce PC. Relancez ce script."
+                -not (Copier-Dossier $sourceArchives (Join-Path $dossierServeur "archives")) -or
+                -not (Copier-Copies-Base $sourceBase (Join-Path $dossierServeur "sauvegardes\base"))) {
+                Relancer-Application
+                Arreter ("La copie sur le serveur a échoué : l’application continue sur ce PC, comme avant (rien n’a été modifié).`n" +
+                    "Vérifiez que le serveur est allumé et qu’il lui reste de la place, puis relancez ce script et répondez O.")
+            }
+            if ($copiesBase -gt 0) {
+                Write-Host "Les $copiesBase sauvegardes de la base faites sur ce PC sont recopiées sur le serveur : restaurer.ps1 les propose."
             }
             # Les dossiers du PC, désormais inutilisés, sont renommés : on ne les confond plus avec ceux du serveur.
             $aRenommer = @($sourceFichiers)
             if (-not $archivesPc) { $aRenommer += $sourceArchives }
+            if (-not $sauvegardesPcAvant) { $aRenommer += $sourceSauvegardes }
             foreach ($dossier in $aRenommer) {
                 if (-not (Test-Path -LiteralPath $dossier)) { continue }
                 $nouveauNom = (Split-Path $dossier -Leaf) + "-copie-avant-serveur-" + (Get-Date -Format "yyyy-MM-dd_HHmm")
@@ -642,6 +677,9 @@ if ($modeServeur) {
                 }
             }
             if ($archivesPc) { Write-Host "Le dossier $archivesPc n’est plus utilisé : les archives sont désormais sur le serveur." }
+            if ($sauvegardesPcAvant -and $copiesBase -gt 0) {
+                Write-Host "Le dossier $sauvegardesPcAvant n’est plus utilisé : les sauvegardes sont désormais sur le serveur (à supprimer quand tout sera vérifié)."
+            }
         }
     }
     Write-Host "Fichiers, archives et sauvegardes sur le serveur : $(Lire-Variable $contenuEnv 'SERVEUR_CHEMIN_AFFICHE')" -ForegroundColor Green
@@ -669,7 +707,9 @@ if ($modeServeur) {
         Arreter-Application
         if (-not (Copier-Dossier (Join-Path $dossierServeur "fichiers") (Join-Path $PSScriptRoot "donnees\fichiers")) -or
             -not (Copier-Dossier (Join-Path $dossierServeur "archives") (Chemin-Pc (Lire-Variable $contenuEnv "DOSSIER_ARCHIVES_PC") "donnees\archives"))) {
-            Arreter "La copie depuis le serveur a échoué : remettez STOCKAGE=serveur dans .env, ou réessayez."
+            Relancer-Application
+            Arreter ("La copie depuis le serveur a échoué : l’application continue comme avant, avec les fichiers du serveur.`n" +
+                "Relancez ce script pour réessayer, ou remettez STOCKAGE=serveur dans .env pour rester sur le serveur.")
         }
         # Le mot de passe du compte du serveur n'est plus utile.
         $contenuEnv = Definir-Variable $contenuEnv "SERVEUR_MOT_DE_PASSE" ""

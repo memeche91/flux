@@ -37,7 +37,7 @@ powershell -ExecutionPolicy Bypass -File .\installer.ps1
 L'installateur :
 1. vérifie que Docker Desktop fonctionne ;
 2. crée le fichier `.env` avec des clés de sécurité aléatoires (il s’arrête et explique quoi faire si une installation existe déjà sans son `.env`, voir « Mettre à jour sans rien perdre ») ;
-3. propose d’enregistrer les fichiers et les sauvegardes sur le **serveur de l’agence** (recommandé, voir « Stockage sur le serveur de l’agence ») et vérifie l’accès au dossier partagé ;
+3. propose d’enregistrer les fichiers et les sauvegardes sur le **serveur de l’agence** (recommandé, voir « Stockage sur le serveur de l’agence ») et vérifie l’accès au dossier partagé. Pour un essai sur le PC seul, répondez **N** : tout reste dans le dossier `donnees` du PC, et vous pourrez passer au serveur plus tard sans rien perdre ;
 4. construit et démarre l'application (5 à 10 minutes la première fois) ;
 5. vous demande de **créer votre compte administrateur** (mot de passe de 12 caractères minimum) ;
 6. télécharge **une seule fois** les modèles gratuits de l'assistant IA (environ 8 Go : comptez 10 à 30 minutes selon la connexion) ;
@@ -106,10 +106,10 @@ La base de données reste toujours sur le PC : PostgreSQL ne fonctionne pas de f
 3. vérifiez que le pare-feu du serveur autorise le partage de fichiers (port 445) depuis le PC de D’Aplomb, et que le partage accepte SMB 3 (c’est le cas par défaut depuis Windows Server 2012) ;
 4. si d’autres personnes doivent consulter les archives, donnez-leur seulement la **lecture** sur le sous-dossier `archives`. Les sous-dossiers `sauvegardes` et `fichiers` restent réservés au compte dédié et aux administrateurs (Propriétés › Sécurité › Avancé › désactiver l’héritage sur `sauvegardes` et `fichiers`) : `sauvegardes` contient les clés de l’application et des copies complètes de la base.
 
-**Activer** : lancez `installer.ps1` et répondez **O** à « Enregistrer les fichiers et les sauvegardes sur le serveur de l’agence ». Indiquez le chemin du dossier (`\\SERVEUR\DAplomb`, ou un sous-dossier : `\\SERVEUR\Donnees\DAplomb`), le compte (`DOMAINE\daplomb`, ou `SERVEUR\daplomb` pour un compte local du serveur) et son mot de passe. L’installateur :
+**Activer** : lancez `installer.ps1` et répondez **O** à « Enregistrer les fichiers et les sauvegardes sur le serveur de l’agence ». Si vous aviez répondu **N** à l’installation (ligne `STOCKAGE=pc` de `.env`), la question n’est plus posée : ouvrez `.env` avec le Bloc-notes, videz la ligne `STOCKAGE=` (rien après le signe `=`), enregistrez, puis relancez `installer.ps1`. Indiquez le chemin du dossier (`\\SERVEUR\DAplomb`, ou un sous-dossier : `\\SERVEUR\Donnees\DAplomb`), le compte (`DOMAINE\daplomb`, ou `SERVEUR\daplomb` pour un compte local du serveur) et son mot de passe. L’installateur :
 - trouve l’adresse IP du serveur (Docker ne connaît pas les noms du réseau Windows) ;
 - vérifie l’accès depuis Windows (création des sous-dossiers `fichiers`, `archives` et `sauvegardes`, écriture puis effacement d’un fichier d’essai), puis depuis Docker ;
-- copie sur le serveur les fichiers déjà enregistrés sur le PC, avant le redémarrage, puis renomme les anciens dossiers du PC (`donnees\fichiers-copie-avant-serveur-…`, à supprimer une fois l’application vérifiée) ;
+- copie sur le serveur les fichiers, les archives et les sauvegardes de la base déjà enregistrés sur le PC, avant le redémarrage (`restaurer.ps1` propose ensuite aussi ces sauvegardes), puis renomme les anciens dossiers du PC (`donnees\fichiers-copie-avant-serveur-…`, à supprimer une fois l’application vérifiée). Si la copie échoue, l’application redémarre comme avant, sur le PC, et rien n’est modifié ;
 - active le fichier `docker-compose.serveur.yml` (ligne `COMPOSE_FILE` de `.env`).
 
 > Le mot de passe du compte dédié est enregistré dans `.env`, comme les autres clés de l’application : c’est pourquoi ce compte doit être **dédié** et limité au seul dossier de D’Aplomb. Docker s’en sert pour ouvrir le dossier partagé. Il n’est pas fourni aux services comme réglage, mais le fichier `.env` qui le contient est copié chaque nuit dans `sauvegardes\configuration`.

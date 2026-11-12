@@ -358,6 +358,35 @@ class SauvegardeTests(OutilsSimules, TestCase):
         self.assertEqual(recente.statut, StatutSauvegarde.REUSSIE, recente.message)
         self.assertEqual(Sauvegarde.objects.count(), 2)
 
+    def test_planification_reessayee_tant_que_la_base_ne_repond_pas(self):
+        # PC allumé le matin : la sauvegarde manquée part dès le démarrage du worker, parfois avant que PostgreSQL
+        # réponde. Elle est alors retentée chaque minute, au lieu d'être perdue jusqu'à la nuit suivante.
+        from celery.exceptions import Retry
+
+        from . import tasks
+
+        injoignable = ErreurSauvegarde("base de données injoignable (the database system is starting up).")
+        with mock.patch.object(tasks, "lancer", side_effect=injoignable), \
+                mock.patch.object(sauvegarder, "retry", return_value=Retry()) as reessayer:
+            for retries, sauvegarde_id, attendu in ((0, None, True), (29, None, True), (30, None, False), (0, 7, False)):
+                reessayer.reset_mock()
+                sauvegarder.push_request(called_directly=False, is_eager=False, retries=retries)
+                try:
+                    if attendu:
+                        with self.assertLogs("sauvegardes.tasks", "WARNING"), self.assertRaises(Retry):
+                            sauvegarder.run(sauvegarde_id)
+                        reessayer.assert_called_once_with(countdown=60, max_retries=30)
+                    else:
+                        with self.assertLogs("sauvegardes.tasks", "ERROR"):
+                            self.assertIsNone(sauvegarder.run(sauvegarde_id))
+                        reessayer.assert_not_called()
+                finally:
+                    sauvegarder.pop_request()
+            # Appel direct (commande, tests) : pas de nouvel essai.
+            with self.assertLogs("sauvegardes.tasks", "ERROR"):
+                sauvegarder()
+            reessayer.assert_not_called()
+
     def test_la_planification_laisse_passer_une_demande_en_attente(self):
         Sauvegarde.objects.create(declenchee_par="admin")
         sauvegarder()
