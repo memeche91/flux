@@ -36,6 +36,11 @@ function Deconnecter-Partage {
     }
 }
 
+# Fenêtre gardée ouverte en fin de script ; lancé par double-clic sur le fichier .cmd, c'est lui qui la garde ouverte.
+function Pause-Fin {
+    if (-not $env:DAPLOMB_LANCEUR) { Read-Host "Appuyez sur Entrée pour fermer" | Out-Null }
+}
+
 function Arreter([string]$message) {
     Deconnecter-Partage
     if ($script:servicesSupprimes) {
@@ -43,7 +48,7 @@ function Arreter([string]$message) {
     }
     Write-Host ""
     Write-Host $message -ForegroundColor Red
-    Read-Host "Appuyez sur Entrée pour fermer"
+    Pause-Fin
     exit 1
 }
 
@@ -538,4 +543,4 @@ Write-Host "Restauration terminée : la base est celle du $libelle." -Foreground
 Write-Host "La base d’avant la restauration est conservée dans le sous-dossier base des sauvegardes (avant-restauration_…)."
 Write-Host "D’Aplomb est prêt : http://localhost:$port" -ForegroundColor Green
 Start-Process "http://localhost:$port"
-Read-Host "Appuyez sur Entrée pour fermer"
+Pause-Fin

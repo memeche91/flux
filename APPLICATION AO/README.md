@@ -26,9 +26,9 @@ Le dossier garde son nom technique d'origine, `APPLICATION AO` (comme le projet 
 
 ### 3. Lancer l'installateur
 
-Clic droit sur **`installer.ps1`** › **Exécuter avec PowerShell**.
+Double-cliquez sur **`installer.cmd`** (la fenêtre reste ouverte à la fin, même en cas d’erreur). Autre possibilité : clic droit sur **`installer.ps1`** › **Exécuter avec PowerShell**.
 
-Si Windows bloque le script, ouvrez PowerShell dans le dossier et tapez :
+Si la fenêtre se ferme aussitôt ou si Windows bloque le script, ouvrez PowerShell dans le dossier et tapez :
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\installer.ps1
@@ -57,7 +57,7 @@ L'installateur :
 | Arrêter D’Aplomb | `docker compose down` dans le dossier (les tâches en attente sont conservées) |
 | Redémarrer / mettre à jour | Relancer `installer.ps1` (données conservées : voir « Mettre à jour sans rien perdre ») |
 | Sauvegarder tout de suite | `docker compose exec worker python manage.py sauvegarder` (sinon : chaque nuit à 2 h 30) |
-| Restaurer une sauvegarde | Clic droit sur `restaurer.ps1` › **Exécuter avec PowerShell** |
+| Restaurer une sauvegarde | Double-clic sur `restaurer.cmd` (ou clic droit sur `restaurer.ps1` › **Exécuter avec PowerShell**) |
 | Voir les journaux en cas de problème | `docker compose logs -f backend worker` |
 | Ouvrir la GED aux entreprises sur Internet | Vider la ligne `GED_INTERNET=` du fichier `.env`, puis relancer `installer.ps1` et répondre **O** à la question « Ouvrir la GED aux entreprises sur Internet » |
 
@@ -137,7 +137,7 @@ En cas d’échec, les administrateurs (comptes administrateur actifs avec une a
 
 ### Restaurer une sauvegarde
 
-Clic droit sur **`restaurer.ps1`** › **Exécuter avec PowerShell** (ou `powershell -ExecutionPolicy Bypass -File .\restaurer.ps1`). Le script :
+Double-cliquez sur **`restaurer.cmd`**, ou clic droit sur **`restaurer.ps1`** › **Exécuter avec PowerShell** (ou `powershell -ExecutionPolicy Bypass -File .\restaurer.ps1`). Le script :
 1. reprend le fichier `.env` enregistré avec les sauvegardes s’il est absent du dossier (nouveau PC). Fichiers sur le PC : le dossier indiqué devient le dossier des sauvegardes de l’application (ligne `DOSSIER_SAUVEGARDES_PC`) ; un dossier ou un lecteur réseau, ou un chemin qui contient une apostrophe (`'`), est d’abord recopié dans `donnees\sauvegardes` ;
 2. liste les sauvegardes et propose la plus récente (option `-Sauvegarde 2026-11-08_0230.dump` pour en choisir une sans la liste). Fichiers sur le PC, `.env` déjà présent : il indique le dossier où il lit les sauvegardes et permet d’en choisir un autre (disque externe, `installer.ps1` déjà lancé sur un nouveau PC) ; s’il n’en trouve aucune (disque externe qui a changé de lettre, sauvegardes recopiées ailleurs), il demande le dossier qui les contient ;
 3. vérifie que la clé des codes d’accès de la GED est bien celle de la sauvegarde, et propose de la reprendre sinon ;

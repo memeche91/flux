@@ -20,12 +20,17 @@ function Ecrire-Etape([string]$texte) {
     Write-Host "==> $texte" -ForegroundColor Yellow
 }
 
+# Fenêtre gardée ouverte en fin de script ; lancé par double-clic sur le fichier .cmd, c'est lui qui la garde ouverte.
+function Pause-Fin {
+    if (-not $env:DAPLOMB_LANCEUR) { Read-Host "Appuyez sur Entrée pour fermer" | Out-Null }
+}
+
 function Arreter([string]$message) {
     # Connexion au partage du serveur ouverte par ce script : fermée avant de quitter.
     if ($script:connexionPartage) { net use $script:connexionPartage /delete /y 2>&1 | Out-Null }
     Write-Host ""
     Write-Host $message -ForegroundColor Red
-    Read-Host "Appuyez sur Entrée pour fermer"
+    Pause-Fin
     exit 1
 }
 
@@ -971,4 +976,4 @@ Write-Host "(si le PC était éteint, elle est faite à son démarrage). Restaur
 Write-Host ""
 Write-Host "D’Aplomb est prêt : http://localhost:$port" -ForegroundColor Green
 Start-Process "http://localhost:$port"
-Read-Host "Appuyez sur Entrée pour fermer"
+Pause-Fin
