@@ -207,6 +207,15 @@ class IndexationApiTests(TestCase):
         self.assertEqual(reponse.status_code, 201, reponse.content)
         return DocumentReference.objects.get(pk=reponse.json()["id"])
 
+    def test_cctp_tce_lots_renumerotes_dans_la_liste_retrouves(self):
+        # « LOT 03 » et « LOT 08 » dans les titres : retrouvés même si la liste numérote ces lots 3 et 008.
+        Lot.objects.filter(pk=self.lots["03"].pk).update(code="3")
+        Lot.objects.filter(pk=self.lots["08"].pk).update(code="008")
+        document = self.televerser("CCTP TCE.docx", cctp_tce_docx(), type_document="CCTP", lot_id=self.lots["TCE"].pk)
+        articles = {a.numero: a for a in Article.objects.filter(document=document)}
+        self.assertEqual(articles["3.2"].lot_id, self.lots["03"].pk)
+        self.assertEqual(articles["8.2.1"].lot_id, self.lots["08"].pk)
+
     def test_cctp_tce_decoupe_en_articles_par_lot(self):
         document = self.televerser("CCTP TCE.docx", cctp_tce_docx(), type_document="CCTP", lot_id=self.lots["TCE"].pk)
         self.assertEqual(document.statut_analyse, StatutAnalyse.ANALYSE, document.message_analyse)

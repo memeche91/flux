@@ -120,13 +120,14 @@ def _libelle_total(ligne) -> str:
 def _totaux_declares(tableaux, lot: LotProjet, exclus: set[int], lecture: Lecture) -> None:
     """Lignes « Total solution de base HT », « Total PSE n°1 HT » ou « Total HT » de l'offre."""
     options = {normaliser(o.nom_court): o.pk for o in lot.options.all()}
+    autres = _codes_des_autres_lots(lot)
     bases: list[Decimal] = []
     generaux: list[Decimal] = []
     for indice, tableau, roles, _debut in roles_des_tableaux(tableaux):
         if indice in exclus or "montant" not in roles:
             continue
         code_tableau = detecter_lot(tableau.titre)
-        if _autre_lot(code_tableau, lot):
+        if _autre_lot(code_tableau, lot, autres):
             continue
         for ligne in tableau.lignes:
             libelle = _libelle_total(ligne)
@@ -155,10 +156,20 @@ def _totaux_declares(tableaux, lot: LotProjet, exclus: set[int], lecture: Lectur
         lecture.total_general_declare = generaux[-1]
 
 
-def _autre_lot(code: str | None, lot: LotProjet) -> bool:
-    """Code de lot lu dans le document (« LOT 09 ») différent de celui du lot ; « 08B » n'est jamais filtré."""
+def _codes_des_autres_lots(lot: LotProjet) -> set[str]:
+    codes = (detecter_lot(f"lot {autre.code}") for autre in lot.projet.lots.exclude(pk=lot.pk))
+    return {_code(code) for code in codes if code}
+
+
+def _autre_lot(code: str | None, lot: LotProjet, autres: set[str] | None = None) -> bool:
+    """Code de lot lu dans le document (« LOT 09 ») qui désigne un autre lot de ce projet ; « 08B » n'est jamais
+    filtré. Un numéro qu'aucun autre lot ne porte (l'ancien numéro d'un lot renuméroté après l'envoi du DCE) ne fait
+    rien écarter."""
     code_du_lot = detecter_lot(f"lot {lot.code}")
-    return bool(code and code_du_lot and _code(code) != _code(code_du_lot))
+    # Lot dont le numéro ne se lit pas comme « LOT 08 » (TCE, 8b, 3bis) : rien n'est écarté, comme « LOT 08 B ».
+    if not code or not code_du_lot or _code(code) == _code(code_du_lot):
+        return False
+    return _code(code) in (autres if autres is not None else _codes_des_autres_lots(lot))
 
 
 def _sous_total_en_tete(extraites, indice: int) -> bool:
@@ -194,9 +205,10 @@ def lire_offre(chemin: Path, lot: LotProjet) -> Lecture:
     prefixe = _cle_numero(ouvrages[0].numero).split(".")[0] if ouvrages else ""
 
     lecture = Lecture()
+    autres = _codes_des_autres_lots(lot)
     cumuls: dict[tuple[int, str], tuple[Decimal, int]] = {}
     for indice, extraite in enumerate(extraites):
-        if _autre_lot(extraite.code_lot, lot):
+        if _autre_lot(extraite.code_lot, lot, autres):
             continue  # feuille ou partie d'un autre lot
         montant = extraite.montant
         seul = not extraite.unite and extraite.quantite is None and extraite.prix_unitaire is None

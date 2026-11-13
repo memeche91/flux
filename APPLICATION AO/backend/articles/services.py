@@ -3,6 +3,7 @@ from dataclasses import dataclass
 
 from django.db import transaction
 
+from referentiel.codes import CODE_LOT_MULTI, code_normalise
 from referentiel.models import Lot
 
 from .decoupage import decouper
@@ -11,7 +12,6 @@ from .normalisation import normaliser, normaliser_unite
 from .prix import extraire_lignes_prix
 
 TYPES_ADMINISTRATIFS = {"CCAP", "AE", "RC"}
-CODE_LOT_MULTI = "TCE"
 
 
 @dataclass
@@ -23,14 +23,15 @@ class Bilan:
 
 def indexer_document(document, contenu) -> Bilan:
     """Remplace les articles / lignes de prix du document par ceux du contenu lu."""
-    lots = {lot.code: lot for lot in Lot.objects.all()}
+    # « LOT 8 » trouvé dans un titre désigne le lot numéroté 8, 08 ou 008 dans la liste des lots.
+    lots = {code_normalise(lot.code): lot for lot in Lot.objects.all()}
     # Pour un document « tous corps d'état », le lot est retrouvé dans les titres.
     lot_du_document = document.lot
     detection_lot = lot_du_document is None or lot_du_document.code == CODE_LOT_MULTI
 
     def lot_pour(code):
-        if detection_lot and code in lots:
-            return lots[code]
+        if detection_lot and code and code_normalise(code) in lots:
+            return lots[code_normalise(code)]
         return lot_du_document
 
     bilan = Bilan()

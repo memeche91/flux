@@ -47,7 +47,8 @@ class AnnuaireTests(TestCase):
         self.assertEqual([e["raison_sociale"] for e in self.json("get", "/api/entreprises", {"lot_id": self.lot08.pk})], ["Menuiseries Durand"])
         self.assertEqual([e["raison_sociale"] for e in self.json("get", "/api/entreprises", {"recherche": "platre"})], ["Plâtres Martin"])
         liste = self.json("get", "/api/entreprises")
-        self.assertEqual(liste[1]["contact_principal"], "Lise Martin")
+        self.assertEqual([e["raison_sociale"] for e in liste], ["Menuiseries Durand", "Plâtres Martin"])  # ordre alphabétique
+        self.assertEqual(liste[0]["contact_principal"], "Lise Martin")
 
         modifiee = self.json("put", f"/api/entreprises/{cree['id']}", {**cree, "lot_ids": [], "actif": False, "contacts": []})
         self.assertFalse(modifiee["actif"])

@@ -6,6 +6,7 @@ from django.db import transaction
 from articles.models import Article, Categorie, LignePrix
 from articles.normalisation import detecter_lot, separer_numero
 from bibliotheque.models import DocumentReference, TypeDocument
+from referentiel.codes import cle_tri
 
 from . import ordre
 from .html import texte_vers_html
@@ -16,6 +17,17 @@ CHAPITRES_PAR_DEFAUT = ("Généralités", "Description des ouvrages")
 
 def postes_ordonnes(lot: LotProjet) -> list[Poste]:
     return list(lot.postes.order_by("ordre", "id"))
+
+
+def reordonner_lots(projet) -> None:
+    """Lots du projet classés par numéro (TCE, 00, 01, 2, 3a, 10…) : pièces, DCE, offres et GED suivent cet ordre."""
+    lots = sorted(projet.lots.all(), key=lambda lot: (cle_tri(lot.code), lot.pk))
+    a_changer = []
+    for rang, lot in enumerate(lots):
+        if lot.ordre != rang:
+            lot.ordre = rang
+            a_changer.append(lot)
+    LotProjet.objects.bulk_update(a_changer, ["ordre"])
 
 
 def creer_chapitres_par_defaut(lot: LotProjet) -> None:

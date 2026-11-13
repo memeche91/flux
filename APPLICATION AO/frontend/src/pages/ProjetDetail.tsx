@@ -1,11 +1,13 @@
-import { ArrowRight, Trash2 } from "lucide-react";
+import { ArrowRight, Pencil, Plus, Trash2 } from "lucide-react";
 import { useEffect, useState, type FormEvent } from "react";
 import { Link, useNavigate, useParams } from "react-router";
 
 import { api } from "../api/client";
 import type { Lot, Police, Projet } from "../api/types";
+import { useAuth } from "../auth/AuthContext";
 import EnTetePage from "../components/EnTetePage";
 import { CLASSE_CHAMP, Champ } from "../components/Filtres";
+import EditionLot, { cleNumeroLot } from "../components/lot/EditionLot";
 import ConsultationFormulaire from "../components/pieces/ConsultationFormulaire";
 import PiecesAdministratives from "../components/pieces/PiecesAdministratives";
 import { formaterEuros, pluriel } from "../lib/format";
@@ -13,14 +15,39 @@ import { useRequete } from "../lib/useRequete";
 
 type Formulaire = Omit<Projet, "id" | "lots">;
 
+/** Lot en cours d'ajout : de la liste (numéro déjà pris dans le projet, à changer) ou hors liste. */
+interface AjoutLot {
+  lotId: number | null;
+  code: string;
+  intitule: string;
+  numeroPris: boolean;
+}
+
+const INDICATION_MODIFICATION =
+  "Pour ce projet seulement. Les pièces déjà exportées ou envoyées (DCE), les devis déjà reçus et les références déjà attribuées dans la GED gardent l’ancien numéro ; tout ce qui sera produit ensuite prendra le nouveau.";
+
 export default function ProjetDetail() {
   const { projetId } = useParams();
   const naviguer = useNavigate();
+  const { utilisateur } = useAuth();
   const projet = useRequete<Projet>(`/projets/${projetId}`);
+  // Tous les lots actifs : ceux proposés à la création d'abord, puis les autres (retirés de la liste de création
+  // seulement, toujours utilisables dans un projet).
   const lots = useRequete<Lot[]>("/referentiel/lots");
+  const proposes = useRequete<Lot[]>("/referentiel/lots?projets=true");
   const [erreur, setErreur] = useState<string | null>(null);
   const [erreurSuppression, setErreurSuppression] = useState<string | null>(null);
   const [lotAjoute, setLotAjoute] = useState("");
+  const [ajout, setAjout] = useState<AjoutLot | null>(null);
+  const [lotEnEdition, setLotEnEdition] = useState<number | null>(null);
+  // Focus à rendre une fois la liste rechargée : les lots reclassés par numéro sont déplacés dans la page, ce qui
+  // ferait perdre un focus posé avant le rechargement.
+  const [focusApres, setFocusApres] = useState<{ cible: string; avant: Projet | null } | null>(null);
+  useEffect(() => {
+    if (!focusApres || projet.donnees === focusApres.avant) return;
+    document.getElementById(focusApres.cible)?.focus();
+    setFocusApres(null);
+  }, [focusApres, projet.donnees]);
 
   if (projet.erreur) {
     return (
@@ -31,20 +58,64 @@ export default function ProjetDetail() {
   }
   if (!projet.donnees) return <p className="text-attenue">Chargement…</p>;
   const p = projet.donnees;
-  const codesPresents = new Set(p.lots.map((l) => l.code));
-  const lotsDisponibles = (lots.donnees ?? []).filter((l) => !codesPresents.has(l.code));
+  const codesPresents = new Set(p.lots.map((l) => cleNumeroLot(l.code)));
+  // Lots de la liste pas encore repris dans le projet (d'après leur origine, pas leur numéro, qui a pu changer).
+  const repris = new Set(p.lots.map((l) => l.lot_id).filter((id) => id !== null));
+  const lotsDisponibles = (lots.donnees ?? []).filter((l) => !repris.has(l.id));
+  const idsProposes = new Set((proposes.donnees ?? []).map((l) => l.id));
+  const disponiblesProposes = lotsDisponibles.filter((l) => idsProposes.has(l.id));
+  const autresDisponibles = lotsDisponibles.filter((l) => !idsProposes.has(l.id));
   const totalProjet = p.lots.reduce((somme, l) => somme + l.total_base, 0);
 
+  function focusApresRechargement(cible: string) {
+    setFocusApres({ cible, avant: projet.donnees });
+    projet.recharger();
+  }
+
   async function ajouterLot() {
-    if (!lotAjoute) return;
+    const choisi = lotsDisponibles.find((l) => String(l.id) === lotAjoute);
+    if (!choisi) return;
     setErreur(null);
-    try {
-      await api(`/projets/${p.id}/lots`, { method: "POST", body: JSON.stringify({ lot_id: Number(lotAjoute) }) });
+    if (codesPresents.has(cleNumeroLot(choisi.code))) {
+      // Numéro déjà porté par un autre lot du projet : on en choisit un autre avant l'ajout.
+      setAjout({ lotId: choisi.id, code: choisi.code, intitule: choisi.intitule, numeroPris: true });
       setLotAjoute("");
-      projet.recharger();
+      return;
+    }
+    try {
+      const cree = await api<{ id: number }>(`/projets/${p.id}/lots`, { method: "POST", body: JSON.stringify({ lot_id: choisi.id }) });
+      setLotAjoute("");
+      focusApresRechargement(`modifier-lot-${cree.id}`);
     } catch (probleme) {
       setErreur(probleme instanceof Error ? probleme.message : "Ajout impossible.");
     }
+  }
+
+  async function ajouterLotAjuste(code: string, intitule: string) {
+    const cree = await api<{ id: number }>(`/projets/${p.id}/lots`, {
+      method: "POST",
+      body: JSON.stringify({ lot_id: ajout?.lotId ?? null, code, intitule }),
+    });
+    setAjout(null);
+    focusApresRechargement(`modifier-lot-${cree.id}`);
+  }
+
+  function annulerAjout() {
+    const horsListe = ajout?.lotId === null;
+    setAjout(null);
+    requestAnimationFrame(() => document.getElementById(horsListe ? "ajout-hors-liste" : "ajout-lot")?.focus());
+  }
+
+  async function modifierLot(id: number, code: string, intitule: string) {
+    await api(`/lots-projet/${id}`, { method: "PATCH", body: JSON.stringify({ code, intitule }) });
+    setLotEnEdition(null);
+    focusApresRechargement(`modifier-lot-${id}`);
+  }
+
+  function annulerEdition(id: number) {
+    setLotEnEdition(null);
+    // Le focus revient sur le bouton « Modifier » du lot (et non en haut de la page).
+    requestAnimationFrame(() => document.getElementById(`modifier-lot-${id}`)?.focus());
   }
 
   async function supprimerLot(id: number, libelle: string) {
@@ -98,11 +169,20 @@ export default function ProjetDetail() {
             <Champ id="ajout-lot" libelle="Ajouter un lot">
               <select id="ajout-lot" value={lotAjoute} onChange={(e) => setLotAjoute(e.target.value)} className={CLASSE_CHAMP}>
                 <option value="">Choisir…</option>
-                {lotsDisponibles.map((l) => (
+                {disponiblesProposes.map((l) => (
                   <option key={l.id} value={l.id}>
                     {l.code} – {l.intitule}
                   </option>
                 ))}
+                {autresDisponibles.length > 0 && (
+                  <optgroup label="Autres lots (non proposés à la création)">
+                    {autresDisponibles.map((l) => (
+                      <option key={l.id} value={l.id}>
+                        {l.code} – {l.intitule}
+                      </option>
+                    ))}
+                  </optgroup>
+                )}
               </select>
             </Champ>
             <button
@@ -113,8 +193,39 @@ export default function ProjetDetail() {
             >
               Ajouter
             </button>
+            <button
+              id="ajout-hors-liste"
+              type="button"
+              onClick={() => setAjout({ lotId: null, code: "", intitule: "", numeroPris: false })}
+              className="flex min-h-11 items-center gap-2 rounded-lg border border-dashed border-bordure-forte px-3.5 text-sm hover:bg-surface-2"
+            >
+              <Plus aria-hidden="true" className="size-4" />
+              Lot hors liste
+            </button>
+            {utilisateur?.est_administrateur && (
+              <Link to="/lots" className="flex min-h-11 items-center px-2 text-sm">
+                Liste des lots proposés
+              </Link>
+            )}
           </div>
         </div>
+        {ajout && (
+          <div className="rounded-xl border border-bordure-forte bg-surface px-4 py-3">
+            <EditionLot
+              key={`${ajout.lotId}-${ajout.code}`}
+              code={ajout.code}
+              intitule={ajout.intitule}
+              libelleBouton="Ajouter le lot"
+              indication={
+                ajout.numeroPris
+                  ? `Le numéro ${ajout.code} est déjà celui d’un autre lot de ce projet : choisissez-en un autre.`
+                  : "Lot propre à ce projet, hors de la liste des lots proposés."
+              }
+              surEnregistrer={ajouterLotAjuste}
+              surAnnuler={annulerAjout}
+            />
+          </div>
+        )}
         {erreur && (
           <p role="alert" className="rounded-lg border border-danger/40 bg-danger/10 px-3 py-2 text-danger">
             {erreur}
@@ -124,9 +235,20 @@ export default function ProjetDetail() {
           <p className="rounded-xl border border-bordure bg-surface px-5 py-6 text-attenue">Ajoutez un premier lot pour commencer la rédaction.</p>
         ) : (
           <ul className="flex flex-col gap-2">
-            {p.lots.map((lot) => (
+            {p.lots.map((lot) =>
+              lotEnEdition === lot.id ? (
+                <li key={lot.id} className="rounded-xl border border-bordure-forte bg-surface px-4 py-3">
+                  <EditionLot
+                    code={lot.code}
+                    intitule={lot.intitule}
+                    indication={INDICATION_MODIFICATION}
+                    surEnregistrer={(code, intitule) => modifierLot(lot.id, code, intitule)}
+                    surAnnuler={() => annulerEdition(lot.id)}
+                  />
+                </li>
+              ) : (
               <li key={lot.id} className="flex flex-wrap items-center gap-x-4 gap-y-2 rounded-xl border border-bordure bg-surface px-4 py-3">
-                <span className="w-10 font-titre text-lg font-semibold text-accent">{lot.code}</span>
+                <span className="min-w-10 font-titre text-lg font-semibold text-accent">{lot.code}</span>
                 <div className="flex min-w-0 flex-[1_1_220px] flex-col">
                   <span className="font-semibold">{lot.intitule}</span>
                   <span className="text-xs text-attenue">
@@ -141,6 +263,16 @@ export default function ProjetDetail() {
                   <ArrowRight aria-hidden="true" className="size-4" />
                 </Link>
                 <button
+                  id={`modifier-lot-${lot.id}`}
+                  type="button"
+                  onClick={() => setLotEnEdition(lot.id)}
+                  aria-label={`Modifier le numéro et l’intitulé du lot ${lot.code}`}
+                  title="Modifier le numéro et l’intitulé"
+                  className="grid size-11 place-items-center rounded-lg text-attenue hover:bg-surface-2 hover:text-texte"
+                >
+                  <Pencil aria-hidden="true" className="size-4.5" />
+                </button>
+                <button
                   type="button"
                   onClick={() => void supprimerLot(lot.id, `${lot.code} – ${lot.intitule}`)}
                   aria-label={`Supprimer le lot ${lot.code}`}
@@ -149,7 +281,8 @@ export default function ProjetDetail() {
                   <Trash2 aria-hidden="true" className="size-4.5" />
                 </button>
               </li>
-            ))}
+              ),
+            )}
           </ul>
         )}
       </section>

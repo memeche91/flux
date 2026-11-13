@@ -37,7 +37,7 @@ class PieceJointe(models.Model):
     ajoute_le = models.DateTimeField(auto_now_add=True)
 
     class Meta:
-        ordering = ["categorie", "lot__code", "titre", "id"]
+        ordering = ["categorie", "lot__ordre", "lot__code", "titre", "id"]
 
 
 class StatutDossier(models.TextChoices):

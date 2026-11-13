@@ -14,6 +14,7 @@ from ninja.errors import HttpError
 
 from articles.models import Article
 from bibliotheque.models import DocumentReference, TypeMarche
+from referentiel.codes import code_normalise, verifier_code, verifier_intitule
 from referentiel.models import Lot
 
 from . import services
@@ -52,8 +53,18 @@ class ProjetIn(Schema):
     couleur_tableaux: str = Field("#D9E2F3", pattern=COULEUR)
 
 
+class LotChoisi(Schema):
+    """Lot retenu à la création du projet : un lot de la liste proposée (numéro et intitulé vides : ceux de la
+    liste), ou un lot hors liste (lot_id absent, numéro et intitulé obligatoires)."""
+
+    lot_id: int | None = None
+    code: str = Field("", max_length=50)
+    intitule: str = Field("", max_length=500)
+
+
 class ProjetCreation(ProjetIn):
     lots: list[int] = []
+    lots_choisis: list[LotChoisi] = []
 
 
 class ProjetModification(Schema):
@@ -89,6 +100,7 @@ class ProjetResume(Schema):
 class LotResume(Schema):
     id: int
     code: str
+    lot_id: int | None = None  # lot de la liste proposée dont il vient
     intitule: str
     nb_articles: int
     nb_ouvrages: int
@@ -142,13 +154,13 @@ class LotDetail(Schema):
 
 class LotIn(Schema):
     lot_id: int | None = None
-    code: str = Field("", max_length=10)
-    intitule: str = Field("", max_length=255)
+    code: str = Field("", max_length=50)
+    intitule: str = Field("", max_length=500)
 
 
 class LotModification(Schema):
-    code: str | None = Field(None, min_length=1, max_length=10)
-    intitule: str | None = Field(None, min_length=1, max_length=255)
+    code: str | None = Field(None, max_length=50)
+    intitule: str | None = Field(None, max_length=500)
 
 
 class OptionIn(Schema):
@@ -205,16 +217,18 @@ class ResultatImport(Schema):
 
 def _lots_resumes(projet: Projet) -> list[dict]:
     resumes = []
+    # order_by explicite : Django n'applique pas l'ordre par défaut (Meta.ordering) à une requête avec Count.
     lots = projet.lots.annotate(
         nb_articles=Count("postes", filter=Q(postes__genre=GenrePoste.ARTICLE)),
         nb_ouvrages=Count("postes", filter=Q(postes__genre=GenrePoste.OUVRAGE)),
-    )
+    ).order_by("ordre", "code")
     for lot in lots:
         resumes.append(
             {
                 "id": lot.pk,
                 "code": lot.code,
                 "intitule": lot.intitule,
+                "lot_id": lot.lot_id,
                 "nb_articles": lot.nb_articles,
                 "nb_ouvrages": lot.nb_ouvrages,
                 "total_base": float(structurer(lot).total_base),
@@ -288,23 +302,70 @@ def _toucher(projet_id: int) -> None:
     Projet.objects.filter(pk=projet_id).update(modifie_le=datetime.datetime.now(datetime.timezone.utc))
 
 
+LONGUEUR_INTITULE_LOT = LotProjet._meta.get_field("intitule").max_length
+
+
+def _numero_et_intitule(code: str | None, intitule: str | None, actuel: str | None = None) -> tuple[str | None, str | None]:
+    """Numéro et intitulé d'un lot du projet, vérifiés (None : inchangé). Un numéro inchangé (actuel : celui du lot
+    ou de la liste proposée) n'est pas revérifié : un lot numéroté autrefois « 3 bis » reste utilisable."""
+    try:
+        if code is not None and actuel is not None and code.strip() == actuel:
+            code = actuel
+        elif code is not None:
+            code = verifier_code(code)
+        return code, None if intitule is None else verifier_intitule(intitule, LONGUEUR_INTITULE_LOT)
+    except ValueError as exc:
+        raise HttpError(400, str(exc)) from None
+
+
+def _numero_libre(projet: Projet, code: str, exclure: int | None = None) -> None:
+    """« 3 » et « 03 » désigneraient le même lot dans les pièces : un seul des deux par projet."""
+    cle = code_normalise(code)
+    doublon = next((l for l in projet.lots.exclude(pk=exclure) if code_normalise(l.code) == cle), None)
+    if doublon is not None:
+        raise HttpError(409, f"Le numéro {code} est déjà celui du lot {doublon.code} – {doublon.intitule} dans ce projet.")
+
+
 # --- Projets ---------------------------------------------------------------------
 
 
 @router.get("/projets", response=list[ProjetResume])
 def lister_projets(request):
-    return Projet.objects.annotate(nb_lots=Count("lots"))
+    # order_by explicite : Django n'applique pas Meta.ordering à une requête avec Count.
+    return Projet.objects.annotate(nb_lots=Count("lots")).order_by("-modifie_le", "-id")
 
 
 @router.post("/projets", response={201: ProjetOut})
 def creer_projet(request, donnees: ProjetCreation):
-    valeurs = donnees.model_dump(exclude={"lots"})
+    valeurs = donnees.model_dump(exclude={"lots", "lots_choisis"})
+    # Lots retenus : ceux de la liste proposée (numéro et intitulé de la liste, ou ajustés dans le formulaire),
+    # et ceux hors liste. « lots » (identifiants seuls) reste accepté.
+    demandes = [LotChoisi(lot_id=i) for i in dict.fromkeys(donnees.lots)] + list(donnees.lots_choisis)
+    ids = {d.lot_id for d in demandes if d.lot_id is not None}
+    references = {lot.pk: lot for lot in Lot.objects.filter(pk__in=ids)}
+    if len(references) != len(ids):
+        raise HttpError(400, "Un des lots choisis n'existe plus : rechargez la page.")
+    retenus, cles = [], {}
+    for demande in demandes:
+        lot = references.get(demande.lot_id) if demande.lot_id is not None else None
+        code, intitule = _numero_et_intitule(
+            demande.code if demande.code.strip() or lot is None else lot.code,
+            demande.intitule if demande.intitule.strip() or lot is None else lot.intitule,
+            actuel=lot.code if lot is not None else None,
+        )
+        cle = code_normalise(code)
+        if cle in cles:
+            premier_code, premier_intitule = cles[cle]
+            numeros = code if premier_code == code else f"{premier_code} et {code}"
+            raise HttpError(409, f"Deux lots ont le même numéro ({numeros}) : {premier_intitule} et {intitule}. Changez l'un des deux.")
+        cles[cle] = (code, intitule)
+        retenus.append((lot, code, intitule))
     with transaction.atomic():
         projet = Projet.objects.create(**valeurs, cree_par=request.auth)
-        lots = Lot.objects.filter(pk__in=donnees.lots).order_by("ordre", "code")
-        for ordre, lot in enumerate(lots):
-            lot_projet = LotProjet.objects.create(projet=projet, lot=lot, code=lot.code, intitule=lot.intitule, ordre=ordre)
+        for ordre, (lot, code, intitule) in enumerate(retenus):
+            lot_projet = LotProjet.objects.create(projet=projet, lot=lot, code=code, intitule=intitule, ordre=ordre)
             services.creer_chapitres_par_defaut(lot_projet)
+        services.reordonner_lots(projet)
     return 201, _projet_out(projet)
 
 
@@ -356,20 +417,24 @@ def ajouter_lot(request, projet_id: int, donnees: LotIn):
     code, intitule = donnees.code.strip(), donnees.intitule.strip()
     if donnees.lot_id is not None:
         lot_reference = get_object_or_404(Lot, pk=donnees.lot_id)
+        deja = projet.lots.filter(lot=lot_reference).first()
+        if deja is not None:
+            raise HttpError(409, f"Ce lot est déjà dans le projet : lot {deja.code} – {deja.intitule}.")
         code = code or lot_reference.code
         intitule = intitule or lot_reference.intitule
-    if not code or not intitule:
-        raise HttpError(400, "Indiquez le code et l'intitulé du lot.")
+    code, intitule = _numero_et_intitule(code, intitule, actuel=lot_reference.code if lot_reference else None)
+    _numero_libre(projet, code)
     try:
         with transaction.atomic():
             lot = LotProjet.objects.create(
                 projet=projet, lot=lot_reference, code=code, intitule=intitule, ordre=projet.lots.count()
             )
             services.creer_chapitres_par_defaut(lot)
+            services.reordonner_lots(projet)
     except IntegrityError:
         raise HttpError(409, f"Le lot {code} existe déjà dans ce projet.") from None
     _toucher(projet.pk)
-    return 201, {"id": lot.pk, "code": lot.code, "intitule": lot.intitule, "nb_articles": 0, "nb_ouvrages": 0, "total_base": 0}
+    return 201, {"id": lot.pk, "code": lot.code, "intitule": lot.intitule, "lot_id": lot.lot_id, "nb_articles": 0, "nb_ouvrages": 0, "total_base": 0}
 
 
 @router.get("/lots-projet/{lot_id}", response=LotDetail)
@@ -379,13 +444,22 @@ def detail_lot(request, lot_id: int):
 
 @router.patch("/lots-projet/{lot_id}", response=LotDetail)
 def modifier_lot(request, lot_id: int, donnees: LotModification):
+    """Numéro et intitulé du lot dans ce projet. Les pièces déjà exportées, les DCE déjà assemblés et les
+    références déjà attribuées dans la GED gardent l'ancien numéro ; tout ce qui est produit ensuite prend le nouveau."""
     lot = _lot(lot_id)
-    for champ, valeur in donnees.model_dump(exclude_unset=True, exclude_none=True).items():
-        setattr(lot, champ, valeur.strip())
+    code, intitule = _numero_et_intitule(donnees.code, donnees.intitule, actuel=lot.code)
+    if code is not None and code != lot.code:
+        _numero_libre(lot.projet, code, exclure=lot.pk)
+        lot.code = code
+    if intitule is not None:
+        lot.intitule = intitule
     try:
-        lot.save()
+        with transaction.atomic():
+            lot.save(update_fields=["code", "intitule"])
+            services.reordonner_lots(lot.projet)
     except IntegrityError:
-        raise HttpError(409, "Un autre lot porte déjà ce code.") from None
+        raise HttpError(409, "Un autre lot porte déjà ce numéro dans ce projet.") from None
+    _toucher(lot.projet_id)
     return _detail_lot(lot)
 
 

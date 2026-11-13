@@ -715,6 +715,33 @@ class LectureOffresControleTests(LotDeLecture, TestCase):
         self.assertEqual((statut, retenu), ("LUE", Decimal("11400.00")), message)  # titre « LOT 08 B » : lignes gardées
         self.assertIn("3 ligne(s) de prix lue(s)", message)
 
+    def test_lot_renumerote_apres_l_envoi_du_dce(self):
+        # DCE envoyé sous le numéro 08, lot renuméroté 09 ensuite : le devis titré « LOT 08 » reste lu.
+        from .lecture import bilan
+
+        lignes = [(None, "LOT 08 – MENUISERIES EXTÉRIEURES"), *self.dpgf()]
+        self.lot.code = "09"
+        self.lot.save()
+        statut, message, retenu = bilan(self.lire(("DPGF", [(n, d, *r) for n, d, *r in lignes])))
+        self.assertIn("3 ligne(s) de prix lue(s)", message)
+        self.assertEqual(retenu, Decimal("11400.00"), message)
+        # Un autre lot du projet porte maintenant le numéro 08 : ce titre désigne bien un autre lot.
+        LotProjet.objects.create(projet=self.projet, code="08", intitule="Menuiseries intérieures", ordre=9)
+        statut, message, _ = bilan(self.lire(("DPGF", [(n, d, *r) for n, d, *r in lignes])))
+        self.assertIn("0 ligne(s) de prix lue(s)", message)
+
+    def test_sous_lot_a_cote_du_lot_de_base(self):
+        # Lots 08 et 8b dans le même projet : le devis du lot 8b titré « LOT 08 B » reste lu.
+        from .lecture import bilan
+
+        self.lot.code = "8b"
+        self.lot.save()
+        LotProjet.objects.create(projet=self.projet, code="08", intitule="Menuiseries bois", ordre=0)
+        lignes = [(None, "LOT 08 B – MENUISERIES ALUMINIUM"), *self.dpgf()]
+        statut, message, retenu = bilan(self.lire(("DPGF", [(n, d, *r) for n, d, *r in lignes])))
+        self.assertIn("3 ligne(s) de prix lue(s)", message)
+        self.assertEqual(retenu, Decimal("11400.00"), message)
+
     def test_montant_de_pse_saisi_pendant_la_lecture(self):
         from .tasks import appliquer_lecture
 

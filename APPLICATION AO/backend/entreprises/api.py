@@ -149,7 +149,7 @@ def _historique(entreprise: Entreprise) -> list[dict]:
             "statut_libelle": c.get_statut_display(),
             "date": c.consultee_le,
         }
-        for c in ConsultationEntreprise.objects.filter(entreprise=entreprise).select_related("projet", "lot").order_by("-projet__cree_le", "lot__code")
+        for c in ConsultationEntreprise.objects.filter(entreprise=entreprise).select_related("projet", "lot").order_by("-projet__cree_le", "lot__ordre", "lot__code")
     ]
 
 
@@ -210,7 +210,8 @@ def _filtrer(recherche: str, lot_id: int | None, actives: bool):
         entreprises = entreprises.filter(lots__id=lot_id)
     for mot in normaliser(recherche).split():
         entreprises = entreprises.filter(Q(texte_recherche__contains=mot) | Q(lots__intitule__icontains=mot)).distinct()
-    return entreprises
+    # order_by explicite : Django n'applique pas Meta.ordering à une requête avec Count (liste coupée à 1 000).
+    return entreprises.order_by("raison_sociale", "id")
 
 
 @router.get("/entreprises", response=list[EntrepriseResume])

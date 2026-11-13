@@ -17,7 +17,7 @@ from .models import GenrePoste, LotProjet, OptionLot, Poste
 
 
 def prefixe_lot(code: str) -> str:
-    return str(int(code)) if code.isdigit() else code
+    return str(int(code)) if code.isascii() and code.isdigit() else code
 
 
 def numeroter(postes: list[Poste], code_lot: str) -> dict[int, str]:

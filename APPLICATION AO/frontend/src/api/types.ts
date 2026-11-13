@@ -17,6 +17,20 @@ export interface Lot {
   intitule: string;
 }
 
+/** Lot de la liste proposée à la création des projets (écran « Lots proposés »). */
+export interface LotCatalogue extends Lot {
+  /** Faux : désactivé dans l'administration (masqué partout). */
+  actif: boolean;
+  /** Coché dans la liste de création des projets. */
+  propose: boolean;
+  /** Projets dont un lot vient de celui-ci. */
+  projets: number;
+  /** Numéro réservé (TCE : documents tous corps d'état) : seul l'intitulé se modifie. */
+  code_reserve: boolean;
+  /** Documents de la bibliothèque, articles et entreprises rattachés à ce lot. */
+  utilisations: number;
+}
+
 export interface DocumentReference {
   id: number;
   type_document: TypeDocument;
@@ -179,6 +193,8 @@ export interface LotResume {
   id: number;
   code: string;
   intitule: string;
+  /** Lot de la liste proposée dont il vient (nul : lot propre au projet). */
+  lot_id: number | null;
   nb_articles: number;
   nb_ouvrages: number;
   total_base: number;
